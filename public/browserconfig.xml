@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<browserconfig>
+  <msapplication>
+    <tile>
+      <square70x70logo   src="/logo.svg"/>
+      <square150x150logo src="/logo.svg"/>
+      <square310x310logo src="/logo.svg"/>
+      <wide310x150logo   src="/logo.svg"/>
+      <TileColor>#4F46E5</TileColor>
+    </tile>
+    <notification>
+      <frequency>30</frequency>
+      <cycle>1</cycle>
+    </notification>
+  </msapplication>
+</browserconfig>

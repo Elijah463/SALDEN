@@ -1,0 +1,75 @@
+{
+  "name": "Salden — Smart Payroll",
+  "short_name": "Salden",
+  "description": "On-chain payroll for teams of any size. Batch payments, AI automation, and compliance — all on Arc Testnet.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F8F9FA",
+  "theme_color": "#4F46E5",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "en",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "16x16 32x32 48x48",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "apple touch icon"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "Go to HR Dashboard",
+      "url": "/dashboard",
+      "icons": [{ "src": "/logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "AI Agent",
+      "short_name": "Agent",
+      "description": "Open AI Payroll Agent",
+      "url": "/ai-agent",
+      "icons": [{ "src": "/logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Compliance",
+      "short_name": "Compliance",
+      "description": "View Compliance Dashboard",
+      "url": "/compliance",
+      "icons": [{ "src": "/logo.svg", "sizes": "any" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/images/og-image.jpg",
+      "sizes": "1512x756",
+      "type": "image/jpeg",
+      "label": "Salden — Smart Payroll For Teams of Any Size"
+    }
+  ]
+}
