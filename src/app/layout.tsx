@@ -3,6 +3,7 @@ import '@/styles/globals.css';
 import { Web3Provider } from '@/components/shared/Web3Provider';
 import { AppProvider } from '@/context/AppContext';
 import { Toasts } from '@/components/shared/Toasts';
+import { Analytics } from '@vercel/analytics/next';
 
 // ── Base URL ───────────────────────────────────────────────────────────────────
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
@@ -124,6 +125,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Toasts />
           </AppProvider>
         </Web3Provider>
+        <Analytics />
       </body>
     </html>
   );
