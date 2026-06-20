@@ -299,7 +299,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ): Promise<T> {
     const iv         = fromBase64(blob.iv);
     const ciphertext = fromBase64(blob.ciphertext);
-    const decrypted  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    const decrypted  = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv as BufferSource },
+      key,
+      ciphertext as BufferSource,
+    );
     return JSON.parse(new TextDecoder().decode(decrypted)) as T;
   }
 
