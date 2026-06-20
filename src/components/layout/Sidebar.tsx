@@ -144,8 +144,8 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
             fontSize: 11,
             color: '#94A3B8',
           }}>
-            <Link href="/privacy" style={{ color: '#94A3B8', marginRight: 10 }}>Privacy</Link>
-            <Link href="/terms" style={{ color: '#94A3B8', marginRight: 10 }}>Terms</Link>
+            <a href="https://salden.xyz/privacy" target="_blank" rel="noreferrer" style={{ color: '#94A3B8', marginRight: 10 }}>Privacy</a>
+            <a href="https://salden.xyz/terms" target="_blank" rel="noreferrer" style={{ color: '#94A3B8', marginRight: 10 }}>Terms</a>
             <a href="https://salden.xyz" target="_blank" rel="noreferrer" style={{ color: '#94A3B8' }}>salden.xyz</a>
           </div>
           {mounted && userAddress && (

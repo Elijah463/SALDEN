@@ -607,7 +607,7 @@ export default function SettingsPage() {
                         </div>
 
                         {/* Remove button — USDC cannot be removed */}
-                        {token.address.toLowerCase() !== CONTRACTS.USDC.toLowerCase() && (
+                        {(!CONTRACTS.USDC || token.address.toLowerCase() !== CONTRACTS.USDC.toLowerCase()) && (
                           <button
                             onClick={() => setRemoveConfirm(token.address)}
                             title="Remove token"

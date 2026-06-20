@@ -30,16 +30,26 @@ export type TokenRegistry = Record<string, TokenEntry>;
 
 // ── Pre-seeded tokens ─────────────────────────────────────────────────────────
 
-export const DEFAULT_TOKEN_REGISTRY: TokenRegistry = {
-  [CONTRACTS.USDC.toLowerCase()]: {
-    address:  CONTRACTS.USDC,
+// CONTRACTS.USDC comes from NEXT_PUBLIC_USDC_ADDRESS with no hardcoded
+// fallback (by design — see lib/contracts/config.ts). If that env var is
+// ever unset, CONTRACTS.USDC is `undefined`, and calling .toLowerCase() on
+// it directly here — at module scope, evaluated the instant this file is
+// imported — would crash every single page that transitively imports this
+// module (i.e. the entire app, since AppContext imports it). Guard it so a
+// missing env var degrades to "no pre-seeded token" instead of a hard
+// build-time crash.
+const USDC_ADDRESS = (CONTRACTS.USDC ?? '') as string;
+
+export const DEFAULT_TOKEN_REGISTRY: TokenRegistry = USDC_ADDRESS ? {
+  [USDC_ADDRESS.toLowerCase()]: {
+    address:  USDC_ADDRESS,
     name:     'USD Coin',
     symbol:   'USDC',
     decimals: 6,
     addedAt:  '2024-01-01T00:00:00.000Z',
     addedBy:  'system',
   },
-};
+} : {};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -94,7 +104,7 @@ export function removeToken(
   registry: TokenRegistry,
   address: string,
 ): { registry: TokenRegistry; error: string | null } {
-  if (address.toLowerCase() === CONTRACTS.USDC.toLowerCase()) {
+  if (USDC_ADDRESS && address.toLowerCase() === USDC_ADDRESS.toLowerCase()) {
     return { registry, error: 'USDC cannot be removed — it is the primary payroll token.' };
   }
   const updated = { ...registry };

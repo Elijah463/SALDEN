@@ -4,8 +4,8 @@
  *
  * IMPORTANT: every network-specific value (chain ID, RPC URL, block explorer,
  * and every contract address) is sourced from environment variables ONLY —
- * nothing here is hardcoded as a fallback. Set these in your Vercel project
- * (or .env.local for local development):
+ * nothing here is hardcoded as a real fallback. Set these in your Vercel
+ * project (or .env.local for local development):
  *   NEXT_PUBLIC_CHAIN_ID
  *   NEXT_PUBLIC_RPC_URL
  *   NEXT_PUBLIC_BLOCK_EXPLORER_URL
@@ -16,16 +16,28 @@
  *
  * The only thing hardcoded below is the native currency symbol — "USDC" —
  * since Arc Testnet uses USDC as its native gas token (not ETH).
+ *
+ * Defensive note: if NEXT_PUBLIC_CHAIN_ID is missing/unset, Number(undefined)
+ * is NaN. Passing a NaN chain id into RainbowKit/wagmi's getDefaultConfig
+ * (in Web3Provider.tsx) corrupts its internal chain/connector bookkeeping
+ * and crashes the ENTIRE Next.js build during static prerendering — not
+ * just this one page. CHAIN_ID below falls back to 0 (a recognizably
+ * invalid placeholder, never a real network) purely so the app still
+ * *builds*; with no env var set, wallet connections will correctly fail at
+ * runtime instead of taking down the whole deployment at build time.
  */
 
 import { defineChain } from 'viem';
 
-const RPC_URL       = process.env.NEXT_PUBLIC_RPC_URL as string;
-const EXPLORER_URL  = process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL as string;
+const RPC_URL      = process.env.NEXT_PUBLIC_RPC_URL ?? '';
+const EXPLORER_URL = process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL ?? '';
+
+const parsedChainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID);
+const CHAIN_ID = Number.isFinite(parsedChainId) && parsedChainId > 0 ? parsedChainId : 0;
 
 // ─── Arc Testnet chain definition ─────────────────────────────────────────────
 export const arcTestnet = defineChain({
-  id: Number(process.env.NEXT_PUBLIC_CHAIN_ID),
+  id: CHAIN_ID,
   name: 'Arc Testnet',
   // Arc Testnet's native gas token is USDC (18-decimal native balance —
   // distinct from the 6-decimal ERC-20 USDC interface used for transfers).

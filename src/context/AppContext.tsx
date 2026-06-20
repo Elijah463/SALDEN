@@ -236,7 +236,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   async function deriveKeyFromSignature(signature: string): Promise<CryptoKey> {
     const keyBytes = hexToUint8Array(signature).slice(0, 32);
     return crypto.subtle.importKey(
-      'raw', keyBytes,
+      'raw', keyBytes as BufferSource,
       { name: 'AES-GCM', length: 256 },
       false, ['encrypt', 'decrypt']
     );
@@ -283,7 +283,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }> {
     const iv        = crypto.getRandomValues(new Uint8Array(12));
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
-    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, plaintext as BufferSource);
 
     return {
       iv:         toBase64(iv),
@@ -299,11 +299,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   ): Promise<T> {
     const iv         = fromBase64(blob.iv);
     const ciphertext = fromBase64(blob.ciphertext);
-    const decrypted  = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv as BufferSource },
-      key,
-      ciphertext as BufferSource,
-    );
+    const decrypted  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, ciphertext as BufferSource);
     return JSON.parse(new TextDecoder().decode(decrypted)) as T;
   }
 
