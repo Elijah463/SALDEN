@@ -27,7 +27,9 @@ export interface Employee {
 
 export interface PayrollSetup {
   companyName:  string;
+  fullName?:    string;
   email:        string;
+  employeeRange?: string;
   registryClone?: string;
   payrollClone?: string;
 }
@@ -153,6 +155,13 @@ interface AppContextValue {
     /** Previous IPFS CID — server unpins it after successful upload */
     previousCid?: string;
   }) => Promise<{ cid?: string }>;
+  /** Loads + decrypts previously-synced data from IPFS (via a known CID,
+   *  normally read from SaldenRegistry.getCID()) and hydrates app state. */
+  loadData:     (opts: {
+    walletAddress: string;
+    cid:           string;
+    signMessage:   (msg: string) => Promise<string>;
+  }) => Promise<{ loaded: boolean }>;
   saveTxRecord: (record: Omit<TxRecord, 'walletAddress'>, walletAddress: string) => Promise<void>;
 }
 
@@ -192,6 +201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const encryptionKeyRef  = useRef<CryptoKey | null>(null);
   // Track which wallet the cached key belongs to — reset if wallet changes
   const encryptionWallet  = useRef<string | null>(null);
+  // Latest known IPFS CID, shared across every page — keeps "previousCid"
+  // bookkeeping correct regardless of which page last synced or loaded data.
+  const lastCidRef = useRef<string | null>(null);
 
   /** Convert a hex string to Uint8Array without using Node.js Buffer (browser-safe) */
   function hexToUint8Array(hex: string): Uint8Array {
@@ -204,10 +216,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   /**
-   * Derive AES-GCM key from a signature's bytes.
-   * The caller provides the signature so we reuse the already-obtained auth
-   * signature — avoiding a second wallet popup.
+   * Fixed, non-timestamped message used ONLY to derive the local data
+   * encryption key. Ethereum personal-message signatures are deterministic
+   * (RFC 6979) — signing this exact same string always reproduces the exact
+   * same signature (and therefore the exact same derived key) for a given
+   * wallet, forever, across every session and device.
+   *
+   * IMPORTANT: this must NEVER include a timestamp, nonce, or anything else
+   * that changes between calls. The auth signature used for sync/load
+   * requests (`Salden Sync: {timestamp}`) is intentionally a SEPARATE,
+   * freshly-signed message — reusing it for key material (as a previous
+   * version of this file did) meant the derived key rotated on every single
+   * sync, permanently locking out any previously-uploaded data.
    */
+  const ENCRYPTION_KEY_MESSAGE =
+    'Salden Payroll: sign to derive your local data-encryption key.\n\nThis signature is never sent anywhere — it only unlocks your own encrypted data on this device.';
+
+  /** Derive AES-GCM key from a signature's bytes. */
   async function deriveKeyFromSignature(signature: string): Promise<CryptoKey> {
     const keyBytes = hexToUint8Array(signature).slice(0, 32);
     return crypto.subtle.importKey(
@@ -217,6 +242,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
   }
 
+  /**
+   * Returns the cached encryption key for this wallet, deriving (and
+   * prompting one signature) only the first time it's needed per session.
+   */
+  async function getEncryptionKey(
+    walletAddress: string,
+    signMessage:   (msg: string) => Promise<string>,
+  ): Promise<CryptoKey> {
+    if (encryptionKeyRef.current && encryptionWallet.current === walletAddress) {
+      return encryptionKeyRef.current;
+    }
+    const signature = await signMessage(ENCRYPTION_KEY_MESSAGE);
+    const key        = await deriveKeyFromSignature(signature);
+    encryptionKeyRef.current = key;
+    encryptionWallet.current = walletAddress;
+    return key;
+  }
+
+  /** Browser-safe base64 encode — no spread operator (avoids call-stack limits on large payloads). */
+  function toBase64(input: ArrayBuffer | Uint8Array): string {
+    const arr    = input instanceof Uint8Array ? input : new Uint8Array(input);
+    let   binary = '';
+    for (let i = 0; i < arr.length; i++) {
+      binary += String.fromCharCode(arr[i]);
+    }
+    return btoa(binary);
+  }
+
+  /** Browser-safe base64 decode → Uint8Array. */
+  function fromBase64(b64: string): Uint8Array {
+    const binary = atob(b64);
+    const arr    = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+    return arr;
+  }
+
   async function encryptPayload(payload: unknown, key: CryptoKey): Promise<{
     iv: string; ciphertext: string; encoding: string;
   }> {
@@ -224,26 +285,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
     const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
 
-    /**
-     * Browser-safe base64 encoding — does NOT use spread operator.
-     * `btoa(String.fromCharCode(...largeArray))` throws "Maximum call stack
-     * size exceeded" in V8 for arrays > ~65,536 elements (triggered by
-     * organisations with 200+ employees). This loop approach has no limit.
-     */
-    const toBase64 = (input: ArrayBuffer | Uint8Array): string => {
-      const arr    = input instanceof Uint8Array ? input : new Uint8Array(input);
-      let   binary = '';
-      for (let i = 0; i < arr.length; i++) {
-        binary += String.fromCharCode(arr[i]);
-      }
-      return btoa(binary);
-    };
-
     return {
       iv:         toBase64(iv),
       ciphertext: toBase64(encrypted),
       encoding:   'aes-gcm-v1',
     };
+  }
+
+  /** Symmetric counterpart to encryptPayload — decrypts a previously-encrypted blob. */
+  async function decryptPayload<T = unknown>(
+    blob: { iv: string; ciphertext: string; encoding?: string },
+    key:  CryptoKey,
+  ): Promise<T> {
+    const iv         = fromBase64(blob.iv);
+    const ciphertext = fromBase64(blob.ciphertext);
+    const decrypted  = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return JSON.parse(new TextDecoder().decode(decrypted)) as T;
+  }
+
+  /** Type guard: does this look like an encrypted envelope (vs. a plaintext fallback payload)? */
+  function isEncryptedBlob(v: unknown): v is { iv: string; ciphertext: string; encoding?: string } {
+    return !!v && typeof v === 'object' && typeof (v as { iv?: unknown }).iv === 'string'
+      && typeof (v as { ciphertext?: unknown }).ciphertext === 'string';
   }
 
   // ── Sync data to IPFS via Pinata ─────────────────────────────────────────
@@ -267,8 +330,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         tokenRegistry: s.tokenRegistry,  // token names persist to IPFS
       };
 
-      // ── Sign ONCE for auth. Reuse that same signature as encryption key
-      //    material so the user only ever sees ONE wallet popup per sync.
+      // ── Auth signature: fresh, timestamp-bound, sent to the server so it
+      //    can verify + replay-protect this specific request.
       let signature:    string | undefined;
       let timestamp:    number | undefined;
       let encryptedData: unknown = rawPayload; // plaintext fallback
@@ -278,15 +341,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         signature = await opts.signMessage(`Salden Sync: ${timestamp}`);
 
         try {
-          // If wallet changed since last sync, discard the old key
+          // ── Encryption key: STABLE per wallet, derived from a fixed
+          //    message (never the timestamped auth signature above) so the
+          //    same key can re-derive and decrypt this data in any future
+          //    session. Cached after first use — only prompts once.
           if (encryptionWallet.current !== opts.walletAddress) {
             encryptionKeyRef.current = null;
-            encryptionWallet.current = opts.walletAddress;
           }
-
-          const key = encryptionKeyRef.current
-            ?? await deriveKeyFromSignature(signature);
-          encryptionKeyRef.current = key;
+          const key = await getEncryptionKey(opts.walletAddress, opts.signMessage);
           encryptedData = await encryptPayload(rawPayload, key);
         } catch (encErr) {
           console.warn('[AppContext] Encryption failed, storing plaintext:', encErr);
@@ -302,13 +364,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           encryptedData,
           signature,
           timestamp,
-          previousCid: opts.previousCid,
+          previousCid: opts.previousCid ?? lastCidRef.current ?? undefined,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Sync failed');
 
+      lastCidRef.current = data.cid ?? lastCidRef.current;
       dispatch({ type: 'SET_LAST_SYNCED', payload: new Date().toISOString() });
       dispatch({ type: 'SET_SYNC_ERROR',  payload: null });
 
@@ -322,6 +385,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       dispatch({ type: 'SET_SYNCING', payload: false });
     }
+  }, []);
+
+  // ── Load data back from IPFS (via a known CID) and hydrate state ────────────
+  // This is the read-side counterpart to syncData — without it, employees /
+  // groups / payrollSetup only ever existed in memory for the current tab,
+  // and reset to empty on every reload or new session.
+  const loadData = useCallback(async (opts: {
+    walletAddress: string;
+    cid:           string;
+    signMessage:   (msg: string) => Promise<string>;
+  }): Promise<{ loaded: boolean }> => {
+    if (!opts.walletAddress || !opts.cid) return { loaded: false };
+
+    const timestamp = Date.now();
+    const signature = await opts.signMessage(`Salden Sync: ${timestamp}`);
+
+    const params = new URLSearchParams({
+      wallet:    opts.walletAddress,
+      cid:       opts.cid,
+      signature,
+      timestamp: String(timestamp),
+    });
+    const res  = await fetch(`/api/data/sync?${params.toString()}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error ?? 'Failed to load data');
+    if (!body.data) return { loaded: false };
+
+    let payload: { setup?: PayrollSetup; employees?: Employee[]; groups?: string[]; tokenRegistry?: TokenRegistry };
+
+    if (isEncryptedBlob(body.data)) {
+      const key = await getEncryptionKey(opts.walletAddress, opts.signMessage);
+      payload   = await decryptPayload(body.data, key);
+    } else {
+      // Plaintext fallback (encryption failed at write-time, or IPFS disabled in dev)
+      payload = body.data as typeof payload;
+    }
+
+    dispatch({ type: 'SET_PAYROLL_DATA', payload: {
+      employees:     payload.employees     ?? [],
+      groups:        payload.groups        ?? [],
+      payrollSetup:  payload.setup         ?? stateRef.current.payrollSetup,
+      tokenRegistry: payload.tokenRegistry ?? stateRef.current.tokenRegistry,
+      lastSyncedAt:  new Date().toISOString(),
+    } });
+    lastCidRef.current = opts.cid;
+
+    return { loaded: true };
   }, []);
 
   const saveTxRecord = useCallback(async (
@@ -342,7 +452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, addToast, removeToast, syncData, saveTxRecord }}>
+    <AppContext.Provider value={{ state, dispatch, addToast, removeToast, syncData, loadData, saveTxRecord }}>
       {children}
     </AppContext.Provider>
   );

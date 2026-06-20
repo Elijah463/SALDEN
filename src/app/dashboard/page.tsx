@@ -15,10 +15,10 @@ import {
   Search, UserPlus, ChevronDown,
   Pencil, Trash2, AlertTriangle, Loader2,
   CheckCircle2, Copy, Users, Eye, EyeOff,
-  Upload, FileText, Filter, Database,
+  Upload, FileText, Filter,
 } from 'lucide-react';
 import {
-  useAccount, useWalletClient, usePublicClient, useReadContract,
+  useAccount, useWalletClient, usePublicClient, useBalance,
 } from 'wagmi';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { useApp }         from '@/context/AppContext';
@@ -28,8 +28,8 @@ import { PaymentModal }   from '@/components/dashboard/PaymentModal';
 import { LoginModal }     from '@/components/auth/LoginModal';
 import {
   AddEmployeesIllustration,
-  LoginIllustration,
 } from '@/components/shared/Illustrations';
+import Image from 'next/image';
 import {
   validateEmployee,
   findDuplicateWallets,
@@ -43,6 +43,7 @@ import {
   ENTERPRISE_PAYROLL_ABI,
   MULTI_TOKEN_PAYROLL_ABI,
   REGISTRY_FACTORY_ABI,
+  REGISTRY_ABI,
   ERC20_ABI,
 } from '@/lib/contracts/abis';
 import { CONTRACTS } from '@/lib/contracts/config';
@@ -60,6 +61,120 @@ async function parseCsv(file: File): Promise<Record<string, unknown>[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Profile Setup Modal — first onboarding step: collect profile info, then
+// deploy the user's personal registry clone (gas paid in USDC).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
+
+function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
+  const { dispatch } = useApp();
+  const { address }            = useAccount();
+  const { data: walletClient } = useWalletClient();
+  const publicClient           = usePublicClient();
+
+  const [fullName,    setFullName]    = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [email,       setEmail]       = useState('');
+  const [empRange,    setEmpRange]    = useState('');
+  const [errors,      setErrors]      = useState<string[]>([]);
+  const [submitting,  setSubmitting]  = useState(false);
+
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem('salden_session');
+      if (s) { const p = JSON.parse(s) as { email?: string }; if (p?.email) setEmail(p.email); }
+    } catch { /* ignore */ }
+  }, []);
+
+  const inp: React.CSSProperties = {
+    width: '100%', padding: '10px 14px', border: '1.5px solid #E2E8F0',
+    borderRadius: 10, fontFamily: 'inherit', fontSize: 14, color: '#0F172A',
+    background: '#fff', outline: 'none',
+  };
+  const label: React.CSSProperties = {
+    display: 'block', fontSize: 12, fontWeight: 600, color: '#475569',
+    marginBottom: 6, textTransform: 'uppercase' as const, letterSpacing: '0.05em',
+  };
+
+  async function handleSubmit() {
+    const errs: string[] = [];
+    if (!fullName.trim()) errs.push('Full name is required.');
+    if (!companyName.trim()) errs.push('Company / organization name is required.');
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.push('A valid email is required.');
+    if (!empRange) errs.push('Please select how many employees or recipients you plan to pay.');
+    if (errs.length) { setErrors(errs); return; }
+    if (!walletClient || !publicClient || !address) { setErrors(['Connect your wallet first.']); return; }
+
+    setSubmitting(true); setErrors([]);
+    try {
+      const hash = await walletClient.writeContract({
+        address:      CONTRACTS.REGISTRY_FACTORY,
+        abi:          REGISTRY_FACTORY_ABI,
+        functionName: 'createRegistry',
+        args:         [],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      const clone = await publicClient.readContract({
+        address:      CONTRACTS.REGISTRY_FACTORY,
+        abi:          REGISTRY_FACTORY_ABI,
+        functionName: 'getRegistry',
+        args:         [address as `0x${string}`],
+      }) as `0x${string}`;
+      dispatch({ type: 'SET_REGISTRY', payload: clone });
+      dispatch({ type: 'SET_PAYROLL_DATA', payload: {
+        payrollSetup: { fullName, companyName, email, employeeRange: empRange, registryClone: clone },
+      } });
+      onComplete();
+    } catch (err) {
+      setErrors([(err as Error).message ?? 'Transaction failed. Please try again.']);
+    } finally { setSubmitting(false); }
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Finish Your Profile" maxWidth={460}>
+      <div style={{ marginBottom: 14 }}>
+        <label style={label}>Full Name <span style={{ color: '#DC2626' }}>*</span></label>
+        <input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Jane Doe" style={inp}
+          onFocus={e => (e.target.style.borderColor = '#4F46E5')} onBlur={e => (e.target.style.borderColor = '#E2E8F0')} />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={label}>Company / Organization Name <span style={{ color: '#DC2626' }}>*</span></label>
+        <input value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="Acme Inc." style={inp}
+          onFocus={e => (e.target.style.borderColor = '#4F46E5')} onBlur={e => (e.target.style.borderColor = '#E2E8F0')} />
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={label}>Email <span style={{ color: '#DC2626' }}>*</span></label>
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" style={inp}
+          onFocus={e => (e.target.style.borderColor = '#4F46E5')} onBlur={e => (e.target.style.borderColor = '#E2E8F0')} />
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <label style={label}>How many employees / recipients? <span style={{ color: '#DC2626' }}>*</span></label>
+        <select value={empRange} onChange={e => setEmpRange(e.target.value)} style={{ ...inp, cursor: 'pointer' }}
+          onFocus={e => (e.target.style.borderColor = '#4F46E5')} onBlur={e => (e.target.style.borderColor = '#E2E8F0')}>
+          <option value="">Select a range</option>
+          {EMPLOYEE_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </div>
+
+      {errors.length > 0 && (
+        <div style={{ marginBottom: 14, padding: '10px 14px', borderRadius: 10, background: '#FEF2F2', border: '1px solid #FECACA' }}>
+          {errors.map((e, i) => <p key={i} style={{ fontSize: 12.5, color: '#DC2626', margin: 0 }}>{e}</p>)}
+        </div>
+      )}
+
+      <button onClick={handleSubmit} disabled={submitting}
+        style={{ width: '100%', padding: '13px 16px', borderRadius: 10, border: 'none', background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+        {submitting ? <><Loader2 size={15} style={{ animation: 'spin 0.7s linear infinite' }} /> Deploying your contract…</> : 'Complete Setup'}
+      </button>
+      <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 10, textAlign: 'center', lineHeight: 1.5 }}>
+        This deploys your own private registry contract Onchain. A small USDC gas fee applies.
+      </p>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Employee Modal — defined at MODULE LEVEL to prevent remount on parent render
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -71,12 +186,17 @@ interface EmployeeModalProps {
   onSave:     (data: Employee, idx?: number) => Promise<void>;
   onSaveBulk?: (data: Employee[]) => Promise<void>;
   onClose:    () => void;
+  /** Onboarding mode: modal stays open after each save and shows a running
+   *  count + "Proceed to Dashboard" button once `minRequired` is reached. */
+  setupMode?:    boolean;
+  minRequired?:  number;
 }
 
 function EmployeeModal({
   mode, employee, rowIndex, groups, onSave, onSaveBulk, onClose,
+  setupMode = false, minRequired = 2,
 }: EmployeeModalProps) {
-  const { dispatch }           = useApp();
+  const { dispatch, state, syncData } = useApp();
   const { address }            = useAccount();
   const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
@@ -99,62 +219,32 @@ function EmployeeModal({
   const [showNewGroup,  setShowNewGroup]  = useState(false);
   const [newGroupName,  setNewGroupName]  = useState('');
 
-  // ── "Create Secure Company Database" button ──────────────────────────────
-  const [dbStatus, setDbStatus] = useState<'checking' | 'idle' | 'exists' | 'creating' | 'done' | 'error'>('checking');
-  const [dbError,  setDbError]  = useState('');
+  const [proceeding,    setProceeding]    = useState(false);
+  const [proceedError,  setProceedError]  = useState('');
 
-  useEffect(() => {
-    if (!address || !publicClient) { setDbStatus('idle'); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const existing = await publicClient.readContract({
-          address:      CONTRACTS.REGISTRY_FACTORY,
-          abi:          REGISTRY_FACTORY_ABI,
-          functionName: 'getRegistry',
-          args:         [address as `0x${string}`],
-        }) as `0x${string}`;
-        if (cancelled) return;
-        const ZERO = '0x0000000000000000000000000000000000000000';
-        if (existing && existing.toLowerCase() !== ZERO) {
-          setDbStatus('exists');
-          dispatch({ type: 'SET_REGISTRY', payload: existing });
-        } else {
-          setDbStatus('idle');
-        }
-      } catch {
-        if (!cancelled) setDbStatus('idle');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [address, publicClient, dispatch]);
+  const employeeCount = state.employees.length;
+  const setupDone     = employeeCount >= minRequired;
 
-  async function handleCreateDb() {
-    if (!walletClient || !publicClient || !address) return;
-    setDbStatus('creating'); setDbError('');
+  async function handleProceed() {
+    if (!walletClient || !publicClient || !state.registryClone || !address) return;
+    setProceeding(true); setProceedError('');
     try {
-      const hash = await walletClient.writeContract({
-        address:      CONTRACTS.REGISTRY_FACTORY,
-        abi:          REGISTRY_FACTORY_ABI,
-        functionName: 'createRegistry',
-        args:         [],
-      });
-      await publicClient.waitForTransactionReceipt({ hash });
-      const clone = await publicClient.readContract({
-        address:      CONTRACTS.REGISTRY_FACTORY,
-        abi:          REGISTRY_FACTORY_ABI,
-        functionName: 'getRegistry',
-        args:         [address as `0x${string}`],
-      }) as `0x${string}`;
-      dispatch({ type: 'SET_REGISTRY', payload: clone });
-      setDbStatus('done');
+      const sign = (msg: string) => walletClient.signMessage({ message: msg });
+      const { cid } = await syncData({ employees: state.employees, walletAddress: address, signMessage: sign });
+      if (cid) {
+        const hash = await walletClient.writeContract({
+          address:      state.registryClone as `0x${string}`,
+          abi:          REGISTRY_ABI,
+          functionName: 'updateCID',
+          args:         [cid],
+        });
+        await publicClient.waitForTransactionReceipt({ hash });
+      }
+      onClose();
     } catch (err) {
-      setDbError((err as Error).message ?? 'Transaction failed');
-      setDbStatus('error');
-    }
+      setProceedError((err as Error).message ?? 'Failed to finalize setup');
+    } finally { setProceeding(false); }
   }
-
-  const dbCreated = dbStatus === 'exists' || dbStatus === 'done';
 
   function commitNewGroup() {
     const name = newGroupName.trim();
@@ -174,7 +264,11 @@ function EmployeeModal({
     setSaving(true);
     try {
       await onSave({ ...form, salaryAmount: Number(form.salaryAmount) }, rowIndex);
-      onClose();
+      if (setupMode) {
+        setForm({ fullName: '', department: '', walletAddress: '', salaryAmount: 0, group: form.group });
+      } else {
+        onClose();
+      }
     } catch (err) {
       setErrors([(err as Error).message]);
     } finally { setSaving(false); }
@@ -207,7 +301,12 @@ function EmployeeModal({
     if (!form.group) { setFileError('Group is required before importing.'); return; }
     const withGroup = bulkEmployees.map(e => ({ ...e, group: form.group }));
     setImporting(true);
-    try { await onSaveBulk(withGroup); onClose(); }
+    try {
+      await onSaveBulk(withGroup);
+      setBulkEmployees([]);
+      if (fileRef.current) fileRef.current.value = '';
+      if (!setupMode) onClose();
+    }
     catch (err) { setFileError((err as Error).message); }
     finally { setImporting(false); }
   }
@@ -218,39 +317,34 @@ function EmployeeModal({
     background: '#fff', outline: 'none',
   };
 
-  // Shared top section: Create DB button + group selector
+  // Shared top section: setup progress (onboarding) + group selector
   const sharedTop = (
     <>
-      <div style={{ marginBottom: 18 }}>
-        {dbStatus === 'checking' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748B' }}>
-            <Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Checking company database…
+      {setupMode && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: setupDone ? '#059669' : '#475569' }}>
+              {setupDone ? 'Minimum reached — you can proceed' : `${employeeCount} of ${minRequired} employees added`}
+            </span>
+            {setupDone && <CheckCircle2 size={16} color="#059669" />}
           </div>
-        ) : dbCreated ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderRadius: 10, background: '#ECFDF5', border: '1px solid #A7F3D0', fontSize: 13, fontWeight: 600, color: '#059669' }}>
-            <CheckCircle2 size={16} color="#059669" /> Created Company&apos;s Database
+          <div style={{ height: 6, borderRadius: 4, background: '#F1F5F9', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.min(100, (employeeCount / minRequired) * 100)}%`, background: setupDone ? '#059669' : '#4F46E5', transition: 'width 0.2s' }} />
           </div>
-        ) : (
-          <>
-            <button onClick={handleCreateDb} disabled={dbStatus === 'creating' || !address}
-              style={{ width: '100%', padding: '11px 16px', borderRadius: 10, border: '1.5px solid #4F46E5', background: dbStatus === 'creating' ? '#EEF2FF' : '#fff', color: '#4F46E5', fontSize: 14, fontWeight: 600, cursor: dbStatus === 'creating' ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-              {dbStatus === 'creating'
-                ? <><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Creating…</>
-                : <><Database size={14} /> Create Secure Company Database</>
-              }
-            </button>
-            {dbError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{dbError}</p>}
-            {dbStatus === 'error' && (
-              <p style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
-                Transaction rejected or failed. Please try again.
+          {setupDone && (
+            <>
+              <button onClick={handleProceed} disabled={proceeding}
+                style={{ marginTop: 14, width: '100%', padding: '12px 16px', borderRadius: 10, border: 'none', background: '#059669', color: '#fff', fontSize: 14, fontWeight: 700, cursor: proceeding ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+                {proceeding ? <><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Syncing & finalizing…</> : 'Proceed to Dashboard'}
+              </button>
+              {proceedError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{proceedError}</p>}
+              <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>
+                You can keep adding employees below, or proceed now — this syncs your employee data and anchors it Onchain.
               </p>
-            )}
-            <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>
-              Required before adding employees. Creates your encrypted company database Onchain.
-            </p>
-          </>
-        )}
-      </div>
+            </>
+          )}
+        </div>
+      )}
 
       <hr style={{ border: 'none', borderTop: '1px solid #F1F5F9', margin: '0 0 18px' }} />
 
@@ -410,14 +504,14 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
+  const { state, dispatch, addToast, syncData, loadData, saveTxRecord } = useApp();
   const { address, isConnected }  = useAccount();
   const { data: walletClient }    = useWalletClient();
   const publicClient              = usePublicClient();
 
   const {
     employees, groups, activeGroup,
-    payrollSetup, payrollClone, isPremiumUser,
+    payrollSetup, payrollClone, registryClone, isPremiumUser,
   } = state;
 
   // ── Login state ────────────────────────────────────────────────────────────
@@ -435,17 +529,51 @@ export default function DashboardPage() {
 
   const isLoggedIn = isConnected || hasCircleSession;
 
-  // ── USDC balance (audit fix: args always defined; query.enabled gates execution)
-  const ZERO_ADDR = '0x0000000000000000000000000000000000000000' as `0x${string}`;
-  const { data: rawBalance } = useReadContract({
-    address:      CONTRACTS.USDC,
-    abi:          ERC20_ABI,
-    functionName: 'balanceOf',
-    args:         [address ?? ZERO_ADDR],
-    query:        { enabled: !!address },
+  // ── Onboarding: does the user already have a registry clone? ──────────────
+  const [registryStatus, setRegistryStatus] = useState<'checking' | 'none' | 'exists'>('checking');
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  // ── Restoring previously-synced employee data from IPFS (via on-chain CID)
+  const [dataLoadStatus, setDataLoadStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const dataLoadAttempted = useRef<string | null>(null); // guards against re-prompting for the same registry clone
+
+  useEffect(() => {
+    if (!isLoggedIn || !address || !publicClient) { setRegistryStatus('checking'); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const existing = await publicClient.readContract({
+          address:      CONTRACTS.REGISTRY_FACTORY,
+          abi:          REGISTRY_FACTORY_ABI,
+          functionName: 'getRegistry',
+          args:         [address as `0x${string}`],
+        }) as `0x${string}`;
+        if (cancelled) return;
+        const ZERO = '0x0000000000000000000000000000000000000000';
+        if (existing && existing.toLowerCase() !== ZERO) {
+          dispatch({ type: 'SET_REGISTRY', payload: existing });
+          setRegistryStatus('exists');
+        } else {
+          setRegistryStatus('none');
+        }
+      } catch {
+        if (!cancelled) setRegistryStatus('none');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isLoggedIn, address, publicClient, dispatch]);
+
+  // ── USDC balance ───────────────────────────────────────────────────────────
+  // Arc Testnet uses USDC as its native gas token: native balance reads (this
+  // hook) report it with 18 decimals, while the ERC-20 interface contract
+  // (CONTRACTS.USDC) reports the same balance with 6 decimals. For on-screen
+  // *display* we always use the native/18-decimal reading; the ERC-20
+  // interface is reserved for actual contract calls (transfers, approvals).
+  const { data: nativeBalance } = useBalance({
+    address,
+    query: { enabled: !!address },
   });
-  const balanceStr = rawBalance !== undefined
-    ? (Number(rawBalance as bigint) / 1_000_000).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const balanceStr = nativeBalance
+    ? Number(nativeBalance.formatted).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '0.00';
 
   function handleCopyAddress() {
@@ -462,9 +590,14 @@ export default function DashboardPage() {
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
   const rowRefs   = useRef<Record<number, HTMLTableRowElement | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
+  // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
+  // redundant transaction if the data hasn't actually changed since.
+  // (IPFS "previousCid" bookkeeping for Pinata cleanup is handled centrally
+  // by AppContext's syncData/loadData — no need to duplicate it here.)
+  const lastAnchoredCidRef = useRef<string | null>(null);
 
   // ── Modal state ────────────────────────────────────────────────────────────
-  const [employeeModal,    setEmployeeModal]    = useState<{ mode: 'add' | 'edit'; employee?: Employee; rowIndex?: number } | null>(null);
+  const [employeeModal,    setEmployeeModal]    = useState<{ mode: 'add' | 'edit'; employee?: Employee; rowIndex?: number; setupMode?: boolean } | null>(null);
   const [deleteModal,      setDeleteModal]      = useState<number | null>(null);
   const [contextMenu,      setContextMenu]      = useState<{ x: number; y: number; rowIndex: number } | null>(null);
   const [groupMenuOpen,    setGroupMenuOpen]    = useState(false);
@@ -523,34 +656,117 @@ export default function DashboardPage() {
   // ── CRUD ───────────────────────────────────────────────────────────────────
   const sign = useCallback((msg: string) => walletClient ? walletClient.signMessage({ message: msg }) : Promise.reject(new Error('No wallet')), [walletClient]);
 
+  /**
+   * Anchors a freshly-synced IPFS CID Onchain (SaldenRegistry.updateCID).
+   * Without this, the registry's on-chain pointer would only ever reflect
+   * whatever was anchored during initial onboarding — every edit afterward
+   * would update IPFS but silently leave the Onchain record stale, so a
+   * reload (or another device) would load outdated data.
+   */
+  const anchorCid = useCallback(async (cid?: string) => {
+    if (!cid || cid === lastAnchoredCidRef.current) return;
+    if (!registryClone || !walletClient || !publicClient) return;
+    try {
+      const hash = await walletClient.writeContract({
+        address:      registryClone as `0x${string}`,
+        abi:          REGISTRY_ABI,
+        functionName: 'updateCID',
+        args:         [cid],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      lastAnchoredCidRef.current = cid;
+    } catch (err) {
+      console.error('[Dashboard] Failed to anchor CID Onchain:', err);
+      addToast('Saved, but the Onchain record could not be updated. Retry from Settings → Sync Data if this keeps happening.', 'warning');
+    }
+  }, [registryClone, walletClient, publicClient, addToast]);
+
+  // ── Restore previously-synced data ──────────────────────────────────────────
+  // The registry clone's on-chain CID points at the latest encrypted snapshot
+  // of this employer's employees/groups/setup on IPFS. Without this, every
+  // page reload or new session would show an empty roster even though the
+  // real data is safely anchored Onchain — the gate below would force the
+  // user back through "Set Up Employee Data" and risk overwriting it.
+  useEffect(() => {
+    if (registryStatus !== 'exists' || !registryClone || !address || !publicClient || !walletClient) return;
+    if (employees.length > 0) { setDataLoadStatus('done'); return; } // already populated this session
+    if (dataLoadAttempted.current === registryClone) return;          // already tried for this clone
+    dataLoadAttempted.current = registryClone;
+
+    let cancelled = false;
+    (async () => {
+      setDataLoadStatus('loading');
+      try {
+        const cid = await publicClient.readContract({
+          address:      registryClone as `0x${string}`,
+          abi:          REGISTRY_ABI,
+          functionName: 'getCID',
+          args:         [],
+        }) as string;
+        if (cancelled) return;
+        if (!cid) { setDataLoadStatus('done'); return; }
+
+        const { loaded } = await loadData({ walletAddress: address, cid, signMessage: sign });
+        if (!cancelled) {
+          lastAnchoredCidRef.current = cid;
+          setDataLoadStatus('done');
+          if (loaded) addToast('Restored your employee data.', 'success');
+        }
+      } catch (err) {
+        console.error('[Dashboard] Failed to restore data from IPFS:', err);
+        if (!cancelled) {
+          setDataLoadStatus('error');
+          addToast('Could not restore your saved data. You can continue and re-add employees if needed.', 'warning');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [registryStatus, registryClone, address, publicClient, walletClient, employees.length, loadData, sign, addToast]);
+
   const handleAddEmployee = useCallback(async (data: Employee) => {
     const next = [...employees, data];
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
-    try { await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign }); addToast('Employee added.', 'success'); }
+    try {
+      const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
+      addToast('Employee added.', 'success');
+      await anchorCid(cid);
+    }
     catch { addToast('Saved locally — sync failed.', 'warning'); }
-  }, [employees, dispatch, syncData, addToast, address, sign]);
+  }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleAddBulk = useCallback(async (data: Employee[]) => {
     const next = [...employees, ...data];
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
-    try { await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign }); addToast(`${data.length} employees imported.`, 'success'); }
+    try {
+      const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
+      addToast(`${data.length} employees imported.`, 'success');
+      await anchorCid(cid);
+    }
     catch { addToast('Saved locally — sync failed.', 'warning'); }
-  }, [employees, dispatch, syncData, addToast, address, sign]);
+  }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleEditEmployee = useCallback(async (data: Employee, rowIndex?: number) => {
     if (rowIndex === undefined) return;
     const next = employees.map((e, i) => i === rowIndex ? { ...e, ...data } : e);
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
-    try { await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign }); addToast('Employee updated.', 'success'); }
+    try {
+      const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
+      addToast('Employee updated.', 'success');
+      await anchorCid(cid);
+    }
     catch { addToast('Saved locally — sync failed.', 'warning'); }
-  }, [employees, dispatch, syncData, addToast, address, sign]);
+  }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleDeleteEmployee = useCallback(async (rowIndex: number) => {
     const next = employees.filter((_, i) => i !== rowIndex);
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
-    try { await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign }); addToast('Employee removed.', 'success'); }
+    try {
+      const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
+      addToast('Employee removed.', 'success');
+      await anchorCid(cid);
+    }
     catch { addToast('Saved locally — sync failed.', 'warning'); }
-  }, [employees, dispatch, syncData, addToast, address, sign]);
+  }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   // ── Execute payroll (audit fix: uses static imports only — no dynamic re-imports) ──
   const handleExecutePayroll = useCallback(async (overrideToken: TokenEntry | null, overrideGroup?: string) => {
@@ -695,7 +911,7 @@ export default function DashboardPage() {
         {/* ── Unauthenticated gate ───────────────────────────────────── */}
         {!isLoggedIn ? (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
-            <LoginIllustration width={200} height={160} />
+            <Image src="/images/login-illustration.png" alt="Login" width={200} height={200} style={{ objectFit: 'contain', margin: '0 auto' }} />
             <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '24px 0 8px' }}>Welcome to Salden</h3>
             <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7 }}>
               Login to manage your payroll, add employees, and process Onchain payments.
@@ -703,6 +919,40 @@ export default function DashboardPage() {
             <button onClick={() => setLoginOpen(true)}
               style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
               Login
+            </button>
+          </div>
+        ) : registryStatus === 'checking' ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <Loader2 size={24} style={{ animation: 'spin 0.7s linear infinite', color: '#4F46E5' }} />
+            <p style={{ fontSize: 14, color: '#64748B', marginTop: 14 }}>Checking your account…</p>
+          </div>
+        ) : registryStatus === 'none' ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Finish Your Profile</h3>
+            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
+              Tell us a bit about your company to set up your private, encrypted payroll database Onchain.
+            </p>
+            <button onClick={() => setProfileModalOpen(true)}
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Finish Your Profile
+            </button>
+          </div>
+        ) : registryStatus === 'exists' && dataLoadStatus === 'loading' ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <Loader2 size={24} style={{ animation: 'spin 0.7s linear infinite', color: '#4F46E5' }} />
+            <p style={{ fontSize: 14, color: '#64748B', marginTop: 14 }}>Restoring your saved data…</p>
+            <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 6 }}>Check your wallet for a signature request.</p>
+          </div>
+        ) : employees.length < 2 ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <AddEmployeesIllustration width={200} height={150} />
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '16px 0 8px' }}>Set Up Employee Data</h3>
+            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
+              Add at least 2 employees to finish setting up your payroll. You can add more anytime afterward.
+            </p>
+            <button onClick={() => setEmployeeModal({ mode: 'add', setupMode: true })}
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Set Up Employee Data
             </button>
           </div>
         ) : (
@@ -793,10 +1043,10 @@ export default function DashboardPage() {
                 <div style={{ padding: '60px 20px', textAlign: 'center' }}>
                   <AddEmployeesIllustration width={220} height={165} />
                   <p style={{ color: '#94A3B8', fontSize: 14, marginTop: 16 }}>
-                    {employees.length === 0 ? 'No employees yet. Add your first employee to get started.' : `No employees in "${activeGroup}".`}
+                    No employees in &quot;{activeGroup}&quot;.
                   </p>
                   <Button variant="brand" icon={<UserPlus size={14} />} onClick={() => setEmployeeModal({ mode: 'add' })} style={{ marginTop: 16 }}>
-                    Set up Employees Data
+                    Add Employee
                   </Button>
                 </div>
               ) : (
@@ -880,6 +1130,7 @@ export default function DashboardPage() {
 
       {employeeModal && (
         <EmployeeModal mode={employeeModal.mode} employee={employeeModal.employee} rowIndex={employeeModal.rowIndex}
+          setupMode={employeeModal.setupMode} minRequired={2}
           groups={groups} onSave={employeeModal.mode === 'add' ? handleAddEmployee : handleEditEmployee}
           onSaveBulk={handleAddBulk} onClose={() => setEmployeeModal(null)} />
       )}
@@ -890,6 +1141,12 @@ export default function DashboardPage() {
         <PaymentModal open={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} activeGroup={activeGroup} groups={groups} payrollClone={payrollClone} onConfirm={handleModalConfirm} />
       )}
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} />
+      {profileModalOpen && (
+        <ProfileSetupModal
+          onClose={() => setProfileModalOpen(false)}
+          onComplete={() => { setProfileModalOpen(false); setRegistryStatus('exists'); }}
+        />
+      )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </AppLayout>

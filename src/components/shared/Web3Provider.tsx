@@ -18,7 +18,7 @@ export const wagmiConfig = getDefaultConfig({
   projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? '',
   chains: [arcTestnet],
   transports: {
-    [arcTestnet.id]: http(process.env.NEXT_PUBLIC_RPC_URL ?? 'https://rpc.testnet.arc.network'),
+    [arcTestnet.id]: http(arcTestnet.rpcUrls.default.http[0]),
   },
   ssr: true,
 });

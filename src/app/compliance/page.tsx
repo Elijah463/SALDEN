@@ -16,7 +16,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { ComplianceIllustration } from '@/components/shared/Illustrations';
-import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
+import { CONTRACTS, arcTestnet, addressLink } from '@/lib/contracts/config';
 import { ENTERPRISE_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { isValidEthAddress, truncAddr } from '@/lib/validation';
 
@@ -111,7 +111,7 @@ export default function CompliancePage() {
       update('wallet', {
         status: 'pass',
         detail: `Connected: ${truncAddr(address)}`,
-        link: `https://testnet.arcscan.app/address/${address}`,
+        link: addressLink(address),
       });
     } else {
       update('wallet', { status: 'fail', detail: 'No wallet connected. Connect your wallet to continue.' });
@@ -130,7 +130,7 @@ export default function CompliancePage() {
           detail: paused
             ? 'Payroll contract is currently paused by admin.'
             : 'Contract is active and accepting transactions.',
-          link: `https://testnet.arcscan.app/address/${CONTRACTS.ENTERPRISE_PAYROLL}`,
+          link: addressLink(CONTRACTS.ENTERPRISE_PAYROLL),
         });
       } else { throw new Error('No RPC client'); }
     } catch {
@@ -142,7 +142,7 @@ export default function CompliancePage() {
       update('registry', {
         status: 'pass',
         detail: `Registry deployed at ${truncAddr(registryClone)}.`,
-        link:   `https://testnet.arcscan.app/address/${registryClone}`,
+        link:   addressLink(registryClone),
       });
     } else {
       update('registry', { status: 'warn', detail: 'No registry clone deployed. Employee data is stored locally only.' });

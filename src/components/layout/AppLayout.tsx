@@ -2,7 +2,6 @@
 import { ReactNode, useState, useEffect } from 'react';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
-import { SaldenLogo } from '@/components/shared/Logo';
 import { Footer } from './Footer';
 import { useAccount } from 'wagmi';
 
@@ -45,8 +44,6 @@ export function AppLayout({ children, title, companyName }: AppLayoutProps) {
         >
           <Menu size={18} />
         </button>
-
-        <SaldenLogo size={26} />
 
         {title && (
           <span style={{

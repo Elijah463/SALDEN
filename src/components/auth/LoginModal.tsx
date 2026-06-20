@@ -429,6 +429,14 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
               </button>
             )}
           </ConnectButton.Custom>
+
+          <p style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center', lineHeight: 1.6, margin: '6px 0 0' }}>
+            By continuing you agree to the{' '}
+            <a href="https://salden.xyz/terms" target="_blank" rel="noreferrer" style={{ color: '#4F46E5', fontWeight: 600, textDecoration: 'none' }}>Terms</a>
+            {' '}and{' '}
+            <a href="https://salden.xyz/privacy" target="_blank" rel="noreferrer" style={{ color: '#4F46E5', fontWeight: 600, textDecoration: 'none' }}>Privacy Policy</a>
+            .
+          </p>
         </div>
       )}
 

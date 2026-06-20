@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { arcTestnet } from '@/lib/contracts/config';
 
 // ── Cached SDK instance — created once per Lambda warm instance ────────────────
 // Using 'any' here is intentional — the type-only import from @google/generative-ai
@@ -133,7 +134,7 @@ OPERATIONAL RULES
 • Be concise and professional — no markdown headers in conversational replies
 • Never fabricate blockchain data — only report what you can verify
 • Always use token names from the registry, never raw addresses in user-facing responses
-• Transactions are on Arc Testnet (Chain ID: 23295)
+• Transactions are on Arc Testnet (Chain ID: ${arcTestnet.id})
 • USDC has 6 decimal places
 • Maximum batch size: 1,000 employees per transaction`;
 

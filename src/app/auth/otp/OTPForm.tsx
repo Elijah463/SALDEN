@@ -10,7 +10,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { SaldenLogo }        from '@/components/shared/Logo';
 import { Button }            from '@/components/shared/Button';
-import { LoginIllustration } from '@/components/shared/Illustrations';
+import Image                 from 'next/image';
 import { Mail, ArrowLeft, RefreshCw } from 'lucide-react';
 
 const OTP_LENGTH      = 6;
@@ -92,6 +92,11 @@ export function OTPForm() {
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) throw new Error(data.error ?? 'Verification failed');
+      try {
+        localStorage.setItem('salden_session', JSON.stringify({
+          email, walletAddress: wallet, loginMethod: 'email-otp', createdAt: Date.now(),
+        }));
+      } catch { /* ignore storage errors */ }
       router.push('/dashboard');
     } catch (err) {
       setError((err as Error).message);
@@ -139,7 +144,7 @@ export function OTPForm() {
       </div>
 
       <div style={{ background: '#fff', borderRadius: 24, padding: '40px 36px', border: '1px solid #E2E8F0', boxShadow: '0 8px 32px rgba(0,0,0,0.07)', width: '100%', maxWidth: 440, textAlign: 'center' }}>
-        <LoginIllustration width={160} height={130} />
+        <Image src="/images/login-illustration.png" alt="Login" width={160} height={160} style={{ objectFit: 'contain', margin: '0 auto' }} />
 
         <h2 style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 16, marginBottom: 6 }}>
           Check your email

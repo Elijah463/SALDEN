@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 import { isValidEthAddress } from '@/lib/validation';
+import { arcTestnet, txLink } from '@/lib/contracts/config';
 
 function getResend(): Resend {
   const key = process.env.RESEND_API_KEY;
@@ -39,8 +40,8 @@ export async function POST(req: NextRequest) {
 
             <!-- Header -->
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 32px;">
-              <div style="width: 36px; height: 36px; background: #4F46E5; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-                <span style="color: white; font-weight: 800; font-size: 18px;">S</span>
+              <div style="width: 72px; height: 72px; background: #4F46E5; border-radius: 16px; display: flex; align-items: center; justify-content: center;">
+                <span style="color: white; font-weight: 800; font-size: 36px;">S</span>
               </div>
               <span style="font-size: 18px; font-weight: 800; letter-spacing: 0.08em; color: #4F46E5;">SALDEN</span>
               <span style="margin-left: auto; font-size: 12px; color: #94A3B8;">PAYROLL INVOICE</span>
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
                 ['Date',           date                                    ],
                 ['From Wallet',    `${walletAddress.slice(0,8)}…${walletAddress.slice(-6)}`],
                 ['Transaction',    `${txHash.slice(0,12)}…${txHash.slice(-6)}`             ],
-                ['Network',        'Arc Testnet (Chain ID 23295)'          ],
+                ['Network',        `Arc Testnet (Chain ID ${arcTestnet.id})`],
                 ['Token',          token ?? 'USDC'                         ],
               ].map(([label, value]) => `
                 <tr>
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
             </table>
 
             <!-- Verify link -->
-            <a href="https://testnet.arcscan.app/tx/${txHash}"
+            <a href="${txLink(txHash)}"
               style="display: block; text-align: center; padding: 12px; border-radius: 10px;
                      background: #4F46E5; color: #fff; text-decoration: none;
                      font-size: 14px; font-weight: 600; margin-bottom: 24px;">

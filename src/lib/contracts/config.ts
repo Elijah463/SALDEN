@@ -1,35 +1,55 @@
 /**
  * @file lib/contracts/config.ts
  * Contract addresses and chain configuration for Salden Protocol on Arc Testnet.
+ *
+ * IMPORTANT: every network-specific value (chain ID, RPC URL, block explorer,
+ * and every contract address) is sourced from environment variables ONLY —
+ * nothing here is hardcoded as a fallback. Set these in your Vercel project
+ * (or .env.local for local development):
+ *   NEXT_PUBLIC_CHAIN_ID
+ *   NEXT_PUBLIC_RPC_URL
+ *   NEXT_PUBLIC_BLOCK_EXPLORER_URL
+ *   NEXT_PUBLIC_USDC_ADDRESS
+ *   NEXT_PUBLIC_ENTERPRISE_PAYROLL_ADDRESS
+ *   NEXT_PUBLIC_MULTI_TOKEN_FACTORY_ADDRESS
+ *   NEXT_PUBLIC_REGISTRY_FACTORY_ADDRESS
+ *
+ * The only thing hardcoded below is the native currency symbol — "USDC" —
+ * since Arc Testnet uses USDC as its native gas token (not ETH).
  */
 
 import { defineChain } from 'viem';
 
+const RPC_URL       = process.env.NEXT_PUBLIC_RPC_URL as string;
+const EXPLORER_URL  = process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL as string;
+
 // ─── Arc Testnet chain definition ─────────────────────────────────────────────
 export const arcTestnet = defineChain({
-  id: 23295,
+  id: Number(process.env.NEXT_PUBLIC_CHAIN_ID),
   name: 'Arc Testnet',
-  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+  // Arc Testnet's native gas token is USDC (18-decimal native balance —
+  // distinct from the 6-decimal ERC-20 USDC interface used for transfers).
+  nativeCurrency: { name: 'USDC', symbol: 'USDC', decimals: 18 },
   rpcUrls: {
-    default: { http: ['https://rpc.testnet.arc.network'] },
+    default: { http: [RPC_URL] },
   },
   blockExplorers: {
-    default: { name: 'ArcScan', url: 'https://testnet.arcscan.app' },
+    default: { name: 'ArcScan', url: EXPLORER_URL },
   },
   testnet: true,
 });
 
 // ─── Contract addresses ────────────────────────────────────────────────────────
 export const CONTRACTS = {
-  ENTERPRISE_PAYROLL: (process.env.NEXT_PUBLIC_ENTERPRISE_PAYROLL_ADDRESS ?? '0x32B2b3F9EAA03F942B4d170d6343fdb27a795D87') as `0x${string}`,
-  MULTI_TOKEN_FACTORY: (process.env.NEXT_PUBLIC_MULTI_TOKEN_FACTORY_ADDRESS ?? '0x3dB2362b5a4029ed116955c05A42B910aA80851d') as `0x${string}`,
-  REGISTRY_FACTORY: (process.env.NEXT_PUBLIC_REGISTRY_FACTORY_ADDRESS ?? '0x5e9dDD4bc4aC8ae17263061275Bd319b4a09bDB5') as `0x${string}`,
-  // USDC on Arc Testnet
-  USDC: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238' as `0x${string}`,
+  ENTERPRISE_PAYROLL:  process.env.NEXT_PUBLIC_ENTERPRISE_PAYROLL_ADDRESS  as `0x${string}`,
+  MULTI_TOKEN_FACTORY: process.env.NEXT_PUBLIC_MULTI_TOKEN_FACTORY_ADDRESS as `0x${string}`,
+  REGISTRY_FACTORY:    process.env.NEXT_PUBLIC_REGISTRY_FACTORY_ADDRESS   as `0x${string}`,
+  // ERC-20 interface for USDC on Arc Testnet (6 decimals — see note above).
+  USDC: process.env.NEXT_PUBLIC_USDC_ADDRESS as `0x${string}`,
 } as const;
 
 // ─── Block explorer helpers ────────────────────────────────────────────────────
-export const ARCSCAN_BASE = 'https://testnet.arcscan.app';
+export const ARCSCAN_BASE = EXPLORER_URL;
 
 export function txLink(hash: string): string {
   return `${ARCSCAN_BASE}/tx/${hash}`;

@@ -5,8 +5,8 @@
  * Cooldown removed per spec. Restructured to match new design.
  */
 
-import { useState } from 'react';
-import { useAccount, useWalletClient } from 'wagmi';
+import { useState, useRef } from 'react';
+import { useAccount, useWalletClient, usePublicClient } from 'wagmi';
 import { type PayrollSetup } from '@/context/AppContext';
 import {
   Zap, Trash2, Download, ExternalLink,
@@ -17,7 +17,7 @@ import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/shared/Modal';
 import { CONTRACTS, addressLink } from '@/lib/contracts/config';
-import { MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
+import { MULTI_TOKEN_PAYROLL_ABI, REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, isValidEthAddress, sanitizeString } from '@/lib/validation';
 import { upsertToken, removeToken, tokenLabel, type TokenEntry } from '@/lib/token-registry';
 import { SettingsIllustration } from '@/components/shared/Illustrations';
@@ -53,8 +53,45 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 export default function SettingsPage() {
   const { address }      = useAccount();
   const { data: wallet } = useWalletClient();
+  const publicClient     = usePublicClient();
   const { state, dispatch, addToast, syncData } = useApp();
   const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups } = state;
+
+  // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
+  // redundant transaction if the data hasn't actually changed since.
+  // (IPFS "previousCid" bookkeeping for Pinata cleanup is handled centrally
+  // by AppContext's syncData/loadData — no need to duplicate it here.)
+  const lastAnchoredCidRef = useRef<string | null>(null);
+
+  /** Anchors a freshly-synced IPFS CID Onchain. Mirrors the dashboard's
+   *  anchorCid — without this, group/profile/token-registry edits made here
+   *  would sync to IPFS but never update the Onchain pointer, so they'd be
+   *  invisible after a reload or from another device. */
+  const anchorCid = async (cid?: string) => {
+    if (!cid || cid === lastAnchoredCidRef.current) return;
+    if (!registryClone || !wallet || !publicClient) return;
+    try {
+      const hash = await wallet.writeContract({
+        address:      registryClone as `0x${string}`,
+        abi:          REGISTRY_ABI,
+        functionName: 'updateCID',
+        args:         [cid],
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      lastAnchoredCidRef.current = cid;
+    } catch (err) {
+      console.error('[Settings] Failed to anchor CID Onchain:', err);
+      addToast('Saved, but the Onchain record could not be updated. Please try again.', 'warning');
+    }
+  };
+
+  const signMsg = wallet ? (msg: string) => wallet.signMessage({ message: msg }) : undefined;
+
+  /** Sync current state to IPFS, then anchor the resulting CID Onchain. */
+  async function syncAndAnchor() {
+    const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+    await anchorCid(cid);
+  }
 
   // Profile form
   const [companyName, setCompanyName] = useState(payrollSetup?.companyName ?? '');
@@ -64,6 +101,7 @@ export default function SettingsPage() {
   // Group management
   const [newGroup,     setNewGroup]     = useState('');
   const [groupError,   setGroupError]   = useState('');
+  const [groupSaving,  setGroupSaving]  = useState(false);
 
   // Agent management
   const [agentAddr,      setAgentAddr]      = useState('');
@@ -101,10 +139,7 @@ export default function SettingsPage() {
       };
       dispatch({ type: 'SET_PAYROLL_DATA', payload: { payrollSetup: updated } });
       dispatch({ type: 'SET_COMPANY_NAME', payload: updated.companyName });
-      await syncData({
-        walletAddress: address ?? '',
-        signMessage: wallet ? (msg) => wallet.signMessage({ message: msg }) : undefined,
-      });
+      await syncAndAnchor();
       addToast('Profile saved.', 'success');
     } catch { addToast('Failed to save profile.', 'error'); }
     finally { setSavingProfile(false); }
@@ -112,19 +147,33 @@ export default function SettingsPage() {
 
   // ── Group management ────────────────────────────────────────────────────────
 
-  function handleAddGroup() {
+  async function handleAddGroup() {
     const g = sanitizeString(newGroup);
     if (!g) { setGroupError('Group name cannot be empty.'); return; }
     if (groups.includes(g)) { setGroupError('Group already exists.'); return; }
-    dispatch({ type: 'SET_GROUPS', payload: [...groups, g] });
+    const next = [...groups, g];
+    dispatch({ type: 'SET_GROUPS', payload: next });
     setNewGroup('');
     setGroupError('');
-    addToast(`Group "${g}" created.`, 'success');
+    setGroupSaving(true);
+    try {
+      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+      await anchorCid(cid);
+      addToast(`Group "${g}" created.`, 'success');
+    } catch { addToast('Saved locally — sync failed.', 'warning'); }
+    finally { setGroupSaving(false); }
   }
 
-  function handleRemoveGroup(g: string) {
-    dispatch({ type: 'SET_GROUPS', payload: groups.filter(x => x !== g) });
-    addToast(`Group "${g}" removed.`, 'success');
+  async function handleRemoveGroup(g: string) {
+    const next = groups.filter(x => x !== g);
+    dispatch({ type: 'SET_GROUPS', payload: next });
+    setGroupSaving(true);
+    try {
+      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+      await anchorCid(cid);
+      addToast(`Group "${g}" removed.`, 'success');
+    } catch { addToast('Saved locally — sync failed.', 'warning'); }
+    finally { setGroupSaving(false); }
   }
 
   // ── Add agent (premium only) ────────────────────────────────────────────────
@@ -177,10 +226,7 @@ export default function SettingsPage() {
       }
       // 2. Save name+symbol to registry (all plans — used for display)
       dispatch({ type: 'SET_TOKEN_REGISTRY', payload: updated });
-      await syncData({
-        walletAddress: address ?? '',
-        signMessage: wallet ? (msg) => wallet.signMessage({ message: msg }) : undefined,
-      });
+      await syncAndAnchor();
       setTokenForm({ address: '', name: '', symbol: '', decimals: '6' });
       addToast(`${symbol.toUpperCase()} added to token registry.`, 'success');
     } catch (err) {
@@ -197,10 +243,7 @@ export default function SettingsPage() {
     if (error) { addToast(error, 'error'); return; }
 
     dispatch({ type: 'SET_TOKEN_REGISTRY', payload: updated });
-    await syncData({
-      walletAddress: address ?? '',
-      signMessage: wallet ? (msg) => wallet.signMessage({ message: msg }) : undefined,
-    }).catch(() => {});
+    await syncAndAnchor().catch(() => {});
     setRemoveConfirm(null);
     addToast('Token removed from registry.', 'success');
   }
@@ -301,27 +344,34 @@ export default function SettingsPage() {
 
         {/* ── Contract Info ───────────────────────────────────────────────── */}
         <Section title="Contract Information">
-          {[
-            { label: 'Enterprise Payroll (Free)', addr: CONTRACTS.ENTERPRISE_PAYROLL },
-            { label: 'Multi-Token Factory',       addr: CONTRACTS.MULTI_TOKEN_FACTORY },
-            { label: 'Registry Factory',          addr: CONTRACTS.REGISTRY_FACTORY },
-            ...(payrollClone  ? [{ label: 'Your Payroll Clone (Premium)', addr: payrollClone }]  : []),
-            ...(registryClone ? [{ label: 'Your Registry Clone',          addr: registryClone }] : []),
-          ].map(({ label, addr }) => (
-            <FieldRow key={label} label={label}>
-              <a href={addressLink(addr)} target="_blank" rel="noreferrer"
-                style={{
-                  padding: '8px 14px', background: '#F8F9FA',
-                  border: '1px solid #E2E8F0', borderRadius: 10,
-                  fontSize: 12, fontFamily: "'JetBrains Mono', monospace",
-                  color: '#4F46E5', textDecoration: 'none',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}>
-                {truncAddr(addr, 14, 8)}
-                <ExternalLink size={12} />
-              </a>
-            </FieldRow>
-          ))}
+          {(() => {
+            const rows = [
+              ...(payrollClone  ? [{ label: 'Your Payroll Contract',  addr: payrollClone }]  : []),
+              ...(registryClone ? [{ label: 'Your Registry Contract', addr: registryClone }] : []),
+            ];
+            if (rows.length === 0) {
+              return (
+                <p style={{ fontSize: 13, color: '#94A3B8', padding: '8px 0' }}>
+                  You do not have any available smart contract.
+                </p>
+              );
+            }
+            return rows.map(({ label, addr }) => (
+              <FieldRow key={label} label={label}>
+                <a href={addressLink(addr)} target="_blank" rel="noreferrer"
+                  style={{
+                    padding: '8px 14px', background: '#F8F9FA',
+                    border: '1px solid #E2E8F0', borderRadius: 10,
+                    fontSize: 12, fontFamily: "'JetBrains Mono', monospace",
+                    color: '#4F46E5', textDecoration: 'none',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                  }}>
+                  {truncAddr(addr, 14, 8)}
+                  <ExternalLink size={12} />
+                </a>
+              </FieldRow>
+            ));
+          })()}
         </Section>
 
         {/* ── Group Management ────────────────────────────────────────────── */}
@@ -330,18 +380,19 @@ export default function SettingsPage() {
             <input
               value={newGroup}
               onChange={e => { setNewGroup(e.target.value); setGroupError(''); }}
-              placeholder="e.g. Engineering, Remote, Legal…"
+              placeholder="e.g. Remote Workers, Contractors…"
               maxLength={50}
               style={{ ...inputStyle, flex: 1 }}
               onFocus={e => (e.target.style.borderColor = '#4F46E5')}
               onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
               onKeyDown={e => e.key === 'Enter' && handleAddGroup()}
             />
-            <Button variant="brand" icon={<Plus size={14} />} onClick={handleAddGroup} size="sm">
+            <Button variant="brand" icon={groupSaving ? <Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Plus size={14} />} onClick={handleAddGroup} size="sm" disabled={groupSaving}>
               Add Group
             </Button>
           </div>
           {groupError && <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 12 }}>{groupError}</p>}
+
 
           {groups.length === 0 ? (
             <p style={{ fontSize: 13, color: '#94A3B8', textAlign: 'center', padding: '16px 0' }}>

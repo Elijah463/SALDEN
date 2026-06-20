@@ -4,7 +4,7 @@
  *
  * The smart contract only knows addresses. This registry maps
  * address → { name, symbol, decimals } so the UI can show
- * "USD Coin (USDC)" instead of "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238".
+ * "USD Coin (USDC)" instead of "0x3600000000000000000000000000000000000000".
  *
  * Storage: part of the IPFS-synced AppContext state.
  * The AI agent receives this registry as context so it can

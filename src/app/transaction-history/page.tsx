@@ -20,6 +20,7 @@ import { Button } from '@/components/shared/Button';
 import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { truncAddr } from '@/lib/validation';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
+import { txLink } from '@/lib/contracts/config';
 import { format } from 'date-fns';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -268,7 +269,7 @@ export default function TransactionHistoryPage() {
                         </td>
                         <td style={{ padding: '13px 18px' }}>
                           <a
-                            href={`https://testnet.arcscan.app/tx/${tx.hash}`}
+                            href={txLink(tx.hash)}
                             target="_blank" rel="noreferrer"
                             style={{
                               display: 'flex', alignItems: 'center', gap: 5,

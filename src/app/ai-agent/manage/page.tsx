@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { getAgentLogs, type AgentLog } from '@/lib/db/indexeddb';
+import { txLink } from '@/lib/contracts/config';
 import { format } from 'date-fns';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ export default function ManageAgentPage() {
                       </td>
                       <td style={{ padding: '12px 18px' }}>
                         {log.txHash ? (
-                          <a href={`https://testnet.arcscan.app/tx/${log.txHash}`} target="_blank" rel="noreferrer"
+                          <a href={txLink(log.txHash)} target="_blank" rel="noreferrer"
                             style={{ fontFamily: 'monospace', fontSize: 12, color: '#4F46E5', display: 'flex', alignItems: 'center', gap: 4 }}>
                             {log.txHash.slice(0, 10)}…
                             <ExternalLink size={11} />
@@ -279,7 +280,7 @@ export default function ManageAgentPage() {
                       </td>
                       <td style={{ padding: '10px 16px' }}>
                         {log.txHash ? (
-                          <a href={`https://testnet.arcscan.app/tx/${log.txHash}`} target="_blank" rel="noreferrer"
+                          <a href={txLink(log.txHash)} target="_blank" rel="noreferrer"
                             style={{ fontFamily: 'monospace', fontSize: 11, color: '#4F46E5', display: 'flex', alignItems: 'center', gap: 3 }}>
                             {log.txHash.slice(0, 8)}…
                             <ExternalLink size={10} />

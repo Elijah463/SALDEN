@@ -105,7 +105,7 @@ export default function PricingPage() {
         </div>
 
         {/* Plan cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, maxWidth: 820, margin: '0 auto', width: '100%' }}>
+        <div className="pricing-plan-grid" style={{ display: 'grid', gap: 20, maxWidth: 820, margin: '0 auto', width: '100%' }}>
 
           {/* Free */}
           <div style={{ background: '#fff', border: isPremiumUser ? '1px solid #E2E8F0' : '2px solid #4F46E5', borderRadius: 20, padding: '32px 28px' }}>
@@ -255,7 +255,13 @@ export default function PricingPage() {
         </div>
 
       </div>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .pricing-plan-grid { grid-template-columns: 1fr 1fr; }
+        @media (max-width: 640px) {
+          .pricing-plan-grid { grid-template-columns: 1fr; }
+        }
+      `}</style>
     </AppLayout>
   );
 }
