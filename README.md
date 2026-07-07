@@ -1,6 +1,6 @@
 # SALDEN A Smart Onchain Payroll
 
-> Premium payroll infrastructure built on Arc Network. Batch payments, AI automation, encrypted employee records, and built-in compliance — in one platform.
+> Smart Premium payroll infrastructure built on Arc Network. Batch payments, AI automation, encrypted employee records,Schedule Payments, Recurring Payments and built-in compliance all in one platform.
 
 [![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?logo=vercel)](https://app.salden.xyz)
 [![Network](https://img.shields.io/badge/Network-ARC%20Testnet-4F46E5)](https://testnet.arcscan.app)
