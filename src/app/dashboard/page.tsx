@@ -18,13 +18,19 @@ import {
   Upload, FileText, Filter,
 } from 'lucide-react';
 import {
-  useAccount, useWalletClient, usePublicClient, useBalance,
+  useWalletClient, usePublicClient, useBalance,
 } from 'wagmi';
+import { encodeFunctionData } from 'viem';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { useApp }         from '@/context/AppContext';
 import { Modal }          from '@/components/shared/Modal';
+import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { usePayrollSync } from '@/lib/usePayrollSync';
+import { useCloneAccess } from '@/lib/useCloneAccess';
+import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
-import { PaymentModal }   from '@/components/dashboard/PaymentModal';
+import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
+import { ExecutionModal, type ExecutionState }   from '@/components/dashboard/ExecutionModal';
 import { LoginModal }     from '@/components/auth/LoginModal';
 import {
   AddEmployeesIllustration,
@@ -69,7 +75,7 @@ const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
 
 function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const { dispatch } = useApp();
-  const { address }            = useAccount();
+  const { address }            = useEffectiveAddress();
   const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
 
@@ -197,7 +203,7 @@ function EmployeeModal({
   setupMode = false, minRequired = 2,
 }: EmployeeModalProps) {
   const { dispatch, state, syncData } = useApp();
-  const { address }            = useAccount();
+  const { address }            = useEffectiveAddress();
   const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
 
@@ -504,8 +510,9 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const { state, dispatch, addToast, syncData, loadData, saveTxRecord } = useApp();
-  const { address, isConnected }  = useAccount();
+  const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
+  // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
+  const { address, isConnected: isLoggedIn, mounted: authMounted } = useEffectiveAddress();
   const { data: walletClient }    = useWalletClient();
   const publicClient              = usePublicClient();
 
@@ -518,25 +525,29 @@ export default function DashboardPage() {
   const [loginOpen,        setLoginOpen]        = useState(false);
   const [showBalance,      setShowBalance]      = useState(false);
   const [copied,           setCopied]           = useState(false);
-  const [hasCircleSession, setHasCircleSession] = useState(false);
-
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem('salden_session');
-      if (s) { const p = JSON.parse(s) as { walletAddress?: string }; if (p?.walletAddress) setHasCircleSession(true); }
-    } catch { /* ignore */ }
-  }, []);
-
-  const isLoggedIn = isConnected || hasCircleSession;
 
   // ── Onboarding: does the user already have a registry clone? ──────────────
   const [registryStatus, setRegistryStatus] = useState<'checking' | 'none' | 'exists'>('checking');
   const [profileModalOpen, setProfileModalOpen] = useState(false);
-  // ── Restoring previously-synced employee data from IPFS (via on-chain CID)
-  const [dataLoadStatus, setDataLoadStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const dataLoadAttempted = useRef<string | null>(null); // guards against re-prompting for the same registry clone
+  // ── Restoring previously-synced employee data from IPFS (via on-chain CID).
+  // Centralised in usePayrollSync so /ai-agent gets the same instant-cache +
+  // staleness-detection behaviour instead of this page being the only place
+  // that ever restored data. (/transaction-history doesn't use employee/
+  // registry data at all — it reads local tx records directly — so it
+  // doesn't need this hook.)
+  const payrollSync = usePayrollSync({
+    registryClone: registryStatus === 'exists' ? registryClone : null,
+    address,
+    publicClient,
+    walletClient,
+  });
+  const dataLoadStatus = payrollSync.status;
 
   useEffect(() => {
+    // Wait until localStorage has been read before making auth decisions.
+    // Without this guard, the hook returns isLoggedIn=false for one frame
+    // during hydration, causing the registry check to reset unnecessarily.
+    if (!authMounted) return;
     if (!isLoggedIn || !address || !publicClient) { setRegistryStatus('checking'); return; }
     let cancelled = false;
     (async () => {
@@ -560,7 +571,12 @@ export default function DashboardPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [isLoggedIn, address, publicClient, dispatch]);
+  }, [authMounted, isLoggedIn, address, publicClient, dispatch]);
+
+  // Self-healing fallback for payrollClone — single shared implementation,
+  // see lib/useCloneAccess.ts for the full writeup (previously duplicated
+  // inline here and in ai-agent/page.tsx; consolidated into one hook).
+  useCloneAccess();
 
   // ── USDC balance ───────────────────────────────────────────────────────────
   // Arc Testnet uses USDC as its native gas token: native balance reads (this
@@ -596,6 +612,14 @@ export default function DashboardPage() {
   // by AppContext's syncData/loadData — no need to duplicate it here.)
   const lastAnchoredCidRef = useRef<string | null>(null);
 
+  // usePayrollSync may hydrate/load a CID before the user ever calls
+  // anchorCid this session (from local cache or an on-chain restore) — seed
+  // the dedup ref from it so the first real anchorCid() call can still skip
+  // a redundant transaction when nothing has actually changed.
+  useEffect(() => {
+    if (payrollSync.currentCid) lastAnchoredCidRef.current = payrollSync.currentCid;
+  }, [payrollSync.currentCid]);
+
   // ── Modal state ────────────────────────────────────────────────────────────
   const [employeeModal,    setEmployeeModal]    = useState<{ mode: 'add' | 'edit'; employee?: Employee; rowIndex?: number; setupMode?: boolean } | null>(null);
   const [deleteModal,      setDeleteModal]      = useState<number | null>(null);
@@ -606,10 +630,32 @@ export default function DashboardPage() {
 
   useEffect(() => () => { if (longPress.current) clearTimeout(longPress.current); }, []);
 
+  // Deep-link support: the AI agent's "Go to Dashboard" link (PayrollRunCard)
+  // sends the user to /dashboard?group=<name> promising the group will be
+  // pre-selected. Previously nothing on this page read that query param, so
+  // the link silently did nothing beyond a plain navigation. Runs once on
+  // mount, after `groups` is populated, and only applies if the group named
+  // in the URL still exists (a stale/bookmarked link with a deleted group
+  // should not crash — it should just fall back to "All Employees").
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get('group');
+    if (!requested) return;
+    const decoded = decodeURIComponent(requested);
+    if (groups.includes(decoded) && decoded !== activeGroup) {
+      dispatch({ type: 'SET_ACTIVE_GROUP', payload: decoded });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups]);
+
   // ── Execution ──────────────────────────────────────────────────────────────
   const [isExecuting,     setIsExecuting]     = useState(false);
   const [executeStatus,   setExecuteStatus]   = useState('');
   const [executeProgress, setExecuteProgress] = useState<{ current: number; total: number } | null>(null);
+  const [executionState,  setExecutionState]  = useState<ExecutionState>('idle');
+  const [executeError,    setExecuteError]    = useState('');
+  const [execTxHash,      setExecTxHash]      = useState('');
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const filteredEmployees = useMemo(() =>
@@ -654,7 +700,31 @@ export default function DashboardPage() {
   }, [contextMenu]);
 
   // ── CRUD ───────────────────────────────────────────────────────────────────
-  const sign = useCallback((msg: string) => walletClient ? walletClient.signMessage({ message: msg }) : Promise.reject(new Error('No wallet')), [walletClient]);
+  //
+  // The sign function derives the encryption key that secures employee data.
+  // It must call walletClient.signMessage() exactly ONCE per browser session
+  // per (address + message) pair.
+  //
+  // We cache the result in sessionStorage so page refreshes don't re-prompt
+  // the wallet. sessionStorage clears automatically when the tab closes,
+  // so the key is never persisted to disk between sessions.
+  const sign = useCallback(async (msg: string): Promise<string> => {
+    if (!walletClient || !address) throw new Error('No wallet');
+
+    const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
+
+    try {
+      const cached = sessionStorage.getItem(storageKey);
+      if (cached) return cached;
+    } catch { /* sessionStorage blocked (private browsing edge cases) */ }
+
+    // Not cached — prompt the wallet once
+    const sig = await walletClient.signMessage({ message: msg });
+
+    try { sessionStorage.setItem(storageKey, sig); } catch { /* ignore write errors */ }
+
+    return sig;
+  }, [walletClient, address]);
 
   /**
    * Anchors a freshly-synced IPFS CID Onchain (SaldenRegistry.updateCID).
@@ -682,46 +752,10 @@ export default function DashboardPage() {
   }, [registryClone, walletClient, publicClient, addToast]);
 
   // ── Restore previously-synced data ──────────────────────────────────────────
-  // The registry clone's on-chain CID points at the latest encrypted snapshot
-  // of this employer's employees/groups/setup on IPFS. Without this, every
-  // page reload or new session would show an empty roster even though the
-  // real data is safely anchored Onchain — the gate below would force the
-  // user back through "Set Up Employee Data" and risk overwriting it.
-  useEffect(() => {
-    if (registryStatus !== 'exists' || !registryClone || !address || !publicClient || !walletClient) return;
-    if (employees.length > 0) { setDataLoadStatus('done'); return; } // already populated this session
-    if (dataLoadAttempted.current === registryClone) return;          // already tried for this clone
-    dataLoadAttempted.current = registryClone;
-
-    let cancelled = false;
-    (async () => {
-      setDataLoadStatus('loading');
-      try {
-        const cid = await publicClient.readContract({
-          address:      registryClone as `0x${string}`,
-          abi:          REGISTRY_ABI,
-          functionName: 'getCID',
-          args:         [],
-        }) as string;
-        if (cancelled) return;
-        if (!cid) { setDataLoadStatus('done'); return; }
-
-        const { loaded } = await loadData({ walletAddress: address, cid, signMessage: sign });
-        if (!cancelled) {
-          lastAnchoredCidRef.current = cid;
-          setDataLoadStatus('done');
-          if (loaded) addToast('Restored your employee data.', 'success');
-        }
-      } catch (err) {
-        console.error('[Dashboard] Failed to restore data from IPFS:', err);
-        if (!cancelled) {
-          setDataLoadStatus('error');
-          addToast('Could not restore your saved data. You can continue and re-add employees if needed.', 'warning');
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [registryStatus, registryClone, address, publicClient, walletClient, employees.length, loadData, sign, addToast]);
+  // Handled by usePayrollSync (called above) — see that hook for the full
+  // sequence (instant local-cache paint, cheap on-chain hash check, silent
+  // load vs. syncAvailable prompt). Previously this logic lived only here,
+  // duplicated per-page and with no local cache or staleness detection.
 
   const handleAddEmployee = useCallback(async (data: Employee) => {
     const next = [...employees, data];
@@ -769,7 +803,11 @@ export default function DashboardPage() {
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   // ── Execute payroll (audit fix: uses static imports only — no dynamic re-imports) ──
-  const handleExecutePayroll = useCallback(async (overrideToken: TokenEntry | null, overrideGroup?: string) => {
+  const handleExecutePayroll = useCallback(async (
+    overrideToken: TokenEntry | null,
+    overrideGroup?: string,
+    remark = 'Salary Payment',
+  ) => {
     if (!address) { addToast('Connect your wallet to process payroll.', 'error'); return; }
 
     const resolvedGroup    = overrideGroup ?? activeGroup;
@@ -790,7 +828,11 @@ export default function DashboardPage() {
 
     if (!walletClient || !publicClient) { addToast('Wallet not connected.', 'error'); return; }
 
-    setIsExecuting(true); setExecuteStatus('Preparing payroll execution…');
+    setIsExecuting(true);
+    setExecutionState('pending');
+    setExecuteError('');
+    setExecTxHash('');
+    setExecuteStatus('Preparing payroll execution…');
     try {
       setExecuteStatus(`Checking ${tokenSymbol} allowance…`);
       setExecuteProgress({ current: 0, total: targetEmployees.length });
@@ -812,52 +854,168 @@ export default function DashboardPage() {
 
       setExecuteStatus('Executing batch payment…');
       let txHash: `0x${string}`;
+
+      // Build structured Arc Memo JSON (ImportantUpdate #8).
+      // Arc Memo contract preserves msg.sender so the payroll clone sees the
+      // original wallet address, not the Memo contract. No contract changes needed.
+      const ref     = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+      const memoJson = JSON.stringify({
+        protocol: 'salden', type: 'batchPay', ref,
+        date: new Date().toISOString(),
+        remark, token: tokenSymbol,
+        totalAmount: (Number(totalAmount) / tokenScale).toFixed(2),
+        recipients: targetEmployees.length,
+        group: resolvedGroup, employer: address,
+      });
+      const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
+        .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
+
+      // Encode batchPay calldata for the Memo contract to forward
+      setExecuteStatus('Executing batch payment…');
       if (payrollClone) {
-        txHash = await walletClient.writeContract({
-          address: contractAddr, abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
+        const batchData = encodeFunctionData({
+          abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
           args: [addrs, amounts, tokenAddr],
         });
-      } else {
+        // Arc Memo contract: callWithMemo(target, data, memo, value)
+        // msg.sender is preserved — payroll clone sees the user's wallet address
         txHash = await walletClient.writeContract({
-          address: contractAddr, abi: ENTERPRISE_PAYROLL_ABI, functionName: 'batchPay',
+          address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+          functionName: 'callWithMemo',
+          args: [contractAddr, batchData as `0x${string}`, memoHex, 0n],
+        });
+      } else {
+        const batchData = encodeFunctionData({
+          abi: ENTERPRISE_PAYROLL_ABI, functionName: 'batchPay',
           args: [addrs, amounts],
+        });
+        txHash = await walletClient.writeContract({
+          address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+          functionName: 'callWithMemo',
+          args: [contractAddr, batchData as `0x${string}`, memoHex, 0n],
         });
       }
 
-      setExecuteStatus('Confirming Onchain…');
+      setExecuteStatus('Confirming on-chain…');
       await publicClient.waitForTransactionReceipt({ hash: txHash });
       setExecuteProgress({ current: targetEmployees.length, total: targetEmployees.length });
+      setExecTxHash(txHash);
+      setExecutionState('success');
 
       const totalHuman = (Number(totalAmount) / tokenScale).toLocaleString('en-US', { minimumFractionDigits: 2 });
       await saveTxRecord({
-        id: txHash, hash: txHash, type: 'batchPay',
+        id: txHash, hash: txHash, ref,
+        type: 'batchPay', status: 'success',
         amount: totalHuman, token: tokenSymbol,
+        remark,
         recipientCount: targetEmployees.length,
-        timestamp: Date.now(), invoiceEmailStatus: null,
+        timestamp: Date.now(),
+        invoiceEmailStatus: 'pending',  // set to pending before firing
+        executedBy: 'manual',
       }, address);
+
+      // Auto-send invoice email after batchPay (ImportantUpdate - automatic for batchPay only).
+      // Fire-and-forget: payroll already succeeded, email failure is non-critical.
+      // Uses the company email stored in payrollSetup.
+      const invoiceEmail = payrollSetup?.email ?? null;
+      if (invoiceEmail) {
+        fetch('/api/invoice/send', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            txHash,
+            walletAddress:  address,
+            recipientEmail: invoiceEmail,
+            recipientCount: targetEmployees.length,
+            amount:         totalHuman,
+            token:          tokenSymbol,
+            remark,
+            ref,
+            timestamp:      Date.now(),
+            executedBy:     'manual',
+          }),
+        }).then(async res => {
+          const newStatus = res.ok ? 'sent' : 'failed';
+          // Update the IndexedDB record with the actual send status
+          await saveTxRecord({
+            id: txHash, hash: txHash, ref,
+            type: 'batchPay', status: 'success',
+            amount: totalHuman, token: tokenSymbol,
+            remark,
+            recipientCount: targetEmployees.length,
+            timestamp: Date.now(),
+            invoiceEmailStatus: newStatus,
+            executedBy: 'manual',
+          }, address);
+        }).catch(() => {
+          // Invoice send failed — update status silently
+          saveTxRecord({
+            id: txHash, hash: txHash, ref,
+            type: 'batchPay', status: 'success',
+            amount: totalHuman, token: tokenSymbol,
+            remark,
+            recipientCount: targetEmployees.length,
+            timestamp: Date.now(),
+            invoiceEmailStatus: 'failed',
+            executedBy: 'manual',
+          }, address).catch(() => { /* ignore double failure */ });
+        });
+      }
 
       addToast(`Payroll complete — ${targetEmployees.length} employee${targetEmployees.length !== 1 ? 's' : ''} paid in ${tokenSymbol}.`, 'success', 6000);
     } catch (err) {
-      addToast(`Payroll failed: ${(err as Error).message}`, 'error');
+      const msg = (err as Error).message ?? '';
+      const friendly = /reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : 'Payroll failed. Please try again.';
+      setExecutionState('failed');
+      setExecuteError(friendly);
     } finally {
       setIsExecuting(false); setExecuteStatus(''); setExecuteProgress(null);
     }
-  }, [payrollClone, employees, activeGroup, walletClient, publicClient, address, addToast, saveTxRecord]);
+  }, [payrollClone, employees, activeGroup, walletClient, publicClient, address, addToast, saveTxRecord, payrollSetup]);
 
   const handleProcessPaymentClick = useCallback(() => {
     if (isPremiumUser && payrollClone) setPaymentModalOpen(true);
     else handleExecutePayroll(null);
   }, [isPremiumUser, payrollClone, handleExecutePayroll]);
 
-  const handleModalConfirm = useCallback(({ token, group }: { token: TokenEntry; group: string }) => {
+  const handleModalConfirm = useCallback(({ token, group, remark }: PaymentModalParams) => {
     if (group !== activeGroup) dispatch({ type: 'SET_ACTIVE_GROUP', payload: group });
-    handleExecutePayroll(token, group);
+    handleExecutePayroll(token, group, remark);
   }, [activeGroup, dispatch, handleExecutePayroll]);
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <AppLayout title="Dashboard" companyName={payrollSetup?.companyName}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+        {/* ── Newer data available banner ────────────────────────────── */}
+        {/* A different device, a teammate, or a scheduled AI-agent run
+            anchored a newer CID than what's currently loaded. We never
+            overwrite silently — this is the explicit opt-in the person
+            asked for. */}
+        {payrollSync.syncAvailable && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 12,
+            padding: '12px 18px', fontSize: 13,
+          }}>
+            <span style={{ color: '#3730A3', fontWeight: 600 }}>
+              Newer payroll data is available — this device hasn&apos;t synced it yet.
+            </span>
+            <button
+              onClick={() => { void payrollSync.syncNow(); }}
+              disabled={payrollSync.status === 'loading'}
+              style={{
+                padding: '7px 16px', borderRadius: 8, background: '#4F46E5', color: '#fff',
+                fontSize: 13, fontWeight: 700, border: 'none',
+                cursor: payrollSync.status === 'loading' ? 'default' : 'pointer',
+                opacity: payrollSync.status === 'loading' ? 0.6 : 1, fontFamily: 'inherit',
+              }}
+            >
+              {payrollSync.status === 'loading' ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+        )}
 
         {/* ── Hero balance card ──────────────────────────────────────── */}
         <div style={{ background: '#4F46E5', borderRadius: 20, padding: '24px 28px', position: 'relative', overflow: 'hidden' }}>
@@ -1140,6 +1298,14 @@ export default function DashboardPage() {
       {isPremiumUser && payrollClone && (
         <PaymentModal open={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} activeGroup={activeGroup} groups={groups} payrollClone={payrollClone} onConfirm={handleModalConfirm} />
       )}
+      <ExecutionModal
+        state={executionState}
+        statusText={executeStatus}
+        progress={executeProgress}
+        txHash={execTxHash}
+        error={executeError}
+        onClose={() => { setExecutionState('idle'); setExecuteError(''); setExecTxHash(''); }}
+      />
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} />
       {profileModalOpen && (
         <ProfileSetupModal

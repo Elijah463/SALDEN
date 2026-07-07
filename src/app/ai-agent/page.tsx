@@ -2,369 +2,796 @@
 /**
  * @file app/ai-agent/page.tsx
  *
- * This page is intentionally NOT a chat interface. It only handles:
- *  1. Activating the AI Agent (provisions a Circle-managed wallet for it).
- *  2. Authorizing the agent's wallet on the user's own contracts:
- *       SaldenMultiTokenPayroll (payrollClone)  — onlyOwner addAgent()
- *       SaldenRegistry (registryClone)          — onlyOwner addAgent()
+ * Three states for a premium user with a deployed clone:
  *
- * Chat, the action log, and schedules all live on /ai-agent/manage.
+ *   1. NOT YET SETUP (status === 'none')
+ *      Activation fires automatically on mount — no button. While the Circle
+ *      developer-controlled wallet is provisioning, a spinner is shown. Once
+ *      the agent wallet address is available, the setup wizard appears.
+ *
+ *   2. SETUP IN PROGRESS
+ *      Two on-chain steps, each requiring a wallet signature:
+ *        Step 1 — SaldenMultiTokenPayroll.addAgent(agentWallet)
+ *                 Called by the Employer (owner). Grants the AI Agent
+ *                 permission to call batchPay(), withdraw(), addSupportedToken().
+ *        Step 2 — SaldenRegistry.addAgent(agentWallet)
+ *                 Called by the HR Admin (hrAdmin). Grants the AI Agent
+ *                 permission to call updateCID() so it can update the
+ *                 employee database pointer on-chain after a payroll run.
+ *
+ *      Neither contract uses OpenZeppelin AccessControl or grantRole.
+ *      Both use a custom addAgent/removeAgent + isAgent mapping pattern.
+ *      See src/lib/contracts/agentAbis.ts for the verified ABI fragments.
+ *
+ *   3. ACTIVE (both addAgent calls confirmed on-chain)
+ *      ChatInterface displayed directly. No activate button anywhere.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useAccount, useWalletClient, usePublicClient } from 'wagmi';
+import { Settings2, RefreshCw, CheckCircle2, ExternalLink, Copy } from 'lucide-react';
+import { useWalletClient, usePublicClient } from 'wagmi';
+import { AgentLayout }           from '@/components/agent/AgentLayout';
+import ChatInterface             from '@/components/agent/ChatInterface';
+import { useAgentStatus }        from '@/lib/useAgentStatus';
+import { useEffectiveAddress }   from '@/lib/useEffectiveAddress';
+import { useApp }                from '@/context/AppContext';
+import { usePayrollSync }        from '@/lib/usePayrollSync';
+import { txLink, CONTRACTS }     from '@/lib/contracts/config';
 import {
-  Loader2, Power, PowerOff, Shield, CheckCircle2,
-  ArrowLeft, Settings2, Check, X as XIcon,
-} from 'lucide-react';
-import Image from 'next/image';
-import { Button } from '@/components/shared/Button';
-import { Sidebar } from '@/components/layout/Sidebar';
-import { useApp } from '@/context/AppContext';
+  PAYROLL_ADD_AGENT_ABI,
+  REGISTRY_ADD_AGENT_ABI,
+} from '@/lib/contracts/agentAbis';
+import { REGISTRY_FACTORY_ABI }  from '@/lib/contracts/abis';
+import { useCloneAccess }        from '@/lib/useCloneAccess';
+import type { ActivateResult }   from '@/lib/useAgentStatus';
 
-// ── addAgent ABI — identical shape on both MultiTokenPayroll and Registry ─────
-const ADD_AGENT_ABI = [
-  {
-    name:            'addAgent',
-    type:            'function' as const,
-    inputs:          [{ name: 'account', type: 'address' as const }],
-    outputs:         [] as const,
-    stateMutability: 'nonpayable' as const,
-  },
-] as const;
+// ── Shared UI helpers ─────────────────────────────────────────────────────────
 
-// ── isAgent read ABI ───────────────────────────────────────────────────────────
-const IS_AGENT_ABI = [
-  {
-    name:            'isAgent',
-    type:            'function' as const,
-    inputs:          [{ name: '', type: 'address' as const }],
-    outputs:         [{ name: '', type: 'bool' as const }],
-    stateMutability: 'view' as const,
-  },
-] as const;
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface AgentStatus {
-  active:          boolean;
-  walletAddress?:  string;
-  lastRun?:        number;
-  schedules:       number;
+function StatusDot({ active }: { active: boolean }) {
+  return (
+    <span style={{
+      display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+      background: active ? '#14B8A6' : '#94A3B8',
+      boxShadow: active ? '0 0 5px #14B8A6' : 'none', flexShrink: 0,
+    }} />
+  );
 }
 
-// ── Agent avatar (with live-status dot) ────────────────────────────────────────
-
-function AgentAvatar({ size = 28, active = false }: { size?: number; active?: boolean }) {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard.writeText(text)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
+  }
   return (
-    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+    <button onClick={copy} title="Copy address" style={{
+      background: 'none', border: 'none', cursor: 'pointer',
+      padding: 2, color: copied ? '#059669' : '#94A3B8', display: 'inline-flex',
+    }}>
+      <Copy size={13} />
+    </button>
+  );
+}
+
+function Spinner({ size = 32 }: { size?: number }) {
+  return (
+    <div style={{
+      width: size, height: size,
+      border: `${size > 20 ? 3 : 2}px solid #E2E8F0`,
+      borderTopColor: '#4F46E5',
+      borderRadius: '50%',
+      animation: 'spin 0.8s linear infinite',
+      margin: '0 auto',
+    }} />
+  );
+}
+
+type StepStatus = 'pending' | 'active' | 'done' | 'failed';
+
+function SetupStep({
+  index, title, description, status, children,
+}: {
+  index: number; title: string; description: string;
+  status: StepStatus; children?: React.ReactNode;
+}) {
+  const palette = {
+    pending: { bg: '#F8FAFC',  border: '#E2E8F0', numBg: '#F1F5F9', numColor: '#94A3B8' },
+    active:  { bg: '#EEF2FF',  border: '#C7D2FE', numBg: '#4F46E5', numColor: '#fff'    },
+    done:    { bg: '#F0FDF4',  border: '#6EE7B7', numBg: '#059669', numColor: '#fff'    },
+    failed:  { bg: '#FEF2F2',  border: '#FCA5A5', numBg: '#DC2626', numColor: '#fff'    },
+  }[status];
+
+  return (
+    <div style={{
+      border: `1.5px solid ${palette.border}`, borderRadius: 14,
+      padding: '18px 20px', background: palette.bg,
+      display: 'flex', gap: 16,
+    }}>
       <div style={{
-        width: size, height: size, borderRadius: '50%', overflow: 'hidden',
-        background: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 32, height: 32, borderRadius: '50%',
+        background: palette.numBg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: 0, fontWeight: 800, fontSize: 14, color: palette.numColor,
       }}>
-        <Image src="/images/ai-avatar.png" alt="Salden AI Agent" width={size} height={size} style={{ objectFit: 'cover' }} />
+        {status === 'done' ? <CheckCircle2 size={16} color="#fff" /> : index}
       </div>
-      <span style={{
-        position: 'absolute', bottom: -1, right: -1,
-        width: Math.max(8, size * 0.32), height: Math.max(8, size * 0.32),
-        borderRadius: '50%', border: '2px solid #fff',
-        background: active ? '#14B8A6' : '#94A3B8',
-        boxShadow: active ? '0 0 4px #14B8A6' : 'none',
-      }} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: '#0F172A', marginBottom: 3 }}>
+          {title}
+        </div>
+        <div style={{
+          fontSize: 12, color: '#64748B', lineHeight: 1.5,
+          marginBottom: children ? 12 : 0,
+        }}>
+          {description}
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AIAgentPage() {
-  const { state }              = useApp();
-  const { address }            = useAccount();
-  const { data: walletClient } = useWalletClient();
-  const publicClient           = usePublicClient();
-
+  const { state, dispatch } = useApp();
+  const { address } = useEffectiveAddress();
   const { isPremiumUser, payrollClone, registryClone } = state;
+  const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
 
-  // ── Layout overlays ────────────────────────────────────────────────────────
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // ── Agent ──────────────────────────────────────────────────────────────────
-  const [agentStatus,      setAgentStatus]      = useState<AgentStatus | null>(null);
-  const [activating,       setActivating]       = useState(false);
-  const [showChecklist,    setShowChecklist]    = useState(false);
-  const [payrollGranted,   setPayrollGranted]   = useState(false);
-  const [registryGranted,  setRegistryGranted]  = useState(false);
-  const [grantingPayroll,  setGrantingPayroll]  = useState(false);
-  const [grantingRegistry, setGrantingRegistry] = useState(false);
-  const [grantError,       setGrantError]       = useState('');
-  const [showPremiumError, setShowPremiumError] = useState(false);
-
-  // ── Fetch agent status ────────────────────────────────────────────────────
+  // Deep-link support for chat-history/page.tsx: /ai-agent?session=<id>
+  // resumes a saved conversation, /ai-agent?new=<timestamp> starts fresh.
+  // `chatInstanceKey` forces ChatInterface to fully remount on either
+  // transition rather than relying on internal effects to reconcile every
+  // possible prop change cleanly.
+  const [resumeSessionId, setResumeSessionId] = useState<string | undefined>(undefined);
+  const [chatInstanceKey, setChatInstanceKey] = useState<string>('default');
   useEffect(() => {
-    if (!address) return;
-    fetch('/api/agent/status')
-      .then(r => r.ok ? r.json() : null)
-      .then((d: AgentStatus | null) => d && setAgentStatus(d))
-      .catch(() => null);
-  }, [address]);
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const session = params.get('session');
+    const fresh   = params.get('new');
+    if (session) { setResumeSessionId(session); setChatInstanceKey(`session-${session}`); }
+    else if (fresh) { setResumeSessionId(undefined); setChatInstanceKey(`new-${fresh}`); }
+  }, []);
 
-  // ── Pre-check existing grants ─────────────────────────────────────────────
+  // registryClone was previously only ever populated by dashboard/page.tsx's
+  // factory lookup — landing (or refreshing) directly on /ai-agent left it
+  // null, which meant employee data could never be restored here either.
+  // Cheap read, no wallet signature required.
   useEffect(() => {
-    if (!agentStatus?.walletAddress || !publicClient) return;
-    const agentAddr = agentStatus.walletAddress as `0x${string}`;
+    if (registryClone || !address || !publicClient) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const existing = await publicClient.readContract({
+          address:      CONTRACTS.REGISTRY_FACTORY,
+          abi:          REGISTRY_FACTORY_ABI,
+          functionName: 'getRegistry',
+          args:         [address as `0x${string}`],
+        }) as `0x${string}`;
+        if (cancelled) return;
+        const ZERO = '0x0000000000000000000000000000000000000000';
+        if (existing && existing.toLowerCase() !== ZERO) {
+          dispatch({ type: 'SET_REGISTRY', payload: existing });
+        }
+      } catch {
+        /* Non-fatal here — the chat/employee-context features degrade
+           gracefully without a registryClone; the activation flow below
+           has its own error handling for premium/clone checks. */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [registryClone, address, publicClient, dispatch]);
 
-    async function checkGrants() {
-      if (payrollClone) {
-        try {
-          const g = await publicClient!.readContract({ address: payrollClone as `0x${string}`, abi: IS_AGENT_ABI, functionName: 'isAgent', args: [agentAddr] }) as boolean;
-          setPayrollGranted(g);
-        } catch { /* not granted or call failed */ }
-      }
-      if (registryClone) {
-        try {
-          const g = await publicClient!.readContract({ address: registryClone as `0x${string}`, abi: IS_AGENT_ABI, functionName: 'isAgent', args: [agentAddr] }) as boolean;
-          setRegistryGranted(g);
-        } catch { /* not granted or call failed */ }
-      }
+  // Self-healing fallback for payrollClone — single shared implementation,
+  // see lib/useCloneAccess.ts for the full writeup (previously duplicated
+  // inline here and in dashboard/page.tsx; consolidated into one hook).
+  useCloneAccess();
+
+  const payrollSync = usePayrollSync({ registryClone, address, publicClient, walletClient });
+
+  const { status, agentInfo, activating, activate, refresh } = useAgentStatus();
+
+  const [activateResult, setActivateResult] = useState<ActivateResult | null>(null);
+  const [autoTriggered,  setAutoTriggered]  = useState(false);
+  const [activateError,  setActivateError]  = useState<string | null>(null);
+
+  // Step grant state
+  const [step1Status, setStep1Status] = useState<StepStatus>('pending');
+  const [step2Status, setStep2Status] = useState<StepStatus>('pending');
+  const [step1Hash,   setStep1Hash]   = useState('');
+  const [step2Hash,   setStep2Hash]   = useState('');
+  const [step1Error,  setStep1Error]  = useState('');
+  const [step2Error,  setStep2Error]  = useState('');
+
+  // Was previously `cloneAddress ?? payrollClone ?? ''`, where cloneAddress
+  // came from a useCloneAccess() that read a SaldenPayrollFactory contract
+  // that was never actually deployed (NEXT_PUBLIC_PAYROLL_FACTORY_ADDRESS
+  // was unset, so it always resolved against the zero address and
+  // silently fell through to payrollClone anyway). That version was
+  // deleted as dead code, then the on-chain fallback it was trying to do
+  // was rebuilt correctly — pointed at the real, actually-deployed
+  // SaldenMultiTokenPayrollFactory — as the useCloneAccess() call above,
+  // which writes straight into payrollClone via AppContext. So by the
+  // time this line runs, payrollClone is already the best answer
+  // available; no extra fallback needed here.
+  const effectiveClone    = payrollClone ?? '';
+  const effectiveRegistry = registryClone ?? '';
+
+  // ── Auto-trigger provisioning ─────────────────────────────────────────────
+  useEffect(() => {
+    if (
+      !autoTriggered     &&
+      isPremiumUser      &&
+      effectiveClone     &&
+      !activating        &&
+      status === 'none'
+    ) {
+      setAutoTriggered(true);
+      activate()
+        .then(res => {
+          if (res) {
+            // Create a new object — never mutate the value returned by the hook
+            const patched: ActivateResult = {
+              ...res,
+              grantRoleInstructions: {
+                ...res.grantRoleInstructions,
+                payrollClone:  res.grantRoleInstructions.payrollClone  || effectiveClone,
+                registryClone: res.grantRoleInstructions.registryClone || effectiveRegistry,
+              },
+            };
+            setActivateResult(patched);
+            refresh();
+          }
+        })
+        .catch(() => setActivateError('Agent setup failed. Please try again.'));
     }
-    checkGrants();
-  }, [agentStatus?.walletAddress, payrollClone, registryClone, publicClient]);
+  }, [
+    isPremiumUser, effectiveClone, effectiveRegistry,
+    status, activating, autoTriggered, activate, refresh,
+  ]);
 
-  // ── Toggle agent ───────────────────────────────────────────────────────────
-  async function handleToggleAgent() {
-    if (!isPremiumUser) { setShowPremiumError(true); return; }
+  // ── Step 1: SaldenMultiTokenPayroll.addAgent(agentWallet) ─────────────────
+  // Called by the Employer (owner). Grants batchPay / withdraw / addSupportedToken.
+  const grantPayrollAgent = useCallback(async () => {
+    if (!walletClient || !publicClient || !activateResult) return;
 
-    setActivating(true);
+    const agentAddr = activateResult.agentInfo.agentWallet as `0x${string}`;
+    const cloneAddr = (
+      activateResult.grantRoleInstructions.payrollClone || effectiveClone
+    ) as `0x${string}`;
+
+    if (!cloneAddr || !agentAddr) return;
+
+    setStep1Status('active'); setStep1Error('');
     try {
-      if (agentStatus?.active) {
-        await fetch('/api/agent/deactivate', { method: 'POST' });
-        setAgentStatus(prev => prev ? { ...prev, active: false } : null);
-        setShowChecklist(false);
-      } else {
-        const res  = await fetch('/api/agent/activate', { method: 'POST' });
-        const data = await res.json() as { walletAddress?: string; error?: string };
-        if (!res.ok) throw new Error(data.error ?? 'Activation failed');
-        setAgentStatus({ active: true, walletAddress: data.walletAddress, schedules: 0 });
-      }
-    } catch {
-      // Swallow — the button simply stays in its previous state.
-    } finally { setActivating(false); }
-  }
-
-  // ── Grant addAgent — payroll clone ─────────────────────────────────────────
-  async function handleGrantPayroll() {
-    if (!walletClient || !publicClient || !payrollClone || !agentStatus?.walletAddress) return;
-    setGrantingPayroll(true); setGrantError('');
-    try {
+      // Wallet popup will show:
+      // "Call addAgent on your Salden Payroll contract to allow the AI Agent
+      //  to execute payroll on your behalf"
       const hash = await walletClient.writeContract({
-        address:      payrollClone as `0x${string}`,
-        abi:          ADD_AGENT_ABI,
+        address: cloneAddr,
+        abi:     PAYROLL_ADD_AGENT_ABI,
         functionName: 'addAgent',
-        args:         [agentStatus.walletAddress as `0x${string}`],
+        args: [agentAddr],
       });
       await publicClient.waitForTransactionReceipt({ hash });
-      setPayrollGranted(true);
+      setStep1Hash(hash);
+      setStep1Status('done');
     } catch (err) {
-      setGrantError(`Payroll authorization failed: ${(err as Error).message}`);
-    } finally { setGrantingPayroll(false); }
-  }
+      const raw = err instanceof Error ? err.message : '';
+      setStep1Error(
+        /reject|cancel|denied/i.test(raw) ? 'Transaction cancelled.' :
+        /network|rpc/i.test(raw)          ? 'Network error. Try again.' :
+        'Transaction failed. Please try again.',
+      );
+      setStep1Status('failed');
+    }
+  }, [walletClient, publicClient, activateResult, effectiveClone]);
 
-  // ── Grant addAgent — registry clone ───────────────────────────────────────
-  async function handleGrantRegistry() {
-    if (!walletClient || !publicClient || !registryClone || !agentStatus?.walletAddress) return;
-    setGrantingRegistry(true); setGrantError('');
+  // ── Step 2: SaldenRegistry.addAgent(agentWallet) ─────────────────────────
+  // Called by hrAdmin. Grants updateCID so the agent can update the
+  // employee database pointer after writes.
+  const grantRegistryAgent = useCallback(async () => {
+    if (!walletClient || !publicClient || !activateResult) return;
+
+    const agentAddr = activateResult.agentInfo.agentWallet as `0x${string}`;
+    const regAddr   = (
+      activateResult.grantRoleInstructions.registryClone || effectiveRegistry
+    ) as `0x${string}`;
+
+    if (!regAddr || !agentAddr) return;
+
+    setStep2Status('active'); setStep2Error('');
     try {
+      // Wallet popup will show:
+      // "Call addAgent on your Salden Registry contract to allow the AI Agent
+      //  to update the employee database on-chain on your behalf"
       const hash = await walletClient.writeContract({
-        address:      registryClone as `0x${string}`,
-        abi:          ADD_AGENT_ABI,
+        address: regAddr,
+        abi:     REGISTRY_ADD_AGENT_ABI,
         functionName: 'addAgent',
-        args:         [agentStatus.walletAddress as `0x${string}`],
+        args: [agentAddr],
       });
       await publicClient.waitForTransactionReceipt({ hash });
-      setRegistryGranted(true);
+      setStep2Hash(hash);
+      setStep2Status('done');
     } catch (err) {
-      setGrantError(`Registry authorization failed: ${(err as Error).message}`);
-    } finally { setGrantingRegistry(false); }
-  }
+      const raw = err instanceof Error ? err.message : '';
+      setStep2Error(
+        /reject|cancel|denied/i.test(raw) ? 'Transaction cancelled.' :
+        /network|rpc/i.test(raw)          ? 'Network error. Try again.' :
+        'Transaction failed. Please try again.',
+      );
+      setStep2Status('failed');
+    }
+  }, [walletClient, publicClient, activateResult, effectiveRegistry]);
 
-  const isActivated = !!agentStatus?.walletAddress;
-  const fullyAuthorized = payrollGranted && (registryGranted || !registryClone);
+  const bothDone = step1Status === 'done' && step2Status === 'done';
 
-  // ─── Render ────────────────────────────────────────────────────────────────
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#F8F9FA', overflow: 'hidden' }}>
+  useEffect(() => {
+    if (bothDone) {
+      const t = setTimeout(refresh, 1500);
+      return () => clearTimeout(t);
+    }
+  }, [bothDone, refresh]);
 
-      {/* ── Top bar ─────────────────────────────────────────────────────── */}
-      <header style={{ height: 60, flexShrink: 0, background: '#fff', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', padding: '0 16px', position: 'relative', zIndex: 20 }}>
-        <button onClick={() => setSidebarOpen(true)} aria-label="Open navigation"
-          style={{ width: 38, height: 38, borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569', flexShrink: 0 }}>
-          <ArrowLeft size={18} />
-        </button>
-
-        <div style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <AgentAvatar size={26} active={!!agentStatus?.active} />
-          <span style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>AI Agent</span>
-        </div>
-
-        <div style={{ flex: 1 }} />
-
-        <Link href="/ai-agent/manage" aria-label="Manage AI Agent"
-          style={{ width: 38, height: 38, borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, color: '#475569' }}>
-          <Settings2 size={18} />
-        </Link>
-      </header>
-
-      {/* ── Main sidebar overlay ─────────────────────────────────────────── */}
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} userAddress={address} companyName={state.payrollSetup?.companyName} />
-
-      {/* ── Page content ────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '40px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, maxWidth: 640, width: '100%', margin: '0 auto' }}>
-
-        {/* Non-premium error */}
-        {showPremiumError && !isPremiumUser && (
-          <div style={{ width: '100%', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: '#DC2626', margin: '0 0 4px' }}>Could not activate agent</p>
-              <p style={{ fontSize: 13, color: '#64748B', margin: 0, lineHeight: 1.6 }}>
-                Please make sure you are on the premium plan.{' '}
-                <Link href="/pricing" style={{ color: '#4F46E5', fontWeight: 600 }}>Go to pricing for more info</Link>
-              </p>
-            </div>
-            <button onClick={() => setShowPremiumError(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2, flexShrink: 0 }}><XIcon size={16} /></button>
+  // ── No wallet ─────────────────────────────────────────────────────────────
+  if (!address) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{ textAlign: 'center', padding: '80px 20px' }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 16, background: '#EEF2FF',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 20px',
+          }}>
+            <svg width="24" height="24" fill="none" stroke="#4F46E5" strokeWidth="2" viewBox="0 0 24 24">
+              <rect x="2" y="7" width="20" height="14" rx="2"/>
+              <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            </svg>
           </div>
-        )}
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+            Connect your wallet
+          </h2>
+          <p style={{ fontSize: 14, color: '#64748B' }}>
+            Connect your wallet to access the AI Payroll Agent.
+          </p>
+        </div>
+      </AgentLayout>
+    );
+  }
 
-        {!isActivated ? (
-          /* ── State A (free) / State B (premium, not yet activated) ───── */
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: isPremiumUser ? 28 : 20, width: '100%', marginTop: isPremiumUser ? 40 : 0 }}>
-            <Button
-              variant={isPremiumUser ? 'brand' : 'primary'}
-              icon={activating ? <Loader2 size={isPremiumUser ? 18 : 14} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Power size={isPremiumUser ? 18 : 14} />}
-              onClick={handleToggleAgent}
-              loading={activating}
-              size={isPremiumUser ? 'lg' : 'sm'}
-              style={isPremiumUser ? { padding: '18px 44px', fontSize: 17 } : undefined}
-            >
-              Activate AI Agent
-            </Button>
+  // ── Not premium ───────────────────────────────────────────────────────────
+  if (!isPremiumUser) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{
+          background: 'linear-gradient(135deg, #1E3A5F 0%, #4F46E5 100%)',
+          borderRadius: 20, padding: '48px 32px', textAlign: 'center', color: '#fff',
+        }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 18,
+            background: 'rgba(255,255,255,0.12)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 20px',
+          }}>
+            <svg width="28" height="28" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+            </svg>
+          </div>
+          <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>
+            Unlock Your AI Payroll Agent
+          </h2>
+          <p style={{
+            fontSize: 14, color: 'rgba(255,255,255,0.8)', lineHeight: 1.7,
+            maxWidth: 420, margin: '0 auto 28px',
+          }}>
+            Upgrade to Premium for autonomous payroll scheduling, AI-driven compliance
+            checks, Gemini 2.5 Flash chat, and 24/7 on-chain execution.
+          </p>
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: 10,
+            maxWidth: 320, margin: '0 auto 28px', textAlign: 'left',
+          }}>
+            {[
+              'Autonomous batch payroll via batchPay()',
+              'Real on-chain balance & compliance checks',
+              'Structured function-calling AI (not just chat)',
+              'IPFS employee database with on-chain CID anchoring',
+              'Automatic invoice emails from contact@salden.xyz',
+            ].map((f, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                fontSize: 13, color: 'rgba(255,255,255,0.85)',
+              }}>
+                <CheckCircle2 size={15} color="#6EE7B7" style={{ flexShrink: 0, marginTop: 1 }} />
+                {f}
+              </div>
+            ))}
+          </div>
+          <Link href="/pricing" style={{
+            display: 'inline-block', padding: '13px 32px', borderRadius: 12,
+            background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700,
+            textDecoration: 'none',
+          }}>
+            View Pricing →
+          </Link>
+        </div>
+      </AgentLayout>
+    );
+  }
 
-            {isPremiumUser ? (
-              <Image
-                src="/images/ai-agent-active-illustration.png"
-                alt="AI Payroll Agent"
-                width={300}
-                height={300}
-                style={{ objectFit: 'contain', maxWidth: '100%' }}
-              />
-            ) : (
-              <div style={{ width: '100%', background: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)', borderRadius: 16, padding: '28px 28px', textAlign: 'center' }}>
-                <h3 style={{ color: '#fff', fontWeight: 800, fontSize: 17, marginBottom: 6 }}>Unlock Your AI Payroll Agent</h3>
-                <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14, lineHeight: 1.6, marginBottom: 18 }}>
-                  Upgrade to Premium for autonomous payroll scheduling, AI-driven compliance checks, and 24/7 Onchain execution — one-time payment.
-                </p>
-                <Link href="/pricing" style={{ display: 'inline-block', padding: '11px 22px', borderRadius: 10, background: '#14B8A6', color: '#fff', fontSize: 14, fontWeight: 700, textDecoration: 'none' }}>View Pricing</Link>
+  // ── Loading / clone check ──────────────────────────────────────────────────
+  if (status === 'loading') {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{ textAlign: 'center', padding: '80px 20px' }}>
+          <Spinner />
+          <p style={{ fontSize: 14, color: '#64748B', marginTop: 16 }}>
+            Loading agent status…
+          </p>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </AgentLayout>
+    );
+  }
+
+  // ── No clone deployed yet ─────────────────────────────────────────────────
+  if (!effectiveClone) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{
+          background: '#fff', border: '1px solid #E2E8F0',
+          borderRadius: 20, padding: 36, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>🏭</div>
+          <h3 style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+            No Payroll Contract Found
+          </h3>
+          <p style={{
+            fontSize: 14, color: '#64748B', lineHeight: 1.7,
+            maxWidth: 360, margin: '0 auto 20px',
+          }}>
+            The AI Agent requires a deployed SaldenMultiTokenPayroll clone.
+            Complete your payroll setup on the dashboard first.
+          </p>
+          <Link href="/dashboard" style={{
+            display: 'inline-block', padding: '11px 24px', borderRadius: 10,
+            background: '#4F46E5', color: '#fff', fontSize: 14, fontWeight: 700,
+            textDecoration: 'none',
+          }}>
+            Go to Dashboard →
+          </Link>
+        </div>
+      </AgentLayout>
+    );
+  }
+
+  // ── Auto-activating ────────────────────────────────────────────────────────
+  if (activating || (autoTriggered && !activateResult && !activateError && status === 'none')) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{
+          background: '#fff', border: '1px solid #E2E8F0',
+          borderRadius: 20, padding: 40, textAlign: 'center',
+        }}>
+          <Spinner size={40} />
+          <h3 style={{
+            fontSize: 17, fontWeight: 800, color: '#0F172A',
+            marginTop: 20, marginBottom: 8,
+          }}>
+            Setting up your AI Agent…
+          </h3>
+          <p style={{
+            fontSize: 13, color: '#64748B', lineHeight: 1.6,
+            maxWidth: 340, margin: '0 auto',
+          }}>
+            Provisioning a secure agent wallet via Circle. This takes a few seconds.
+          </p>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </AgentLayout>
+    );
+  }
+
+  // ── Activation error ───────────────────────────────────────────────────────
+  if (activateError) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{
+          background: '#FEF2F2', border: '1.5px solid #FCA5A5',
+          borderRadius: 20, padding: 32, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>⚠️</div>
+          <h3 style={{ fontSize: 17, fontWeight: 800, color: '#DC2626', marginBottom: 8 }}>
+            Agent Setup Failed
+          </h3>
+          <p style={{
+            fontSize: 13, color: '#991B1B', lineHeight: 1.6,
+            maxWidth: 400, margin: '0 auto 20px',
+          }}>
+            {activateError}
+          </p>
+          <button
+            onClick={() => { setAutoTriggered(false); setActivateError(null); }}
+            style={{
+              padding: '10px 24px', borderRadius: 10,
+              background: '#DC2626', color: '#fff',
+              border: 'none', cursor: 'pointer',
+              fontSize: 14, fontWeight: 700, fontFamily: 'inherit',
+            }}
+          >
+            Retry Setup
+          </button>
+        </div>
+      </AgentLayout>
+    );
+  }
+
+  // ── Setup wizard (agent wallet provisioned, on-chain grants still needed) ──
+  if (activateResult && status !== 'active' && !bothDone) {
+    const ai    = activateResult.agentInfo;
+    const grant = activateResult.grantRoleInstructions;
+
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
+              Grant Agent Permissions
+            </h2>
+            <p style={{ fontSize: 13, color: '#64748B' }}>
+              Your agent wallet is ready. Sign two transactions to grant it the
+              permissions it needs to run payroll and update employee records on your behalf.
+            </p>
+          </div>
+
+          {/* Agent wallet confirmation */}
+          <div style={{
+            background: '#F0FDF4', border: '1.5px solid #6EE7B7',
+            borderRadius: 14, padding: '16px 18px',
+          }}>
+            <div style={{
+              fontSize: 11, fontWeight: 700, color: '#059669',
+              letterSpacing: '0.05em', marginBottom: 6,
+            }}>
+              ✓ AGENT WALLET READY
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 13, color: '#0F172A',
+              }}>
+                {ai.agentWallet.slice(0, 18)}…{ai.agentWallet.slice(-8)}
+              </span>
+              <CopyButton text={ai.agentWallet} />
+            </div>
+            <p style={{ fontSize: 12, color: '#64748B', marginTop: 6, marginBottom: 0 }}>
+              Top up this wallet with testnet USDC for gas fees. After setup, ask the agent
+              "top up my agent wallet" to request testnet USDC.
+            </p>
+          </div>
+
+          {/* Step 1 — addAgent on payroll clone */}
+          <SetupStep
+            index={1}
+            title="Authorise Agent — Payroll Contract"
+            description={
+              `Calls addAgent(${ai.agentWallet.slice(0, 8)}…) on your ` +
+              `SaldenMultiTokenPayroll clone (${(grant.payrollClone || effectiveClone).slice(0, 10)}…). ` +
+              `This allows the AI Agent to execute batchPay() on your behalf. ` +
+              `Only you (the contract owner) can call this.`
+            }
+            status={step1Status}
+          >
+            {step1Status === 'pending' && (
+              <button
+                onClick={grantPayrollAgent}
+                style={{
+                  padding: '9px 20px', borderRadius: 9,
+                  background: '#4F46E5', color: '#fff',
+                  border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+                }}
+              >
+                Sign Transaction →
+              </button>
+            )}
+            {step1Status === 'active' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#4338CA' }}>
+                <Spinner size={14} /> Waiting for confirmation on-chain…
               </div>
             )}
-          </div>
-        ) : (
-          /* ── State C — activated: authorize the agent's wallet ───────── */
-          <div style={{ width: '100%' }}>
-            {!showChecklist ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18, marginTop: 30 }}>
+            {step1Status === 'done' && (
+              <a
+                href={txLink(step1Hash)} target="_blank" rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 12, color: '#059669', fontWeight: 600,
+                }}
+              >
+                View transaction <ExternalLink size={11} />
+              </a>
+            )}
+            {step1Status === 'failed' && (
+              <div style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
+                {step1Error}
                 <button
-                  onClick={() => setShowChecklist(true)}
+                  onClick={grantPayrollAgent}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '16px 32px', borderRadius: 14, border: 'none',
-                    background: fullyAuthorized ? '#059669' : '#4F46E5', color: '#fff',
-                    fontSize: 16, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                    marginLeft: 10, background: 'none', border: 'none',
+                    cursor: 'pointer', color: '#DC2626', fontWeight: 700,
+                    fontSize: 12, fontFamily: 'inherit', textDecoration: 'underline',
                   }}
                 >
-                  <Shield size={18} />
-                  {fullyAuthorized ? 'Agent Authorized' : 'Authorize Agent Access'}
+                  Retry
                 </button>
-                <p style={{ fontSize: 13, color: '#64748B', textAlign: 'center', maxWidth: 380 }}>
-                  {fullyAuthorized
-                    ? 'Your agent can execute payroll and update employee records on your behalf.'
-                    : 'Your agent has its own wallet now. Grant it permission on your contracts to let it act for you.'}
-                </p>
-                <button onClick={handleToggleAgent} disabled={activating}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', fontSize: 12, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  {activating ? <Loader2 size={12} style={{ animation: 'spin 0.7s linear infinite' }} /> : <PowerOff size={12} />} Deactivate agent
-                </button>
-              </div>
-            ) : (
-              <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, padding: 24 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: '#EEF2FF', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    <Shield size={18} color="#4F46E5" />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', margin: 0 }}>Authorize Agent Access</h3>
-                    <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Each step below sends one Onchain transaction from your own wallet.</p>
-                  </div>
-                  <button onClick={handleToggleAgent} disabled={activating} title="Deactivate agent"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 4, flexShrink: 0 }}>
-                    {activating ? <Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> : <PowerOff size={14} />}
-                  </button>
-                </div>
-
-                <div style={{ background: '#F8F9FA', borderRadius: 8, padding: '8px 14px', marginBottom: 16 }}>
-                  <span style={{ fontSize: 11, color: '#64748B', fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.05em' }}>Agent Wallet </span>
-                  <code style={{ fontSize: 12, color: '#4F46E5', fontFamily: "'JetBrains Mono', monospace" }}>
-                    {agentStatus!.walletAddress!.slice(0, 10)}…{agentStatus!.walletAddress!.slice(-8)}
-                  </code>
-                </div>
-                {grantError && <div style={{ background: '#FEF2F2', borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#DC2626' }}>{grantError}</div>}
-
-                <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 10 }}>
-                  {[
-                    {
-                      granted: payrollGranted, granting: grantingPayroll, onGrant: handleGrantPayroll, contract: payrollClone, step: '1',
-                      label: 'Allow agent to run payroll',
-                      sublabel: 'Sends a transaction giving your AI agent permission to execute payments from your MultiTokenPayroll contract.',
-                    },
-                    {
-                      granted: registryGranted, granting: grantingRegistry, onGrant: handleGrantRegistry, contract: registryClone, step: '2',
-                      label: 'Allow agent to update employee records',
-                      sublabel: 'Sends a transaction giving your AI agent permission to write employee data to your personal Registry contract.',
-                    },
-                  ].map(({ granted, granting, onGrant, contract, label, sublabel, step }) => (
-                    <div key={step} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: 12, border: `1.5px solid ${granted ? '#A7F3D0' : '#E2E8F0'}`, background: granted ? '#ECFDF5' : '#fff', gap: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                        <div style={{ width: 24, height: 24, borderRadius: '50%', background: granted ? '#059669' : '#E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
-                          {granted ? <Check size={14} color="#fff" /> : <span style={{ fontSize: 11, fontWeight: 700, color: '#94A3B8' }}>{step}</span>}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{label}</div>
-                          <div style={{ fontSize: 11.5, color: '#64748B', marginTop: 2, lineHeight: 1.5 }}>{sublabel}</div>
-                        </div>
-                      </div>
-                      {!granted && contract ? (
-                        <button onClick={onGrant} disabled={granting}
-                          style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#4F46E5', color: '#fff', fontSize: 12, fontWeight: 600, cursor: granting ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          {granting ? <><Loader2 size={12} style={{ animation: 'spin 0.7s linear infinite' }} /> Signing…</> : 'Authorize'}
-                        </button>
-                      ) : !contract ? (
-                        <span style={{ fontSize: 11, color: '#94A3B8', flexShrink: 0 }}>Not needed</span>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                {fullyAuthorized && (
-                  <div style={{ marginTop: 14, padding: '10px 16px', borderRadius: 10, background: '#ECFDF5', border: '1px solid #A7F3D0', fontSize: 13, fontWeight: 600, color: '#059669', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CheckCircle2 size={16} /> Agent fully authorized and ready to execute payroll.
-                  </div>
-                )}
               </div>
             )}
+          </SetupStep>
+
+          {/* Step 2 — addAgent on registry clone */}
+          <SetupStep
+            index={2}
+            title="Authorise Agent — Registry Contract"
+            description={
+              `Calls addAgent(${ai.agentWallet.slice(0, 8)}…) on your ` +
+              `SaldenRegistry clone (${(grant.registryClone || effectiveRegistry || 'not found').slice(0, 10)}…). ` +
+              `This allows the AI Agent to update the IPFS employee database pointer ` +
+              `on-chain after each payroll run. Only you (HR Admin) can call this.`
+            }
+            status={step1Status !== 'done' ? 'pending' : step2Status}
+          >
+            {step1Status === 'done' && step2Status === 'pending' && (
+              <button
+                onClick={grantRegistryAgent}
+                style={{
+                  padding: '9px 20px', borderRadius: 9,
+                  background: '#4F46E5', color: '#fff',
+                  border: 'none', cursor: 'pointer',
+                  fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
+                }}
+              >
+                Sign Transaction →
+              </button>
+            )}
+            {step2Status === 'active' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#4338CA' }}>
+                <Spinner size={14} /> Waiting for confirmation on-chain…
+              </div>
+            )}
+            {step2Status === 'done' && (
+              <a
+                href={txLink(step2Hash)} target="_blank" rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  fontSize: 12, color: '#059669', fontWeight: 600,
+                }}
+              >
+                View transaction <ExternalLink size={11} />
+              </a>
+            )}
+            {step2Status === 'failed' && (
+              <div style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
+                {step2Error}
+                <button
+                  onClick={grantRegistryAgent}
+                  style={{
+                    marginLeft: 10, background: 'none', border: 'none',
+                    cursor: 'pointer', color: '#DC2626', fontWeight: 700,
+                    fontSize: 12, fontFamily: 'inherit', textDecoration: 'underline',
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+          </SetupStep>
+
+          {/* Both done — waiting for status refresh */}
+          {bothDone && (
+            <div style={{
+              background: '#EEF2FF', border: '1.5px solid #C7D2FE',
+              borderRadius: 14, padding: 18,
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <Spinner size={18} />
+              <span style={{ fontSize: 13, color: '#4338CA', fontWeight: 600 }}>
+                Both permissions granted — activating chat interface…
+              </span>
+            </div>
+          )}
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </AgentLayout>
+    );
+  }
+
+  // ── Active — show ChatInterface ───────────────────────────────────────────
+  return (
+    <AgentLayout title="AI Agent">
+      <div style={{
+        display: 'flex', flexDirection: 'column',
+        gap: 16, height: 'calc(100vh - 120px)',
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <StatusDot active />
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#059669' }}>
+              Agent Active
+            </span>
+            {agentInfo?.agentWallet && (
+              <span style={{
+                fontSize: 11, color: '#94A3B8',
+                fontFamily: "'JetBrains Mono', monospace",
+              }}>
+                {agentInfo.agentWallet.slice(0, 8)}…{agentInfo.agentWallet.slice(-4)}
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              onClick={refresh}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: '#94A3B8', display: 'flex', alignItems: 'center',
+                gap: 4, fontSize: 12, fontFamily: 'inherit',
+              }}
+            >
+              <RefreshCw size={13} />
+            </button>
+            <Link href="/ai-agent/manage" style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 13, color: '#4F46E5', textDecoration: 'none', fontWeight: 600,
+            }}>
+              <Settings2 size={14} /> Manage
+            </Link>
+          </div>
+        </div>
+        {payrollSync.syncAvailable && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
+            padding: '8px 14px', fontSize: 12, flexShrink: 0,
+          }}>
+            <span style={{ color: '#3730A3', fontWeight: 600 }}>
+              Newer payroll data is available on this account.
+            </span>
+            <button
+              onClick={() => { void payrollSync.syncNow(); }}
+              disabled={payrollSync.status === 'loading'}
+              style={{
+                padding: '5px 12px', borderRadius: 7, background: '#4F46E5', color: '#fff',
+                fontSize: 12, fontWeight: 700, border: 'none',
+                cursor: payrollSync.status === 'loading' ? 'default' : 'pointer',
+                opacity: payrollSync.status === 'loading' ? 0.6 : 1, fontFamily: 'inherit',
+              }}
+            >
+              {payrollSync.status === 'loading' ? 'Syncing…' : 'Sync now'}
+            </button>
           </div>
         )}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ChatInterface
+            key={chatInstanceKey}
+            walletAddress={address ?? ''}
+            onDataChanged={refresh}
+            agentAddress={agentInfo?.agentWallet}
+            agentActive={status === 'active'}
+            agentWalletId={agentInfo?.walletId}
+            sessionId={resumeSessionId}
+          />
+        </div>
       </div>
-
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+    </AgentLayout>
   );
 }

@@ -16,13 +16,14 @@
  *  f) Store session in localStorage → redirect to /dashboard.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/shared/Modal';
 import { Button } from '@/components/shared/Button';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount } from 'wagmi';
 import { Mail, ArrowRight, Loader2 } from 'lucide-react';
+import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
 
 // ── Google icon ───────────────────────────────────────────────────────────────
 function GoogleIcon() {
@@ -45,7 +46,6 @@ interface LoginModalProps {
 type Step =
   | 'choose'
   | 'email-otp'
-  | 'wallet-verify'
   | 'google-loading'
   | 'google-wallet-setup';
 
@@ -114,10 +114,16 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    if (mounted && isConnected && address && step === 'choose') {
-      setStep('wallet-verify');
+    // External wallet users go directly to dashboard — email linking (if
+    // wanted) is handled separately from Settings, reusing OTPForm's Case A
+    // (wallet param present -> verify + link email, no Circle wallet
+    // created). Guard on `open` so this never fires while the modal is
+    // closed/hidden.
+    if (open && mounted && isConnected && address && step === 'choose') {
+      router.push('/dashboard');
+      onClose();
     }
-  }, [mounted, isConnected, address, step]);
+  }, [open, mounted, isConnected, address, step, router, onClose]);
 
   // Preload GIS script when modal opens
   useEffect(() => {
@@ -126,69 +132,9 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
     }
   }, [open]);
 
-  // ── Execute Circle Web SDK challenge ────────────────────────────────────────
-  const executeCircleChallenge = useCallback(
-    async (
-      challengeId: string,
-      userToken: string,
-      encryptionKey: string,
-      email: string
-    ) => {
-      const appId = process.env.NEXT_PUBLIC_CIRCLE_APP_ID ?? '';
-
-      try {
-        setGoogleMsg('Setting up your secure wallet…');
-
-        // Dynamically import the Circle Web SDK
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        // @ts-ignore — dynamic import; types vary by SDK version
-        const { W3SSdk } = await import("@circle-fin/w3s-pw-web-sdk") as any;
-
-        const sdk = new W3SSdk({ appSettings: { appId } });
-        sdk.setAuthentication({ userToken, encryptionKey });
-
-        await new Promise<void>((resolve, reject) => {
-          sdk.execute(challengeId, async (err: unknown) => {
-            if (err) { reject(err); return; }
-
-            try {
-              setGoogleMsg('Fetching your wallet address…');
-
-              // Poll for the wallet address (Circle needs a moment after challenge)
-              let walletAddress: string | null = null;
-              for (let i = 0; i < 10; i++) {
-                const res = await fetch(
-                  `/api/auth/wallet-address?userId=${encodeURIComponent(email)}`
-                );
-                if (res.ok) {
-                  const data = await res.json();
-                  walletAddress = data.walletAddress;
-                  break;
-                }
-                await new Promise(r => setTimeout(r, 1500));
-              }
-
-              if (!walletAddress) throw new Error('Wallet not ready after PIN setup');
-
-              storeSession(email, walletAddress);
-              resolve();
-            } catch (e) { reject(e); }
-          });
-        });
-
-        router.push('/dashboard');
-      } catch (err) {
-        const msg = (err as Error)?.message ?? 'Wallet setup failed';
-        setEmailErr(msg);
-        setStep('choose');
-      }
-    },
-    [router]
-  );
 
   // ── Handle the Google credential returned by GIS ───────────────────────────
-  const handleGoogleCredential = useCallback(
-    async (credential: string) => {
+  async function handleGoogleCredential(credential: string) {
       setStep('google-loading');
       setGoogleMsg('Verifying your Google account…');
       setEmailErr('');
@@ -210,22 +156,23 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
           return;
         }
 
-        // New user — run Circle wallet-setup challenge
+        // New user — run Circle wallet-setup challenge via shared utility
         setStep('google-wallet-setup');
-        await executeCircleChallenge(
-          data.challengeId,
-          data.userToken,
-          data.encryptionKey,
-          data.email
-        );
+        const walletAddress = await executeCircleChallenge({
+          challengeId:   data.challengeId,
+          userToken:     data.userToken,
+          encryptionKey: data.encryptionKey,
+          email:         data.email,
+          onStatusChange: setGoogleMsg,
+        });
+        storeSession(data.email, walletAddress);
+        router.push('/dashboard');
       } catch (err) {
         const msg = (err as Error)?.message ?? 'Sign-in failed';
         setEmailErr(msg);
         setStep('choose');
       }
-    },
-    [router, executeCircleChallenge]
-  );
+  }
 
   // ── Trigger Google Sign-In popup ────────────────────────────────────────────
   async function handleGoogleLogin() {
@@ -283,27 +230,6 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
     } finally { setLoading(false); }
   }
 
-  async function handleWalletEmailVerify() {
-    if (!validateEmail(email)) { setEmailErr('Please enter a valid email address'); return; }
-    setEmailErr('');
-    setLoading(true);
-    try {
-      const res = await fetch('/api/auth/send-otp', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email, walletAddress: address }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Failed to send code');
-      onClose();
-      router.push(
-        `/auth/otp?email=${encodeURIComponent(email)}&wallet=${address}&token=${encodeURIComponent(data.token)}`
-      );
-    } catch (err) {
-      setEmailErr((err as Error).message ?? 'Failed to send code. Please try again.');
-    } finally { setLoading(false); }
-  }
-
   function reset() {
     setStep('choose');
     setEmail('');
@@ -340,7 +266,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
       </div>
       <div>
         <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{title}</div>
-        <div style={{ fontSize: 12, color: '#64748B' }}>{subtitle}</div>
+        {subtitle && <div style={{ fontSize: 12, color: '#64748B' }}>{subtitle}</div>}
       </div>
       <ArrowRight size={16} color="#94A3B8" style={{ marginLeft: 'auto' }} />
     </button>
@@ -353,7 +279,6 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
       title={
         step === 'choose'              ? 'Login to Salden'  :
         step === 'email-otp'           ? 'Enter your email' :
-        step === 'wallet-verify'       ? 'Verify your email' :
         step === 'google-loading'      ? 'Signing in…'      :
                                          'Wallet setup'
       }
@@ -389,7 +314,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
             <GoogleIcon />,
             '#F8F9FA',
             'Continue with Google',
-            'Sign in & create your Circle wallet',
+            '',
             '#4285F4'
           )}
 
@@ -462,43 +387,6 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
             width: '100%', marginTop: 10, background: 'none', border: 'none',
             fontSize: 13, color: '#64748B', cursor: 'pointer', fontFamily: 'inherit',
           }}>Back</button>
-        </div>
-      )}
-
-      {/* ── Wallet email verify ─────────────────────────────────────────── */}
-      {step === 'wallet-verify' && (
-        <div>
-          <div style={{
-            background: '#F0FDFA', borderRadius: 10, padding: '12px 16px',
-            marginBottom: 20, fontSize: 13, color: '#0D9488',
-          }}>
-            Wallet connected:{' '}
-            <strong style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-              {address?.slice(0, 8)}…{address?.slice(-6)}
-            </strong>
-            <br />Link an email to receive invoice receipts.
-          </div>
-          <label className="label">Email Address</label>
-          <input
-            className="input"
-            type="email"
-            placeholder="Enter your email address"
-            value={email}
-            onChange={e => { setEmail(e.target.value); setEmailErr(''); }}
-            onKeyDown={e => e.key === 'Enter' && handleWalletEmailVerify()}
-            autoFocus
-          />
-          {emailErr && <div style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{emailErr}</div>}
-          <Button variant="primary" loading={loading} onClick={handleWalletEmailVerify}
-            style={{ width: '100%', marginTop: 16 }}>
-            Verify Email
-          </Button>
-          <button onClick={() => router.push('/dashboard')} style={{
-            width: '100%', marginTop: 10, background: 'none', border: 'none',
-            fontSize: 13, color: '#64748B', cursor: 'pointer', fontFamily: 'inherit',
-          }}>
-            Skip for now
-          </button>
         </div>
       )}
 

@@ -5,7 +5,7 @@
  * Cooldown removed per spec. Restructured to match new design.
  */
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAccount, useWalletClient, usePublicClient } from 'wagmi';
 import { type PayrollSetup } from '@/context/AppContext';
 import {
@@ -19,8 +19,8 @@ import { Modal } from '@/components/shared/Modal';
 import { CONTRACTS, addressLink } from '@/lib/contracts/config';
 import { MULTI_TOKEN_PAYROLL_ABI, REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, isValidEthAddress, sanitizeString } from '@/lib/validation';
-import { upsertToken, removeToken, tokenLabel, type TokenEntry } from '@/lib/token-registry';
-import { SettingsIllustration } from '@/components/shared/Illustrations';
+import { upsertToken, removeToken } from '@/lib/token-registry';
+import { useAgentSession } from '@/lib/agent/useAgentSession';
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
@@ -106,6 +106,79 @@ export default function SettingsPage() {
   // Agent management
   const [agentAddr,      setAgentAddr]      = useState('');
   const [agentLoading,   setAgentLoading]   = useState(false);
+
+  // AI Agent daily spend limit — per-employer configurable ceiling, see
+  // app/api/agent/limits/route.ts and lib/agent/employerLimits.ts. This
+  // sits BELOW the platform-wide absolute limit (AGENT_MAX_DAILY_TOTAL);
+  // it can never be used to exceed that, only to set something tighter
+  // (or, up to the platform ceiling, looser than the previous shared
+  // default every employer used to be stuck with).
+  const { getToken } = useAgentSession();
+  const [dailyLimitInput, setDailyLimitInput] = useState('');
+  const [platformCeiling, setPlatformCeiling] = useState<number | null>(null);
+  const [limitLoading,    setLimitLoading]    = useState(false);
+  const [limitSaving,     setLimitSaving]     = useState(false);
+  const [limitError,      setLimitError]      = useState('');
+  const [limitSaved,      setLimitSaved]       = useState(false);
+
+  const grossPayrollTotal = (state.employees ?? []).reduce((sum, e) => sum + (e.salaryAmount ?? 0), 0);
+
+  useEffect(() => {
+    if (!address || !wallet) return;
+    let cancelled = false;
+    (async () => {
+      setLimitLoading(true);
+      try {
+        const token = await getToken(address, wallet);
+        const res = await fetch(`/api/agent/limits?wallet=${address}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('Could not load current limit.');
+        const data = await res.json() as { employerLimit: number | null; platformCeiling: number };
+        if (!cancelled) {
+          setPlatformCeiling(data.platformCeiling);
+          setDailyLimitInput(data.employerLimit != null ? String(data.employerLimit) : '');
+        }
+      } catch {
+        // Non-fatal — the section still renders and lets them set a fresh
+        // value even if we couldn't fetch the existing one.
+      } finally {
+        if (!cancelled) setLimitLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [address, wallet, getToken]);
+
+  async function handleSaveDailyLimit() {
+    if (!address || !wallet) return;
+    const amount = Number(dailyLimitInput);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setLimitError('Enter a valid amount.');
+      return;
+    }
+    setLimitSaving(true);
+    setLimitError('');
+    setLimitSaved(false);
+    try {
+      const token = await getToken(address, wallet);
+      const res = await fetch('/api/agent/limits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ walletAddress: address, amount, grossPayrollTotal }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setLimitError(data.error ?? 'Could not save your limit.');
+        return;
+      }
+      setLimitSaved(true);
+      setTimeout(() => setLimitSaved(false), 3000);
+    } catch {
+      setLimitError('Could not save your limit. Please try again.');
+    } finally {
+      setLimitSaving(false);
+    }
+  }
 
   // Token management — full form: address + name + symbol + decimals
   const [tokenForm, setTokenForm] = useState({
@@ -292,7 +365,6 @@ export default function SettingsPage() {
             <h1 style={{ fontSize: 24, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>Settings</h1>
             <p style={{ fontSize: 14, color: '#64748B' }}>Manage your profile, groups, and contract configuration.</p>
           </div>
-          <SettingsIllustration width={100} height={75} />
         </div>
 
         {/* ── Company Profile ─────────────────────────────────────────────── */}
@@ -628,6 +700,38 @@ export default function SettingsPage() {
               )}
             </>
           )}
+        </Section>
+
+        {/* ── AI Agent Daily Spend Limit ──────────────────────────────────── */}
+        <Section title="AI Agent Daily Spend Limit">
+          <p style={{ fontSize: 13, color: '#64748B', marginBottom: 16, lineHeight: 1.6 }}>
+            The most the AI Agent may move in a single day, across every payment it makes on your behalf.
+            This must be at least your current gross payroll total (${grossPayrollTotal.toFixed(2)}) so a
+            full payroll run is never blocked partway through.
+            {platformCeiling != null && (
+              <> The platform-wide maximum is ${platformCeiling.toLocaleString()} — you can set anything up
+                to that, but never above it.</>
+            )}
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                value={dailyLimitInput}
+                onChange={e => { setDailyLimitInput(e.target.value); setLimitError(''); setLimitSaved(false); }}
+                placeholder={limitLoading ? 'Loading…' : `e.g. ${Math.max(grossPayrollTotal, 100).toFixed(2)}`}
+                disabled={limitLoading}
+                style={inputStyle}
+              />
+              {limitError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{limitError}</p>}
+              {limitSaved && <p style={{ fontSize: 12, color: '#16A34A', marginTop: 6 }}>Saved.</p>}
+            </div>
+            <Button variant="brand" loading={limitSaving} onClick={handleSaveDailyLimit} size="sm">
+              Save Limit
+            </Button>
+          </div>
         </Section>
 
         {/* ── Danger Zone ─────────────────────────────────────────────────── */}

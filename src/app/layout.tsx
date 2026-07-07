@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import '@/styles/globals.css';
 import { Web3Provider } from '@/components/shared/Web3Provider';
-import { AppProvider } from '@/context/AppContext';
-import { Toasts } from '@/components/shared/Toasts';
+import { AppProvider }  from '@/context/AppContext';
+import { Toasts }       from '@/components/shared/Toasts';
+import { AppSplash }    from '@/components/shared/AppSplash';
 
 // ── Base URL ───────────────────────────────────────────────────────────────────
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
@@ -120,7 +121,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Web3Provider>
           <AppProvider>
-            {children}
+            <AppSplash>
+              {children}
+            </AppSplash>
             <Toasts />
           </AppProvider>
         </Web3Provider>

@@ -1,4 +1,4 @@
-# Salden — Smart Onchain Payroll
+# SALDEN A Smart Onchain Payroll
 
 > Premium payroll infrastructure built on Arc Network. Batch payments, AI automation, encrypted employee records, and built-in compliance — in one platform.
 
@@ -10,9 +10,9 @@
 
 ## What is Salden?
 
-Salden is a decentralised payroll platform that replaces traditional payroll infrastructure with smart contracts. Employers can pay any number of employees in USDC — or any ERC-20 token — in a single onchain transaction. Employee records are encrypted end-to-end and stored on IPFS. An AI Payroll Agent handles recurring payroll, compliance screening, and scheduling autonomously, without ever requiring manual intervention.
+Salden is a decentralised payroll platform that replaces traditional payroll infrastructure with smart contracts. Employers can pay any number of employees in USDC or any ERC-20 token in a single onchain transaction. Employee records are encrypted end-to-end and stored on IPFS. An AI Payroll Agent handles recurring payroll, compliance screening, and scheduling autonomously, without ever requiring manual intervention.
 
-Salden is built for the future of work — remote teams, borderless payments, and organisations that demand transparency and auditability at every step.
+Salden is built for the future of work remote teams, borderless payments, and organisations that demand transparency and auditability at every step.
 
 ---
 
@@ -35,7 +35,7 @@ Salden is built for the future of work — remote teams, borderless payments, an
 
 ## Security
 
-- Employee records are encrypted client-side with AES-GCM (256-bit) before leaving the browser — the server never sees plaintext data
+- Employee records are encrypted client-side with AES-GCM (256 bit) before leaving the browser  the server never sees plaintext data
 - All wallet addresses are validated with EIP-55 checksum enforcement
 - OFAC compliance screening runs on every employee address before payroll is processed
 - The AI Agent can only send funds to pre-authorised addresses in the employer's employee database
@@ -45,7 +45,7 @@ Salden is built for the future of work — remote teams, borderless payments, an
 
 ## AI Agent
 
-The AI Payroll Agent is a Premium feature that brings full autonomy to your payroll workflow. It handles recurring and scheduled payroll runs, screens compliance before every execution, logs every action with structured audit trails, and never acts on ambiguous instructions — it asks first.
+The AI Payroll Agent is a Premium feature that brings full autonomy to your payroll workflow. It handles recurring and scheduled payroll runs, screens compliance before every execution, logs every action with structured audit trails, and never acts on ambiguous instructions it asks first.
 
 ---
 
@@ -70,7 +70,7 @@ Salden is deployed on ARC Testnet.
 | SaldenEnterprisePayroll | `0x32B2b3F9EAA03F942B4d170d6343fdb27a795D87` |
 | SaldenMultiTokenPayrollFactory | `0x3dB2362b5a4029ed116955c05A42B910aA80851d` |
 | SaldenRegistryFactory | `0x5e9dDD4bc4aC8ae17263061275Bd319b4a09bDB5` |
-| USDC (ARC Testnet) | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| USDC (ARC Testnet) | `0x3600000000000000000000000000000000000000` |
 
 Verify on [ArcScan](https://testnet.arcscan.app).
 
@@ -84,7 +84,7 @@ This repository is currently maintained by the Salden team. If you have discover
 
 ## License
 
-GNU Affero General Public License v3.0 — see [LICENSE](./LICENSE) for details.  
+GNU Affero General Public License v3.0 see [LICENSE](./LICENSE) for details.  
 Full license text available at [gnu.org/licenses/agpl-3.0](https://www.gnu.org/licenses/agpl-3.0.html).
 
 ---

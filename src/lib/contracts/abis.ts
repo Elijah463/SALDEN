@@ -413,3 +413,33 @@ export const ERC20_ABI = [
     "type": "function"
   }
 ] as const;
+
+// ─── Arc Memo Contract ABI ─────────────────────────────────────────────────────
+// Predeployed on Arc Testnet: 0x5294E9927c3306DcBaDb03fe70b92e01cCede505
+// Used to attach structured JSON memos to any contract call.
+export const MEMO_ABI = [
+  {
+    "inputs": [
+      { "internalType": "address", "name": "target",   "type": "address" },
+      { "internalType": "bytes",   "name": "data",     "type": "bytes"   },
+      { "internalType": "bytes",   "name": "memo",     "type": "bytes"   },
+      { "internalType": "uint256", "name": "value",    "type": "uint256" }
+    ],
+    "name": "callWithMemo",
+    "outputs": [{ "internalType": "bytes", "name": "", "type": "bytes" }],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true,  "internalType": "address", "name": "caller", "type": "address" },
+      { "indexed": true,  "internalType": "address", "name": "target", "type": "address" },
+      { "indexed": false, "internalType": "bytes",   "name": "memo",   "type": "bytes"   }
+    ],
+    "name": "Memo",
+    "type": "event"
+  }
+] as const;
+
+export const MEMO_CONTRACT_ADDRESS = '0x5294E9927c3306DcBaDb03fe70b92e01cCede505' as const;

@@ -5,30 +5,26 @@
  * active/past schedules (filterable by group or individual), full agent logs.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAccount } from 'wagmi';
+import { useWalletClient } from 'wagmi';
+import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
-  ArrowLeft, Clock, CheckCircle2, AlertTriangle,
+  Clock, CheckCircle2, AlertTriangle,
   Filter, RefreshCw, Calendar, Repeat, List,
-  ChevronDown, ExternalLink,
+  ChevronDown, ExternalLink, Plus,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
-import { getAgentLogs, type AgentLog } from '@/lib/db/indexeddb';
+import { AgentLayout } from '@/components/agent/AgentLayout';
+import { SetSchedulePaymentModal } from '@/components/agent/SetSchedulePaymentModal';
+import { RecurringPaymentModal } from '@/components/agent/RecurringPaymentModal';
+import { useAgentSession } from '@/lib/agent/useAgentSession';
+import {
+  getAgentLogs, type AgentLog,
+  getAgentSchedules, saveAgentSchedule, type AgentSchedule,
+} from '@/lib/db/indexeddb';
 import { txLink } from '@/lib/contracts/config';
 import { format } from 'date-fns';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface Schedule {
-  id:          string;
-  type:        'weekly' | 'biweekly' | 'monthly' | 'one-off';
-  group:       string;
-  nextRun:     number;
-  lastRun?:    number;
-  status:      'active' | 'paused' | 'completed';
-  description: string;
-}
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
@@ -51,16 +47,62 @@ function StatCard({ label, value, icon, color }: { label: string; value: string 
 export default function ManageAgentPage() {
   const router      = useRouter();
   const { state }   = useApp();
-  const { address } = useAccount();
+  const { address } = useEffectiveAddress();
+  const { data: walletClient } = useWalletClient();
+  const { getToken } = useAgentSession();
   const { groups, isPremiumUser } = state;
 
   const [logs,         setLogs]         = useState<AgentLog[]>([]);
-  const [schedules]    = useState<Schedule[]>([]);          // populated from API in future
+  const [schedules,    setSchedules]    = useState<AgentSchedule[]>([]);
   const [activeTab,    setActiveTab]    = useState<'history' | 'schedules' | 'logs'>('history');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
   const [groupFilter,  setGroupFilter]  = useState<string>('All');
   const [filterOpen,   setFilterOpen]   = useState(false);
   const [loading,      setLoading]      = useState(false);
+  const [scheduleModalOpen,  setScheduleModalOpen]  = useState(false);
+  const [recurringTarget,    setRecurringTarget]    = useState<AgentSchedule | null>(null);
+
+  useEffect(() => {
+    if (!isPremiumUser) router.replace('/ai-agent');
+  }, [isPremiumUser, router]);
+
+  // Load schedules from IndexedDB (source of truth for the UI) and push a
+  // heartbeat to the server's in-memory store (see scheduleStore.ts for why
+  // this self-heal-on-visit pattern exists instead of a real database).
+  const loadSchedules = useCallback(async () => {
+    if (!address) return;
+    const local = await getAgentSchedules(address);
+    setSchedules(local);
+
+    if (walletClient && local.length > 0) {
+      try {
+        const token = await getToken(address, walletClient);
+        await fetch('/api/agent/schedule/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ walletAddress: address, schedules: local }),
+        });
+      } catch {
+        /* best-effort heartbeat — schedules still work locally; next visit retries */
+      }
+    }
+  }, [address, walletClient, getToken]);
+
+  useEffect(() => { void loadSchedules(); }, [loadSchedules]);
+
+  const syncOneToServer = useCallback((schedule: AgentSchedule) => {
+    if (!address || !walletClient) return;
+    (async () => {
+      try {
+        const token = await getToken(address, walletClient);
+        await fetch('/api/agent/schedule/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ walletAddress: address, schedules: [schedule] }),
+        });
+      } catch { /* self-heals on next page load */ }
+    })();
+  }, [address, walletClient, getToken]);
 
   useEffect(() => {
     if (!address) return;
@@ -81,27 +123,23 @@ export default function ManageAgentPage() {
   const activeScheds = schedules.filter(s => s.status === 'active').length;
 
   return (
-    <div style={{ minHeight: '100vh', background: '#F8F9FA' }}>
+    <AgentLayout title="Manage AI Agent">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-      {/* Header */}
-      <header style={{ background: '#fff', borderBottom: '1px solid #E2E8F0', padding: '0 24px', height: 60, display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 20 }}>
-        <button onClick={() => router.back()}
-          style={{ width: 38, height: 38, borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569' }}>
-          <ArrowLeft size={18} />
-        </button>
-        <div>
-          <h1 style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', margin: 0 }}>Manage AI Agent</h1>
-          <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>View history, schedules, and full execution logs</p>
+        {/* Page header row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>Manage AI Agent</h2>
+            <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>View history, schedules, and full execution logs</p>
+          </div>
+          <button onClick={() => { if (address) { setLoading(true); getAgentLogs(address).then(setLogs).finally(() => setLoading(false)); } }}
+            style={{ width: 36, height: 36, borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569' }}
+            title="Refresh">
+            <RefreshCw size={15} style={{ animation: loading ? 'spin 0.8s linear infinite' : 'none' }} />
+          </button>
         </div>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => { if (address) { setLoading(true); getAgentLogs(address).then(setLogs).finally(() => setLoading(false)); } }}
-          style={{ width: 36, height: 36, borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#475569' }}
-          title="Refresh">
-          <RefreshCw size={15} style={{ animation: loading ? 'spin 0.8s linear infinite' : 'none' }} />
-        </button>
-      </header>
 
-      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '24px 20px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14 }}>
@@ -215,28 +253,72 @@ export default function ManageAgentPage() {
         {/* ── Schedules tab ────────────────────────────────────────────────── */}
         {activeTab === 'schedules' && (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: '0 0 16px 16px', padding: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+              <button
+                onClick={() => setScheduleModalOpen(true)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px',
+                  borderRadius: 9, border: 'none', background: '#4F46E5', color: '#fff',
+                  fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                <Plus size={14} /> Set Schedule Payments
+              </button>
+            </div>
+
             {schedules.length === 0 ? (
               <div style={{ padding: '48px 20px', textAlign: 'center' }}>
                 <Repeat size={32} color="#E2E8F0" style={{ margin: '0 auto 12px' }} />
                 <p style={{ color: '#94A3B8', fontSize: 14 }}>No scheduled jobs yet.</p>
                 <p style={{ color: '#94A3B8', fontSize: 13, marginTop: 4 }}>
-                  Go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#4F46E5', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to create a recurring payroll schedule.
+                  Use "Set Schedule Payments" above, or go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#4F46E5', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to schedule a payroll run.
                 </p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {schedules.map(schedule => (
-                  <div key={schedule.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div key={schedule.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
                     <div style={{ width: 40, height: 40, borderRadius: 10, background: schedule.status === 'active' ? '#EEF2FF' : '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       <Repeat size={18} color={schedule.status === 'active' ? '#4F46E5' : '#94A3B8'} />
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{schedule.description}</div>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{schedule.label}</div>
                       <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
-                        Group: {schedule.group} · Next run: {format(new Date(schedule.nextRun), 'dd MMM yyyy, HH:mm')}
-                        {schedule.lastRun ? ` · Last run: ${format(new Date(schedule.lastRun), 'dd MMM, HH:mm')}` : ''}
+                        {schedule.group ?? 'All Employees'} · Next run: {schedule.nextRunAt ? format(new Date(schedule.nextRunAt), 'dd MMM yyyy, HH:mm') + ' UTC' : '—'}
+                        {schedule.lastRunAt ? ` · Last run: ${format(new Date(schedule.lastRunAt), 'dd MMM, HH:mm')}` : ''}
+                        {schedule.type === 'recurring' && schedule.recurrence ? ` · Repeats ${schedule.recurrence}` : ''}
                       </div>
                     </div>
+
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', cursor: 'pointer' }}>
+                      Recurring
+                      <span
+                        role="switch"
+                        aria-checked={schedule.type === 'recurring'}
+                        onClick={() => {
+                          if (schedule.type === 'recurring') {
+                            // Turning off recurring — revert to a one-off schedule keeping the same next run.
+                            const reverted: AgentSchedule = { ...schedule, type: 'scheduled', recurrence: undefined };
+                            void saveAgentSchedule(reverted).then(() => {
+                              setSchedules(prev => prev.map(s => s.id === reverted.id ? reverted : s));
+                              syncOneToServer(reverted);
+                            });
+                          } else {
+                            setRecurringTarget(schedule);
+                          }
+                        }}
+                        style={{
+                          width: 34, height: 19, borderRadius: 99, position: 'relative', cursor: 'pointer',
+                          background: schedule.type === 'recurring' ? '#4F46E5' : '#E2E8F0', transition: 'background 0.15s',
+                        }}
+                      >
+                        <span style={{
+                          position: 'absolute', top: 2, left: schedule.type === 'recurring' ? 17 : 2,
+                          width: 15, height: 15, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+                        }} />
+                      </span>
+                    </label>
+
                     <span style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600, background: schedule.status === 'active' ? '#EEF2FF' : '#F8F9FA', color: schedule.status === 'active' ? '#4F46E5' : '#94A3B8' }}>
                       {schedule.status}
                     </span>
@@ -245,6 +327,25 @@ export default function ManageAgentPage() {
               </div>
             )}
           </div>
+        )}
+
+        {address && (
+          <SetSchedulePaymentModal
+            open={scheduleModalOpen}
+            onClose={() => setScheduleModalOpen(false)}
+            walletAddress={address}
+            sessionToken={null}
+            onScheduled={(s) => { setSchedules(prev => [s, ...prev]); syncOneToServer(s); }}
+          />
+        )}
+        {recurringTarget && (
+          <RecurringPaymentModal
+            open={!!recurringTarget}
+            schedule={recurringTarget}
+            onClose={() => setRecurringTarget(null)}
+            onUpdated={(updated) => setSchedules(prev => prev.map(s => s.id === updated.id ? updated : s))}
+            syncToServer={syncOneToServer}
+          />
         )}
 
         {/* ── Full log tab ─────────────────────────────────────────────────── */}
@@ -296,7 +397,9 @@ export default function ManageAgentPage() {
         )}
       </div>
 
+      </div>
+
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+    </AgentLayout>
   );
 }

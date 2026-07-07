@@ -7,17 +7,18 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { useAccount, usePublicClient } from 'wagmi';
+import { usePublicClient } from 'wagmi';
+import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
-  Shield, CheckCircle2, AlertTriangle, XCircle,
-  RefreshCw, ExternalLink, Info, Lock,
+  CheckCircle2, AlertTriangle, XCircle,
+  RefreshCw, ExternalLink, Info,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { ComplianceIllustration } from '@/components/shared/Illustrations';
 import { CONTRACTS, arcTestnet, addressLink } from '@/lib/contracts/config';
-import { ENTERPRISE_PAYROLL_ABI } from '@/lib/contracts/abis';
+import { ENTERPRISE_PAYROLL_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { isValidEthAddress, truncAddr } from '@/lib/validation';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -76,10 +77,10 @@ function isOfacFlagged(address: string): boolean {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CompliancePage() {
-  const { address }    = useAccount();
+  const { address }    = useEffectiveAddress();
   const publicClient   = usePublicClient({ chainId: arcTestnet.id });
   const { state }      = useApp();
-  const { employees, payrollClone, registryClone } = state;
+  const { employees, registryClone } = state;
 
   const [checks,       setChecks]       = useState<ComplianceCheck[]>([]);
   const [isRunning,    setIsRunning]    = useState(false);
@@ -197,19 +198,40 @@ export default function CompliancePage() {
       });
     }
 
-    // 7. Contract balance check
+    // 7. Contract balance check — does the employer's own wallet actually
+    // hold enough USDC to cover this payroll run? Payroll execution pulls
+    // funds from the employer's wallet via ERC-20 allowance/transferFrom
+    // (see dashboard/page.tsx's handleExecutePayroll), not from the payroll
+    // contract's own balance, so that's the balance that actually matters
+    // here — previously this check computed the total obligation but never
+    // read any on-chain balance to compare it against, so it always
+    // reported "pass" even with an empty wallet.
     try {
       if (publicClient && address) {
-        // Check USDC balance of the caller's wallet (proxy for payroll readiness)
-        const contractAddr = payrollClone ?? CONTRACTS.ENTERPRISE_PAYROLL;
-        const totalNeeded  = employees.reduce((s, e) => s + BigInt(Math.round(Number(e.salaryAmount) * 1e6)), 0n);
+        const totalNeeded = employees.reduce((s, e) => s + BigInt(Math.round(Number(e.salaryAmount) * 1e6)), 0n);
+        const usdcBalance = await publicClient.readContract({
+          address:      CONTRACTS.USDC as `0x${string}`,
+          abi:          ERC20_ABI,
+          functionName: 'balanceOf',
+          args:         [address as `0x${string}`],
+        }) as bigint;
 
-        update('balances', {
-          status: 'pass',
-          detail: totalNeeded > 0n
-            ? `Total payroll obligation: ${(Number(totalNeeded) / 1e6).toLocaleString('en-US', { minimumFractionDigits: 2 })} USDC. Ensure your wallet has sufficient balance before running.`
-            : 'No salary amounts configured.',
-        });
+        const neededDisplay  = (Number(totalNeeded) / 1e6).toLocaleString('en-US', { minimumFractionDigits: 2 });
+        const balanceDisplay = (Number(usdcBalance) / 1e6).toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+        if (totalNeeded === 0n) {
+          update('balances', { status: 'pending', detail: 'No salary amounts configured.' });
+        } else if (usdcBalance >= totalNeeded) {
+          update('balances', {
+            status: 'pass',
+            detail: `Wallet holds ${balanceDisplay} USDC, which covers the ${neededDisplay} USDC payroll obligation.`,
+          });
+        } else {
+          update('balances', {
+            status: 'fail',
+            detail: `Wallet holds ${balanceDisplay} USDC, which is short of the ${neededDisplay} USDC payroll obligation. Top up before running payroll.`,
+          });
+        }
       } else { throw new Error(); }
     } catch {
       update('balances', { status: 'warn', detail: 'Could not calculate payroll balance requirement.' });
@@ -225,7 +247,7 @@ export default function CompliancePage() {
 
     setLastChecked(new Date().toISOString());
     setIsRunning(false);
-  }, [address, publicClient, employees, payrollClone, registryClone]);
+  }, [address, publicClient, employees, registryClone]);
 
   // Run on mount
   useEffect(() => { runChecks(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps

@@ -10,6 +10,9 @@ import {
   useRef, useEffect, ReactNode,
 } from 'react';
 import { saveTx, type TxRecord } from '@/lib/db/indexeddb';
+import { getCachedPayrollSnapshot, setCachedPayrollSnapshot, getOrCreateDeviceKey } from '@/lib/db/indexeddb';
+import { keccak256, toHex } from 'viem';
+import { DEFAULT_GROUPS } from '@/lib/groups';
 import {
   DEFAULT_TOKEN_REGISTRY,
   type TokenRegistry,
@@ -55,6 +58,13 @@ interface AppState {
   isSyncing:          boolean;
   syncError:          string | null;
   lastSyncedAt:       string | null;
+  /** True when checkCidFreshness (via usePayrollSync) has detected that the
+   *  on-chain CID hash no longer matches what's currently loaded/cached,
+   *  AND there's local data on screen that a silent overwrite could clobber.
+   *  Drives a "Newer data available — Sync now" prompt rather than a silent
+   *  background overwrite. */
+  syncAvailable:      boolean;
+  pendingCid:         string | null;
   toasts:             Toast[];
   companyName:        string;
   tokenRegistry:      TokenRegistry;
@@ -73,6 +83,7 @@ type Action =
   | { type: 'SET_SYNCING';        payload: boolean }
   | { type: 'SET_SYNC_ERROR';     payload: string | null }
   | { type: 'SET_LAST_SYNCED';    payload: string }
+  | { type: 'SET_SYNC_AVAILABLE'; payload: { available: boolean; cid: string | null } }
   | { type: 'ADD_TOAST';          payload: Toast }
   | { type: 'REMOVE_TOAST';       payload: string }
   | { type: 'SET_COMPANY_NAME';   payload: string }
@@ -89,11 +100,13 @@ const initial: AppState = {
   isPremiumUser:     false,
   payrollSetup:      null,
   employees:         [],
-  groups:            [],
+  groups:            [...DEFAULT_GROUPS],
   activeGroup:       'All Employees',
   isSyncing:         false,
   syncError:         null,
   lastSyncedAt:      null,
+  syncAvailable:     false,
+  pendingCid:        null,
   toasts:            [],
   companyName:       '',
   tokenRegistry:     DEFAULT_TOKEN_REGISTRY,
@@ -125,6 +138,8 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, syncError: action.payload };
     case 'SET_LAST_SYNCED':
       return { ...state, lastSyncedAt: action.payload };
+    case 'SET_SYNC_AVAILABLE':
+      return { ...state, syncAvailable: action.payload.available, pendingCid: action.payload.cid };
     case 'ADD_TOAST':
       return { ...state, toasts: [...state.toasts, action.payload] };
     case 'REMOVE_TOAST':
@@ -162,6 +177,15 @@ interface AppContextValue {
     cid:           string;
     signMessage:   (msg: string) => Promise<string>;
   }) => Promise<{ loaded: boolean }>;
+  /** Instant, no-network, no-signature hydration from the local IndexedDB
+   *  snapshot left by the last successful syncData/loadData for this wallet.
+   *  This is what lets employees/groups/payrollSetup paint immediately on
+   *  page load instead of waiting on the signature -> RPC -> IPFS -> decrypt
+   *  round trip. Returns the cached CID hash (if any) so the caller
+   *  (usePayrollSync) can cheaply compare it against the on-chain
+   *  getCIDHash() to decide whether a background sync is needed. This never
+   *  talks to the network — it only reads local browser storage. */
+  hydrateFromCache: (walletAddress: string) => Promise<{ hydrated: boolean; cid: string | null; cidHash: string | null }>;
   saveTxRecord: (record: Omit<TxRecord, 'walletAddress'>, walletAddress: string) => Promise<void>;
 }
 
@@ -374,6 +398,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       lastCidRef.current = data.cid ?? lastCidRef.current;
       dispatch({ type: 'SET_LAST_SYNCED', payload: new Date().toISOString() });
       dispatch({ type: 'SET_SYNC_ERROR',  payload: null });
+      dispatch({ type: 'SET_SYNC_AVAILABLE', payload: { available: false, cid: null } });
+
+      // Cache what we just wrote — a syncData call always reflects the
+      // current in-memory state, so this is by definition fresh. Encrypted
+      // at rest with the device key (see getOrCreateDeviceKey) — this is
+      // the same employee/salary data the app deliberately encrypts before
+      // it ever touches IPFS, so it must not sit in plaintext in
+      // IndexedDB either.
+      if (data.cid) {
+        try {
+          const cidHash = keccak256(toHex(data.cid));
+          const deviceKey = await getOrCreateDeviceKey();
+          const encrypted = await encryptPayload(rawPayload, deviceKey);
+          await setCachedPayrollSnapshot({
+            walletAddress: opts.walletAddress,
+            cid:           data.cid,
+            cidHash,
+            payload:       encrypted,
+            cachedAt:      Date.now(),
+          });
+        } catch (cacheErr) {
+          // Never let a local-cache write failure surface as a sync failure —
+          // the actual IPFS sync already succeeded at this point.
+          console.warn('[AppContext] Failed to update local payroll cache:', cacheErr);
+        }
+      }
 
       console.info('[AppContext] Synced to IPFS. CID:', data.cid);
       return { cid: data.cid };
@@ -424,14 +474,62 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     dispatch({ type: 'SET_PAYROLL_DATA', payload: {
       employees:     payload.employees     ?? [],
-      groups:        payload.groups        ?? [],
+      groups:        (payload.groups && payload.groups.length > 0) ? payload.groups : [...DEFAULT_GROUPS],
       payrollSetup:  payload.setup         ?? stateRef.current.payrollSetup,
       tokenRegistry: payload.tokenRegistry ?? stateRef.current.tokenRegistry,
       lastSyncedAt:  new Date().toISOString(),
     } });
+    dispatch({ type: 'SET_SYNC_AVAILABLE', payload: { available: false, cid: null } });
     lastCidRef.current = opts.cid;
 
+    try {
+      const cidHash = keccak256(toHex(opts.cid));
+      const deviceKey = await getOrCreateDeviceKey();
+      const encrypted = await encryptPayload(payload, deviceKey);
+      await setCachedPayrollSnapshot({
+        walletAddress: opts.walletAddress,
+        cid:           opts.cid,
+        cidHash,
+        payload:       encrypted,
+        cachedAt:      Date.now(),
+      });
+    } catch (cacheErr) {
+      console.warn('[AppContext] Failed to update local payroll cache:', cacheErr);
+    }
+
     return { loaded: true };
+  }, []);
+
+  // ── Instant local hydration (no network, no signature) ──────────────────────
+  const hydrateFromCache = useCallback(async (
+    walletAddress: string,
+  ): Promise<{ hydrated: boolean; cid: string | null; cidHash: string | null }> => {
+    if (!walletAddress) return { hydrated: false, cid: null, cidHash: null };
+    const entry = await getCachedPayrollSnapshot(walletAddress);
+    if (!entry) return { hydrated: false, cid: null, cidHash: null };
+
+    let payload: { setup?: PayrollSetup; employees?: Employee[]; groups?: string[]; tokenRegistry?: TokenRegistry };
+    try {
+      const deviceKey = await getOrCreateDeviceKey();
+      payload = await decryptPayload(entry.payload, deviceKey);
+    } catch (err) {
+      // Envelope unreadable (corrupted, or a device key generated by a
+      // different browser profile/environment) — treat as a cache miss
+      // rather than crashing the app on a bad local cache entry.
+      console.warn('[AppContext] Failed to decrypt local payroll cache, ignoring it:', err);
+      return { hydrated: false, cid: null, cidHash: null };
+    }
+
+    dispatch({ type: 'SET_PAYROLL_DATA', payload: {
+      employees:     payload.employees     ?? [],
+      groups:        (payload.groups && payload.groups.length > 0) ? payload.groups : [...DEFAULT_GROUPS],
+      payrollSetup:  payload.setup         ?? stateRef.current.payrollSetup,
+      tokenRegistry: payload.tokenRegistry ?? stateRef.current.tokenRegistry,
+      lastSyncedAt:  new Date(entry.cachedAt).toISOString(),
+    } });
+    lastCidRef.current = entry.cid;
+
+    return { hydrated: true, cid: entry.cid, cidHash: entry.cidHash };
   }, []);
 
   const saveTxRecord = useCallback(async (
@@ -452,7 +550,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AppContext.Provider value={{ state, dispatch, addToast, removeToast, syncData, loadData, saveTxRecord }}>
+    <AppContext.Provider value={{ state, dispatch, addToast, removeToast, syncData, loadData, hydrateFromCache, saveTxRecord }}>
       {children}
     </AppContext.Provider>
   );

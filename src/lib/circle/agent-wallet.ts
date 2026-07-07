@@ -88,6 +88,44 @@ export async function getAgentWallet(walletId: string): Promise<AgentWalletInfo>
   };
 }
 
+// ── Look up a wallet by its refId (authoritative, server-derived lookup) ──────
+//
+// Every agent wallet is created with `metadata: [{ refId: idempotencyKey }]`
+// where idempotencyKey is deterministically derived from the employer's
+// wallet address (see lib/agent/agentIdentity.ts). That means the server
+// can always ask Circle "which wallet did I create for this employer?"
+// instead of trusting a client-supplied walletId/address — this is what
+// closes the authorisation gap where a request body could otherwise claim
+// any agentWalletId it wanted (see agentIdentity.ts for the full writeup).
+//
+// NOTE: this filters Circle's wallet-list endpoint by the `refId` query
+// parameter. This matches Circle's documented metadata/refId lookup
+// pattern, but — like the check_ofac_compliance endpoint shape elsewhere
+// in this codebase — it has not been exercised against a live Circle
+// account by this author. Verify the exact query param name and response
+// shape against your Circle Developer-Controlled Wallets API docs/sandbox
+// before relying on this in production; if the param name differs, this
+// function is the only place that needs to change (agentIdentity.ts just
+// calls it and reacts to null).
+export async function getAgentWalletByRefId(refId: string): Promise<AgentWalletInfo | null> {
+  const res = await fetch(`${CIRCLE_API_BASE}/wallets?refId=${encodeURIComponent(refId)}`, {
+    headers: getHeaders(),
+  });
+
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  const wallet = data.data?.wallets?.[0];
+  if (!wallet) return null;
+
+  return {
+    walletId:   wallet.id,
+    address:    wallet.address,
+    blockchain: wallet.blockchain,
+    state:      wallet.state,
+  };
+}
+
 // ── Initiate a contract call transaction from the agent wallet ────────────────
 // Used when the AI Agent executes batchPay via the payroll contract.
 

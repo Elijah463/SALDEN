@@ -1,13 +1,14 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import {
   LayoutDashboard, History, Bot, Shield,
-  Zap, Settings, X, ChevronRight, LogOut,
+  Zap, Settings, X, LogOut, Wallet, ChevronRight,
 } from 'lucide-react';
 import { SaldenLogo } from '@/components/shared/Logo';
 import { useDisconnect } from 'wagmi';
+import { clearCircleSession } from '@/lib/useEffectiveAddress';
 
 interface SidebarProps {
   open: boolean;
@@ -18,6 +19,7 @@ interface SidebarProps {
 
 const NAV = [
   { href: '/dashboard',           icon: LayoutDashboard, label: 'Dashboard'           },
+  { href: '/wallet',              icon: Wallet,          label: 'Wallet'              },
   { href: '/transaction-history', icon: History,         label: 'Transaction History' },
   { href: '/ai-agent',            icon: Bot,             label: 'AI Agent'            },
   { href: '/compliance',          icon: Shield,          label: 'Compliance'          },
@@ -27,12 +29,20 @@ const NAV = [
 
 export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProps) {
   const pathname = usePathname();
+  const router   = useRouter();
   const { disconnect } = useDisconnect();
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
   const truncate = (addr: string) =>
     addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '';
+
+  function handleLogout() {
+    disconnect();
+    clearCircleSession();
+    onClose();
+    router.push('/');
+  }
 
   return (
     <>
@@ -150,7 +160,7 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
           </div>
           {mounted && userAddress && (
             <button
-              onClick={() => { disconnect(); onClose(); }}
+              onClick={() => { handleLogout(); }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 width: '100%', padding: '10px 14px',
@@ -161,7 +171,7 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
               }}
             >
               <LogOut size={16} />
-              Disconnect
+              Logout
             </button>
           )}
         </div>

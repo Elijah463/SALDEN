@@ -3,18 +3,19 @@ import { ReactNode, useState, useEffect } from 'react';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Footer } from './Footer';
-import { useAccount } from 'wagmi';
+import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 
 interface AppLayoutProps {
-  children: ReactNode;
-  title?: string;
+  children:     ReactNode;
+  title?:       string;
   companyName?: string;
+  headerRight?: ReactNode;   // optional extra right-side header element (e.g. AI Agent's sliders icon) — rendered ALONGSIDE the wallet address badge, not instead of it
 }
 
-export function AppLayout({ children, title, companyName }: AppLayoutProps) {
+export function AppLayout({ children, title, companyName, headerRight }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mounted,     setMounted]     = useState(false);
-  const { address } = useAccount();
+  const { address } = useEffectiveAddress();
 
   // Prevent hydration mismatch — wallet state is only available client-side
   useEffect(() => { setMounted(true); }, []);
@@ -56,6 +57,9 @@ export function AppLayout({ children, title, companyName }: AppLayoutProps) {
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
+
+        {/* Optional extra right-side header element (e.g. AI Agent sliders icon) */}
+        {headerRight}
 
         {/* Only render wallet address after mount — prevents hydration mismatch */}
         {mounted && address && (
