@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  transpilePackages: ['@circle-fin/w3s-pw-web-sdk'],
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'ipfs.io'             },
