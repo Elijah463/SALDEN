@@ -31,6 +31,8 @@
     "jspdf":  "2.5.2",
 
     "autoprefixer": "10.4.20",
+    "postcss": "8.4.49",
+    "tailwindcss": "3.4.15",
 
     "idb":         "8.0.0",
     "date-fns":    "3.6.0",
