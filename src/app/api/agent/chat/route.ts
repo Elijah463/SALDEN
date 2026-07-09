@@ -70,6 +70,7 @@ import {
   executeGetBalance, executeGetTransactionStatus, executeCheckOfacCompliance,
 } from '@/lib/agent/toolExecutors';
 import { executeAutonomousTransfer, executeAutonomousBatchPay } from '@/lib/agent/autonomousExecution';
+import { track } from '@/lib/analytics';
 
 // Autonomous execution polls Circle for on-chain confirmation within this
 // request — needs more than the Vercel default (10s on Hobby). See
@@ -905,6 +906,12 @@ export async function POST(req: NextRequest) {
             clientEvents.push({ type: 'agent_executed_payment', address: checksummed, amount: amountStr, token: 'USDC', txHash: result.txHash, pending: result.pending });
             responseParts.push({ functionResponse: { name, response: { ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash } } });
             actionLog.push({ action: `Paid ${amountStr} USDC to ${truncAddr(checksummed)} (agent wallet)`, status: result.pending ? 'QUEUED' : 'SUCCESS', timestamp: ts });
+            // Only counted once genuinely confirmed on-chain — a merely
+            // "submitted" (pending) transfer could still fail, and this
+            // metric should represent completed volume, not attempts.
+            if (!result.pending && result.txHash) {
+              await track({ event: 'payroll_executed', walletAddress, employeeCount: 1, volumeUsdc: amountNum, txHash: result.txHash });
+            }
           } else {
             responseParts.push({ functionResponse: { name, response: { ok: false, error: result.error } } });
             actionLog.push({ action: `Execute payment to ${truncAddr(checksummed)}`, status: 'FAILED', detail: result.error, timestamp: ts });
@@ -983,6 +990,9 @@ export async function POST(req: NextRequest) {
             clientEvents.push({ type: 'agent_executed_payroll_run', group, recipients: targets.length, totalAmount: totalAmount.toFixed(2), txHash: result.txHash, pending: result.pending });
             responseParts.push({ functionResponse: { name, response: { ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash, recipients: targets.length } } });
             actionLog.push({ action: `Ran payroll for "${group}" — ${targets.length} employees, ${totalAmount.toFixed(2)} USDC (agent wallet)`, status: result.pending ? 'QUEUED' : 'SUCCESS', timestamp: ts });
+            if (!result.pending && result.txHash) {
+              await track({ event: 'payroll_executed', walletAddress, employeeCount: targets.length, volumeUsdc: totalAmount, txHash: result.txHash });
+            }
           } else {
             responseParts.push({ functionResponse: { name, response: { ok: false, error: result.error } } });
             actionLog.push({ action: `Execute payroll run for "${group}"`, status: 'FAILED', detail: result.error, timestamp: ts });

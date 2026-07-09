@@ -27,6 +27,7 @@ import { Modal }          from '@/components/shared/Modal';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { useCloneAccess } from '@/lib/useCloneAccess';
+import { trackClientEvent } from '@/lib/analyticsClient';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
 import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
@@ -131,6 +132,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
       dispatch({ type: 'SET_PAYROLL_DATA', payload: {
         payrollSetup: { fullName, companyName, email, employeeRange: empRange, registryClone: clone },
       } });
+      trackClientEvent({ event: 'user_registered', walletAddress: address, txHash: hash });
       onComplete();
     } catch (err) {
       setErrors([(err as Error).message ?? 'Transaction failed. Please try again.']);
@@ -913,6 +915,11 @@ export default function DashboardPage() {
         invoiceEmailStatus: 'pending',  // set to pending before firing
         executedBy: 'manual',
       }, address);
+
+      trackClientEvent({
+        event: 'batch_paid', walletAddress: address, txHash,
+        employeeCount: targetEmployees.length, volumeUsdc: Number(totalHuman.replace(/,/g, '')),
+      });
 
       // Auto-send invoice email after batchPay (ImportantUpdate - automatic for batchPay only).
       // Fire-and-forget: payroll already succeeded, email failure is non-critical.

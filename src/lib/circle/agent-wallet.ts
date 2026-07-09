@@ -196,6 +196,30 @@ export async function pollTxStatus(
   throw new Error('Transaction polling timed out after ' + maxAttempts + ' attempts.');
 }
 
+// ── Single-shot transaction status check (no internal loop/sleep) ────────────
+//
+// pollTxStatus() above loops internally with its own setTimeout, which is
+// exactly what you want for a short, blocking, best-effort check inside a
+// single synchronous request (see autonomousExecution.ts). It is NOT what
+// you want when the caller itself is driving a poll loop externally (e.g.
+// Inngest's step.run + step.sleep pattern in lib/inngest/functions.ts) —
+// looping internally there would either block Vercel compute for the
+// entire wait, or throw a "timed out" error on every single check that
+// hasn't confirmed yet, which the caller would then have to specifically
+// swallow. This does exactly one fetch and returns whatever state Circle
+// reports right now (including PENDING/QUEUED/etc, unlike pollTxStatus
+// which never returns those to the caller).
+export async function getTxStatus(txId: string): Promise<TxResponse> {
+  const res = await fetch(`${CIRCLE_API_BASE}/transactions/${txId}`, {
+    headers: getHeaders(),
+  });
+
+  if (!res.ok) throw new Error(`Failed to fetch status for tx ${txId}`);
+  const data = await res.json();
+  const tx = data.data?.transaction;
+  return { id: tx.id, state: tx.state, txHash: tx.txHash };
+}
+
 // ── Send USDC from the agent wallet (for fee top-ups etc.) ────────────────────
 
 export async function sendUSDC(params: {

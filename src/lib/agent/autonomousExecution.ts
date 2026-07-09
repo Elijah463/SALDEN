@@ -79,7 +79,7 @@ interface AutonomousPayParams {
 // spendLimits.ts in chat/route.ts BEFORE this function is ever invoked; this
 // number only avoids re-approving (and re-waiting on) a fresh allowance
 // before every single autonomous payment.
-const ALLOWANCE_CEILING_USDC = '1000000';
+export const ALLOWANCE_CEILING_USDC = '1000000';
 
 // Short, bounded polls — see the timeout note in the file header. A tx that
 // hasn't confirmed within this window is reported as `pending`, not failed.
@@ -93,6 +93,63 @@ async function pollWithBudget(txId: string, attempts: number): Promise<TxRespons
   } catch {
     return null; // timed out within our budget — caller treats this as "pending", not failed
   }
+}
+
+export interface BalanceCheckResult {
+  ok:              boolean;
+  balance:         bigint;
+  faucetAttempted: boolean;
+  error?:          string;
+}
+
+/**
+ * Reads the agent wallet's balance for `tokenAddress` and, if it's short of
+ * `needed`, requests one testnet faucet drip and re-checks once. Shared by
+ * both executeAutonomousTransfer and executeAutonomousBatchPay below (was
+ * previously duplicated verbatim in each) and by the Inngest scheduled-
+ * payment execution path (lib/inngest/functions.ts), which needs this same
+ * check but drives its own submit/poll steps rather than calling all the
+ * way through to executeAutonomousTransfer/BatchPay.
+ */
+export async function checkAndTopUpBalance(params: {
+  agentWalletAddress: string;
+  tokenAddress:       string;
+  tokenDecimals:      number;
+  needed:              bigint;
+}): Promise<BalanceCheckResult> {
+  const publicClient = getServerPublicClient();
+
+  let balance: bigint;
+  try {
+    balance = await publicClient.readContract({
+      address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
+      functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
+    }) as bigint;
+  } catch {
+    return { ok: false, balance: 0n, faucetAttempted: false, error: 'Could not read the agent wallet\'s balance.' };
+  }
+
+  let faucetAttempted = false;
+  if (balance < params.needed) {
+    faucetAttempted = true;
+    try { await requestFaucetDrip(params.agentWalletAddress); } catch { /* re-check regardless */ }
+    await new Promise(r => setTimeout(r, 4000));
+    try {
+      balance = await publicClient.readContract({
+        address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
+        functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
+      }) as bigint;
+    } catch { /* keep prior balance */ }
+
+    if (balance < params.needed) {
+      return {
+        ok: false, balance, faucetAttempted,
+        error: `The agent wallet only has ${formatUnits(balance, params.tokenDecimals)} but this payment needs ${formatUnits(params.needed, params.tokenDecimals)}, even after requesting testnet funds. Fund the agent wallet from the Agent Wallet page and try again.`,
+      };
+    }
+  }
+
+  return { ok: true, balance, faucetAttempted };
 }
 
 /**
@@ -116,37 +173,14 @@ export async function executeAutonomousTransfer(params: {
   memo:               Record<string, unknown>;
   idempotencyKeyBase: string;
 }): Promise<AutonomousPayResult> {
-  const publicClient = getServerPublicClient();
-
-  let balance: bigint;
-  try {
-    balance = await publicClient.readContract({
-      address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
-      functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
-    }) as bigint;
-  } catch {
-    return { ok: false, error: 'Could not read the agent wallet\'s balance.' };
-  }
-
-  let faucetAttempted = false;
-  if (balance < params.amount) {
-    faucetAttempted = true;
-    try { await requestFaucetDrip(params.agentWalletAddress); } catch { /* re-check regardless */ }
-    await new Promise(r => setTimeout(r, 4000));
-    try {
-      balance = await publicClient.readContract({
-        address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
-        functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
-      }) as bigint;
-    } catch { /* keep prior balance */ }
-
-    if (balance < params.amount) {
-      return {
-        ok: false, faucetAttempted,
-        error: `The agent wallet only has ${formatUnits(balance, params.tokenDecimals)} but this payment needs ${formatUnits(params.amount, params.tokenDecimals)}, even after requesting testnet funds. Fund the agent wallet from the Agent Wallet page and try again.`,
-      };
-    }
-  }
+  const balanceCheck = await checkAndTopUpBalance({
+    agentWalletAddress: params.agentWalletAddress,
+    tokenAddress:        params.tokenAddress,
+    tokenDecimals:       params.tokenDecimals,
+    needed:              params.amount,
+  });
+  if (!balanceCheck.ok) return { ok: false, faucetAttempted: balanceCheck.faucetAttempted, error: balanceCheck.error };
+  const faucetAttempted = balanceCheck.faucetAttempted;
 
   try {
     const tx = await executeContractCall({
@@ -191,35 +225,14 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
   }
 
   // ── 1. Balance check — the agent pays from its OWN wallet ────────────────
-  let balance: bigint;
-  try {
-    balance = await publicClient.readContract({
-      address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
-      functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
-    }) as bigint;
-  } catch {
-    return { ok: false, error: 'Could not read the agent wallet\'s balance.' };
-  }
-
-  let faucetAttempted = false;
-  if (balance < totalNeeded) {
-    faucetAttempted = true;
-    try { await requestFaucetDrip(params.agentWalletAddress); } catch { /* re-check regardless below */ }
-    await new Promise(r => setTimeout(r, 4000)); // give the drip a moment to land
-    try {
-      balance = await publicClient.readContract({
-        address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
-        functionName: 'balanceOf', args: [params.agentWalletAddress as `0x${string}`],
-      }) as bigint;
-    } catch { /* keep the balance we already have */ }
-
-    if (balance < totalNeeded) {
-      return {
-        ok: false, faucetAttempted,
-        error: `The agent wallet only has ${formatUnits(balance, params.tokenDecimals)} but this payment needs ${formatUnits(totalNeeded, params.tokenDecimals)}, even after requesting testnet funds. Fund the agent wallet from the Agent Wallet page and try again.`,
-      };
-    }
-  }
+  const balanceCheck = await checkAndTopUpBalance({
+    agentWalletAddress: params.agentWalletAddress,
+    tokenAddress:        params.tokenAddress,
+    tokenDecimals:       params.tokenDecimals,
+    needed:              totalNeeded,
+  });
+  if (!balanceCheck.ok) return { ok: false, faucetAttempted: balanceCheck.faucetAttempted, error: balanceCheck.error };
+  const faucetAttempted = balanceCheck.faucetAttempted;
 
   // ── 2. Allowance check — batchPay pulls via transferFrom(msg.sender, ...),
   //    so the AGENT wallet (not the employer) must approve the payroll

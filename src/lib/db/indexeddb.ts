@@ -110,6 +110,18 @@ export interface AgentSchedule {
   payrollCloneAddress?: string;
   tokenAddress?:        string;
   tokenDecimals?:       number;
+  /**
+   * Snapshot of payrollSetup.email at schedule-creation time, used to send
+   * the invoice receipt once a scheduled payment confirms on-chain. This
+   * cannot be live-fetched later — payrollSetup is only ever available
+   * decrypted in the browser (see PayrollCacheEntry doc comment above), so
+   * if this isn't captured now, it is permanently unavailable to the
+   * server-side executor. Optional: schedules created before this field
+   * existed, or by a user who never set a company email in Settings,
+   * simply won't have an invoice email sent — handled as a graceful skip
+   * wherever this is read, not an error state.
+   */
+  recipientEmail?: string;
 }
 
 let db: IDBPDatabase | null = null;

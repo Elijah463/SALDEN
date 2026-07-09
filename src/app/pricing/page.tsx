@@ -19,6 +19,7 @@ import { AppLayout }          from '@/components/layout/AppLayout';
 import { useApp }             from '@/context/AppContext';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI, ERC20_ABI } from '@/lib/contracts/abis';
+import { trackClientEvent } from '@/lib/analyticsClient';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
 function Row({ label, free, premium }: { label: string; free: boolean | string; premium: boolean | string }) {
@@ -80,6 +81,7 @@ export default function PricingPage() {
 
       dispatch({ type: 'SET_PAYROLL_CLONE', payload: cloneAddr });
       dispatch({ type: 'SET_PREMIUM',       payload: true        });
+      trackClientEvent({ event: 'user_upgraded', walletAddress: address, txHash: deployTx });
       setStep('done');
       addToast('Premium activated. Your private payroll contract is ready.', 'success', 8000);
     } catch (err) {

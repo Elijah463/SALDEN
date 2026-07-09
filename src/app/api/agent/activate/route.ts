@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAgentWallet, getAgentWallet } from '@/lib/circle/agent-wallet';
 import { isValidEthAddress } from '@/lib/validation';
+import { track } from '@/lib/analytics';
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,6 +54,10 @@ export async function POST(req: NextRequest) {
       // Idempotency key is deterministic so duplicate calls return the same wallet
       const idempotencyKey = `salden-agent-${walletAddress.toLowerCase()}`;
       const wallet = await createAgentWallet(idempotencyKey);
+
+      // Only fires here — the re-verify branch above returns early for an
+      // already-active agent, so this genuinely means "first activation".
+      await track({ event: 'agent_activated', walletAddress });
 
       return NextResponse.json({
         active:       true,

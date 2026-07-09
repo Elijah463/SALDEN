@@ -151,7 +151,7 @@ function DateTimePicker({
 
 export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionToken, onScheduled }: SetSchedulePaymentModalProps) {
   const { state } = useApp();
-  const { employees, groups, payrollClone, tokenRegistry } = state;
+  const { employees, groups, payrollClone, tokenRegistry, payrollSetup } = state;
   const { agentInfo } = useAgentStatus();
 
   const [target, setTarget] = useState<string>(ALL_EMPLOYEES_LABEL);
@@ -205,6 +205,12 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
         payrollCloneAddress: payrollClone ?? undefined,
         tokenAddress,
         tokenDecimals: 6,
+        // Snapshotted now because payrollSetup is only ever decrypted
+        // client-side — the server-side executor has no way to live-fetch
+        // it later (see AgentSchedule.recipientEmail doc comment). Left
+        // undefined (not empty string) when unset so downstream email
+        // logic can do a plain truthiness check.
+        recipientEmail: payrollSetup?.email || undefined,
       };
 
       await saveAgentSchedule(schedule);
