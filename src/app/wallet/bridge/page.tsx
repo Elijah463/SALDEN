@@ -163,7 +163,20 @@ export default function BridgePage() {
         from: {
           adapter,
           chain: selectedRoute.fromChain,
-        },
+          // createAdapterFromProvider() (adapter-viem-v2) declares a return
+          // type of ViemAdapter<Partial<AdapterCapabilities>> — narrower
+          // than the full ViemAdapter it actually constructs under the
+          // hood, so its TS signature is missing methods like
+          // getTokenDecimals that kit.bridge() (app-kit) requires. This is
+          // a type-only gap between two independently-versioned Circle
+          // packages, not a missing runtime method — the concrete adapter
+          // instance is a real ViemAdapter with the full method set either
+          // way. Anchoring the cast to kit.bridge's OWN parameter type
+          // (rather than hand-typing an interface we'd have to guess at)
+          // means this self-corrects if a future version of either package
+          // realigns the types — nothing to remember to revert.
+          // Matches the same workaround already applied to `to` below.
+        } as Parameters<typeof kit.bridge>[0]['from'],
         to: {
           chain:            selectedRoute.toChain,
           recipientAddress: address,    // USDC minted directly to user's address
