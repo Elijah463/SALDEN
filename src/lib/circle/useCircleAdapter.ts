@@ -21,6 +21,17 @@
 import { useState, useEffect } from 'react';
 import { useConnectorClient }  from 'wagmi';
 
+/**
+ * Minimal EIP-1193 provider shape required by
+ * @circle-fin/adapter-viem-v2's createAdapterFromProvider.
+ * Matches exactly what the TS build error required: on, removeListener, request.
+ */
+interface EIP1193ProviderLike {
+  request:        (...args: any[]) => Promise<unknown>;
+  on:             (...args: any[]) => void;
+  removeListener: (...args: any[]) => void;
+}
+
 export type CircleAdapter = Awaited<
   ReturnType<typeof import('@circle-fin/adapter-viem-v2').createAdapterFromProvider>
 >;
@@ -41,7 +52,7 @@ export function useCircleAdapter(): UseCircleAdapterResult {
 
   useEffect(() => {
     // Extract EIP-1193 provider from wagmi connector transport
-    const provider = (client as { transport?: { value?: { provider?: unknown } } })
+    const provider = (client as { transport?: { value?: { provider?: EIP1193ProviderLike } } })
       ?.transport?.value?.provider;
 
     if (!provider) {
