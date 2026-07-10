@@ -389,6 +389,12 @@ export function AddEmployeeCard({
         message: msg,
       });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
+      // syncData legitimately returns { cid: undefined } if walletAddress
+      // was empty or the server response omitted it — writing that through
+      // to updateCID would anchor a bad/empty reference on-chain, breaking
+      // this wallet's data loading from then on. Fail loudly instead;
+      // caught below and shown the same way any other sync failure is.
+      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setAddState('anchoring');
@@ -523,6 +529,7 @@ export function EditEmployeeCard({
       setEditState('syncing');
       const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
+      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setEditState('anchoring');
@@ -632,6 +639,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       setRemoveState('syncing');
       const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
+      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setRemoveState('anchoring');
@@ -740,6 +748,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       setAddState('syncing');
       const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
+      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setAddState('anchoring');
