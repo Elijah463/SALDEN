@@ -71,7 +71,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
       if (!forceRefresh) {
         const cached = await getCachedTokens(payrollClone);
         if (cached?.length) {
-          const resolved = cached.map(addr => getToken(addr, tokenRegistry) ?? {
+          const resolved = cached.map(addr => getToken(tokenRegistry, addr) ?? {
             address: addr, name: 'Unknown Token',
             symbol: `${addr.slice(0, 6)}…${addr.slice(-4)}`,
             decimals: 18, addedAt: new Date().toISOString(),
@@ -107,7 +107,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
         tokenAddresses: addresses,
         cachedAt:       Date.now(),
       });
-      const resolved = addresses.map(addr => getToken(addr, tokenRegistry) ?? {
+      const resolved = addresses.map(addr => getToken(tokenRegistry, addr) ?? {
         address: addr, name: 'Unknown Token',
         symbol: `${addr.slice(0, 6)}…${addr.slice(-4)}`,
         decimals: 18, addedAt: new Date().toISOString(),
