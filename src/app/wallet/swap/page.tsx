@@ -275,7 +275,15 @@ export default function SwapPage() {
         from: {
           adapter,
           chain: 'Arc_Testnet',
-        },
+          // Same type-only gap as bridge/page.tsx's kit.bridge() call:
+          // createAdapterFromProvider() (adapter-viem-v2) declares a
+          // narrower return type than kit.swap() (app-kit) requires —
+          // missing getTokenDecimals in its TS signature even though the
+          // concrete ViemAdapter instance it builds has the full method
+          // set. Cast anchored to kit.swap's own parameter type (not a
+          // hand-typed guess) so it self-corrects if the packages
+          // realign. See bridge/page.tsx for the fuller writeup.
+        } as unknown as Parameters<typeof kit.swap>[0]['from'],
         tokenIn:  tokenIn.symbol,
         tokenOut: tokenOut.symbol,
         amountIn: amountIn,
