@@ -176,7 +176,14 @@ export default function BridgePage() {
           // means this self-corrects if a future version of either package
           // realigns the types — nothing to remember to revert.
           // Matches the same workaround already applied to `to` below.
-        } as Parameters<typeof kit.bridge>[0]['from'],
+          //
+          // Needs the unknown-first double cast (not a single `as`) because
+          // TS can't find enough structural overlap between our locally
+          // typed `adapter` and the SDK's real Adapter<AdapterCapabilities>
+          // to allow a direct cast — that's the same underlying type gap,
+          // just enforced more strictly here since `adapter` is nested one
+          // level down instead of being the cast target itself.
+        } as unknown as Parameters<typeof kit.bridge>[0]['from'],
         to: {
           chain:            selectedRoute.toChain,
           recipientAddress: address,    // USDC minted directly to user's address
