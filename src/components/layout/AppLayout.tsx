@@ -10,9 +10,10 @@ interface AppLayoutProps {
   title?:       string;
   companyName?: string;
   headerRight?: ReactNode;   // optional extra right-side header element (e.g. AI Agent's sliders icon) — rendered ALONGSIDE the wallet address badge, not instead of it
+  showWalletAddress?: boolean; // defaults to false — the connected-wallet chip was redundant on most pages (already shown in the sidebar/elsewhere); the AI Agent section still opts in
 }
 
-export function AppLayout({ children, title, companyName, headerRight }: AppLayoutProps) {
+export function AppLayout({ children, title, companyName, headerRight, showWalletAddress = false }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mounted,     setMounted]     = useState(false);
   const { address } = useEffectiveAddress();
@@ -62,7 +63,7 @@ export function AppLayout({ children, title, companyName, headerRight }: AppLayo
         {headerRight}
 
         {/* Only render wallet address after mount — prevents hydration mismatch */}
-        {mounted && address && (
+        {showWalletAddress && mounted && address && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '6px 12px',

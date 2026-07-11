@@ -16,7 +16,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter, useSearchParams }  from 'next/navigation';
 import { SaldenLogo }    from '@/components/shared/Logo';
-import Image             from 'next/image';
 import { Mail, ArrowLeft, RefreshCw, Loader2 } from 'lucide-react';
 import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
 
@@ -230,35 +229,22 @@ export function OTPForm() {
   return (
     <div style={{
       minHeight: '100vh', background: '#F8F9FA',
-      display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', padding: 24,
+      padding: '28px 24px',
     }}>
+      {/* Logo — top-left, not centered */}
+      <div style={{ marginBottom: 48 }}>
+        <SaldenLogo size={30} />
+      </div>
+
+      {/* Everything else: pinned near the top, horizontally centered */}
       <div style={{
-        background: '#fff', borderRadius: 24,
-        padding: '40px 36px',
-        border: '1px solid #E2E8F0',
-        boxShadow: '0 8px 32px rgba(0,0,0,0.07)',
-        width: '100%', maxWidth: 440, textAlign: 'center',
+        maxWidth: 440, margin: '0 auto', textAlign: 'center',
       }}>
-        {/* Centered logo — ImportantUpdate #1 */}
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-          <SaldenLogo size={34} />
-        </div>
-
-        <Image
-          src="/images/login-illustration.png"
-          alt="Check your email"
-          width={140} height={140}
-          style={{ objectFit: 'contain', margin: '0 auto' }}
-        />
-
-        <h2 style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 16, marginBottom: 6 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 800, color: '#0F172A', marginTop: 0, marginBottom: 6 }}>
           Check your email
         </h2>
         <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.65 }}>
-          We sent a 6-digit code to{' '}
-          <strong style={{ color: '#0F172A' }}>{email || 'your email'}</strong>.
-          <br />It expires in 10 minutes.
+          We sent a 6-digit code for verification
         </p>
 
         {/* Single input field */}
@@ -267,11 +253,12 @@ export function OTPForm() {
           type="text"
           inputMode="numeric"
           pattern="\d*"
-          placeholder="Enter 6-digit code"
+          placeholder="Enter Code"
           value={code}
           onChange={e => handleChange(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !isBusy && submitCode()}
           disabled={isBusy}
+          className="otp-input"
           style={{
             width: '100%', padding: '14px 18px',
             fontSize: 22, fontWeight: 700,
@@ -354,7 +341,10 @@ export function OTPForm() {
         </button>
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .otp-input::placeholder { font-size: 11px; letter-spacing: normal; font-weight: 500; color: #94A3B8; }
+      `}</style>
     </div>
   );
 }

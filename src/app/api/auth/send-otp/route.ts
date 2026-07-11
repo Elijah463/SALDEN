@@ -83,10 +83,14 @@ export async function POST(req: NextRequest) {
       subject: 'Your Salden Login Code',
       html: `
         <div style="font-family:'Plus Jakarta Sans',system-ui,sans-serif;max-width:480px;margin:0 auto;padding:40px 24px;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:32px;">
-            <img src="${process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz'}/logo.svg" alt="Salden" width="72" height="72" style="object-fit:contain;display:block;" />
-            <span style="font-size:18px;font-weight:800;letter-spacing:0.08em;color:#4F46E5;">SALDEN</span>
-          </div>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;">
+            <tr>
+              <td style="vertical-align:middle;padding-right:10px;">
+                <img src="${process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz'}/logo.svg" alt="Salden" width="36" height="36" style="display:block;">
+              </td>
+              <td style="vertical-align:middle;font-size:18px;font-weight:800;letter-spacing:0.08em;color:#4F46E5;">SALDEN</td>
+            </tr>
+          </table>
           <h1 style="font-size:24px;font-weight:800;color:#0F172A;margin-bottom:8px;">Your login code</h1>
           <p style="color:#64748B;font-size:15px;margin-bottom:28px;line-height:1.6;">
             Enter this code to sign in to your Salden account. It expires in 10 minutes.

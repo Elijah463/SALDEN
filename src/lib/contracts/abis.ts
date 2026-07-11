@@ -427,25 +427,42 @@ export const ERC20_ABI = [
 // ─── Arc Memo Contract ABI ─────────────────────────────────────────────────────
 // Predeployed on Arc Testnet: 0x5294E9927c3306DcBaDb03fe70b92e01cCede505
 // Used to attach structured JSON memos to any contract call.
+// Arc's predeployed Memo contract (0x5294...) — verified against the real
+// contract ABI on the Arc Testnet block explorer. The function is `memo`,
+// NOT `callWithMemo` — an earlier version of this file had the wrong
+// function name and parameter shape entirely (a nonexistent function
+// selector), which reverted on every single call. See the `memo`
+// signature below: `memoId` is a caller-chosen bytes32 (this codebase
+// derives it as keccak256 of the memo bytes — see callers), and the
+// actual memo payload goes in `memoData`, not a trailing `value` param —
+// this function is nonpayable.
 export const MEMO_ABI = [
   {
     "inputs": [
       { "internalType": "address", "name": "target",   "type": "address" },
       { "internalType": "bytes",   "name": "data",     "type": "bytes"   },
-      { "internalType": "bytes",   "name": "memo",     "type": "bytes"   },
-      { "internalType": "uint256", "name": "value",    "type": "uint256" }
+      { "internalType": "bytes32", "name": "memoId",   "type": "bytes32" },
+      { "internalType": "bytes",   "name": "memoData", "type": "bytes"   }
     ],
-    "name": "callWithMemo",
-    "outputs": [{ "internalType": "bytes", "name": "", "type": "bytes" }],
-    "stateMutability": "payable",
+    "name": "memo",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "bytes", "name": "returnData", "type": "bytes" }],
+    "name": "MemoFailed",
+    "type": "error"
   },
   {
     "anonymous": false,
     "inputs": [
-      { "indexed": true,  "internalType": "address", "name": "caller", "type": "address" },
-      { "indexed": true,  "internalType": "address", "name": "target", "type": "address" },
-      { "indexed": false, "internalType": "bytes",   "name": "memo",   "type": "bytes"   }
+      { "indexed": true,  "internalType": "address", "name": "sender",       "type": "address" },
+      { "indexed": true,  "internalType": "address", "name": "target",       "type": "address" },
+      { "indexed": false, "internalType": "bytes32",  "name": "callDataHash", "type": "bytes32" },
+      { "indexed": true,  "internalType": "bytes32",  "name": "memoId",      "type": "bytes32" },
+      { "indexed": false, "internalType": "bytes",    "name": "memo",        "type": "bytes"   },
+      { "indexed": false, "internalType": "uint256",  "name": "memoIndex",   "type": "uint256" }
     ],
     "name": "Memo",
     "type": "event"

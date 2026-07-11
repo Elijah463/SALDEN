@@ -72,7 +72,7 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
 
   return (
     <>
-      <AppLayout title={title} headerRight={slidersBtn}>
+      <AppLayout title={title} headerRight={slidersBtn} showWalletAddress>
         {children}
       </AppLayout>
 
@@ -126,11 +126,13 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
             {/* Avatar */}
             <div style={{
               width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
-              background: 'linear-gradient(135deg, #4F46E5 0%, #14B8A6 100%)',
+              background: '#FAFAF8',
+              border: '1px solid #F1F5F9',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 22,
+              overflow: 'hidden',
             }}>
-              🤖
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/images/ai-avatar.png" alt="" width={34} height={34} style={{ objectFit: 'contain' }} />
             </div>
             <div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>

@@ -19,12 +19,16 @@
  *     its own dedicated, separately-funded wallet — see the Agent Wallet
  *     page where the user tops it up).
  *   - The existing manual dashboard flow wraps batchPay's calldata through
- *     the Arc Memo contract's callWithMemo(target, data, memo, value), and
- *     that flow's own code comment confirms "msg.sender is preserved" by
- *     this wrapper. So the agent must ALSO route through callWithMemo
- *     (not call batchPay directly) for msg.sender inside batchPay to
- *     correctly resolve to the agent wallet's own address, and to keep the
- *     on-chain memo/receipt trail consistent with manual payments.
+ *     the Arc Memo contract's memo(target, data, memoId, memoData) — see
+ *     lib/contracts/abis.ts for why this is `memo`, not `callWithMemo`
+ *     (an earlier version of this codebase had the wrong function name,
+ *     which reverted on every call since it doesn't exist on the real
+ *     contract) — and that flow's own code comment confirms "msg.sender
+ *     is preserved" by this wrapper. So the agent must ALSO route through
+ *     the Memo contract (not call batchPay directly) for msg.sender
+ *     inside batchPay to correctly resolve to the agent wallet's own
+ *     address, and to keep the on-chain memo/receipt trail consistent
+ *     with manual payments.
  *   - Since batchPay requires the CALLER to have already approved the
  *     payroll contract for the token amount, and the agent wallet is a
  *     separate address from the employer's, the agent wallet needs its own
@@ -43,7 +47,7 @@
  * blocking the whole chat response indefinitely.
  */
 
-import { encodeFunctionData, formatUnits, parseUnits } from 'viem';
+import { encodeFunctionData, formatUnits, parseUnits, keccak256 } from 'viem';
 import { getServerPublicClient } from './chain';
 import { executeContractCall, pollTxStatus, type TxResponse } from '@/lib/circle/agent-wallet';
 import { requestFaucetDrip } from '@/lib/circle/faucet';
@@ -202,8 +206,8 @@ export async function executeAutonomousTransfer(params: {
       await executeContractCall({
         walletId:             params.agentWalletId,
         contractAddress:      MEMO_CONTRACT_ADDRESS,
-        abiFunctionSignature: 'callWithMemo(address,bytes,bytes,uint256)',
-        abiParameters:        ['0x0000000000000000000000000000000000000000', '0x', memoHex, '0'],
+        abiFunctionSignature: 'memo(address,bytes,bytes32,bytes)',
+        abiParameters:        ['0x0000000000000000000000000000000000000000', '0x', keccak256(memoHex), memoHex],
         idempotencyKey:       `${params.idempotencyKeyBase}-memo`,
       });
     } catch { /* memo is purely informational — never surface its failure */ }
@@ -290,8 +294,8 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
     const payTx = await executeContractCall({
       walletId:             params.agentWalletId,
       contractAddress:      MEMO_CONTRACT_ADDRESS,
-      abiFunctionSignature: 'callWithMemo(address,bytes,bytes,uint256)',
-      abiParameters:        [params.payrollCloneAddress, batchData, memoHex, '0'],
+      abiFunctionSignature: 'memo(address,bytes,bytes32,bytes)',
+      abiParameters:        [params.payrollCloneAddress, batchData, keccak256(memoHex), memoHex],
       idempotencyKey:       `${params.idempotencyKeyBase}-pay`,
     });
 

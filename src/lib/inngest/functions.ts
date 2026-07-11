@@ -48,7 +48,7 @@
  * production; see scheduleStore.ts for the exact env vars it reads.
  */
 
-import { getAddress, parseUnits, encodeFunctionData } from 'viem';
+import { getAddress, parseUnits, encodeFunctionData, keccak256 } from 'viem';
 import { inngest } from './client';
 import type { AgentSchedule } from '@/lib/db/indexeddb';
 import { getDueSchedules, upsertSchedule, computeNextRun } from '@/lib/agent/scheduleStore';
@@ -328,8 +328,8 @@ export const executeScheduledPayment = inngest.createFunction(
             const tx = await executeContractCall({
               walletId:             agent.walletId,
               contractAddress:      MEMO_CONTRACT_ADDRESS,
-              abiFunctionSignature: 'callWithMemo(address,bytes,bytes,uint256)',
-              abiParameters:        [payrollCloneAddress, batchData, memoHex, '0'],
+              abiFunctionSignature: 'memo(address,bytes,bytes32,bytes)',
+              abiParameters:        [payrollCloneAddress, batchData, keccak256(memoHex), memoHex],
               idempotencyKey:       `${idempotencyKeyBase}-pay`,
             });
             return { id: tx.id, txHash: tx.txHash };
@@ -367,8 +367,8 @@ export const executeScheduledPayment = inngest.createFunction(
             await executeContractCall({
               walletId:             agent.walletId,
               contractAddress:      MEMO_CONTRACT_ADDRESS,
-              abiFunctionSignature: 'callWithMemo(address,bytes,bytes,uint256)',
-              abiParameters:        ['0x0000000000000000000000000000000000000000', '0x', memoHex, '0'],
+              abiFunctionSignature: 'memo(address,bytes,bytes32,bytes)',
+              abiParameters:        ['0x0000000000000000000000000000000000000000', '0x', keccak256(memoHex), memoHex],
               idempotencyKey:       `${idempotencyKeyBase}-memo`,
             });
           } catch { /* purely informational — never surface this failure */ }

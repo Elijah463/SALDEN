@@ -17,13 +17,14 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWalletClient, usePublicClient, useBalance } from 'wagmi';
-import { getAddress } from 'viem';
+import { getAddress, keccak256 } from 'viem';
 import { ArrowLeft, ExternalLink, CheckCircle2, X, Loader2, Send } from 'lucide-react';
 import { AppLayout }  from '@/components/layout/AppLayout';
 import { NetworkGuard } from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { ERC20_ABI, MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { CONTRACTS, arcTestnet, txLink } from '@/lib/contracts/config';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 
 function genRef() { return 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase(); }
 
@@ -90,7 +91,7 @@ export default function SendPage() {
       });
 
       setStatus('confirming');
-      await pc.waitForTransactionReceipt({ hash: txHash });
+      await waitForSuccessfulReceipt(pc, txHash);
       setSuccessTx(txHash);
 
       // After confirmation: fire-and-forget memo log to Arc Memo contract.
@@ -104,8 +105,8 @@ export default function SendPage() {
       }));
       wc.writeContract({
         address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-        functionName: 'callWithMemo',
-        args: ['0x0000000000000000000000000000000000000000', '0x', memoHex, 0n],
+        functionName: 'memo',
+        args: ['0x0000000000000000000000000000000000000000', '0x', keccak256(memoHex), memoHex],
       }).catch(() => {});
 
     } catch (err) {

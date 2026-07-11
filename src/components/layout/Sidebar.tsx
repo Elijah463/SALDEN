@@ -4,7 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import {
   LayoutDashboard, History, Bot, Shield,
-  Zap, Settings, X, LogOut, Wallet, ChevronRight,
+  DollarSign, Settings, X, LogOut, Wallet, ChevronRight,
 } from 'lucide-react';
 import { SaldenLogo } from '@/components/shared/Logo';
 import { useDisconnect } from 'wagmi';
@@ -23,7 +23,7 @@ const NAV = [
   { href: '/transaction-history', icon: History,         label: 'Transaction History' },
   { href: '/ai-agent',            icon: Bot,             label: 'AI Agent'            },
   { href: '/compliance',          icon: Shield,          label: 'Compliance'          },
-  { href: '/pricing',             icon: Zap,             label: 'Pricing'             },
+  { href: '/pricing',             icon: DollarSign,      label: 'Pricing'             },
   { href: '/settings',            icon: Settings,        label: 'Settings'            },
 ];
 
@@ -33,9 +33,6 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
   const { disconnect } = useDisconnect();
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
-
-  const truncate = (addr: string) =>
-    addr ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : '';
 
   function handleLogout() {
     disconnect();
@@ -95,21 +92,11 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
         </div>
 
         {/* Company info */}
-        {(companyName || userAddress) && (
+        {companyName && (
           <div style={{ padding: '14px 20px', borderBottom: '1px solid #F1F5F9' }}>
-            {companyName && (
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', marginBottom: 2 }}>
-                {companyName}
-              </div>
-            )}
-            {userAddress && (
-              <div style={{
-                fontSize: 12, color: '#64748B',
-                fontFamily: "'JetBrains Mono', monospace",
-              }}>
-                {truncate(userAddress)}
-              </div>
-            )}
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>
+              {companyName}
+            </div>
           </div>
         )}
 

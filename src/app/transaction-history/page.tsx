@@ -109,8 +109,10 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
   const ref = tx.ref ?? ('SLD-' + tx.hash.slice(2, 8).toUpperCase());
 
   return (
-    <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden' }}>
-      <div style={{ height: 4, background: 'linear-gradient(90deg, #4F46E5, #14B8A6)' }} />
+    <div style={{
+      background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden',
+      boxShadow: '0 -1px 2px rgba(15,23,42,0.03), 0 2px 6px rgba(15,23,42,0.05)',
+    }}>
       <div style={{ padding: '18px 20px' }}>
 
         {/* Reference + date */}

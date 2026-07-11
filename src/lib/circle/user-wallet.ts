@@ -93,15 +93,35 @@ export async function getUserSession(userId: string): Promise<CircleSession> {
 // Returns the challengeId that the Circle Web SDK on the client must execute
 // to prompt the user to set their PIN / recovery method.
 //
-// `blockchains` can be tailored once Circle confirms their Arc chain id.
-// 'EVM' creates a chain-agnostic EVM address that works on Arc Testnet.
+// Arc isn't (yet) one of Circle's individually-named Wallets API chains, so
+// it's created through their generic "Other EVM blockchains" path — see
+// https://developers.circle.com/w3s/supported-blockchains-and-currencies
+// and https://developers.circle.com/wallets/sign-tx-evm. Two hard
+// requirements from that doc, both of which this used to get wrong:
+//
+//  1. Chain code must be 'EVM-TESTNET', not 'EVM' — 'EVM' is the MAINNET
+//     variant. Passing it while authenticated with a sandbox
+//     (TEST_API_KEY:-prefixed) CIRCLE_API_KEY is exactly what produced
+//     "TEST_API key cannot be used with blockchain mainnets": we were
+//     telling Circle we wanted a mainnet wallet.
+//  2. accountType must be 'EOA' — Circle's docs state plainly that
+//     generic "Other EVM blockchains" support ONLY EOA, not SCA
+//     (Smart-Contract Account). SCA requires their Gas Station, which
+//     isn't available on this generic path regardless of network. This
+//     is a real product-level change from the original SCA intent, not
+//     just a naming fix: new social-login users get a plain EOA wallet,
+//     which means it needs to hold native gas (USDC, since Arc uses USDC
+//     as gas) before it can send its own transactions — there's no
+//     built-in gas sponsorship on this path. Worth confirming the
+//     faucet/funding flow covers brand-new wallets, separately from this
+//     fix.
 export async function initializeUserWallet(userToken: string): Promise<string> {
   const json = await circlePost(
     '/user/initialize',
     {
       idempotencyKey: crypto.randomUUID(),
-      blockchains:    ['EVM'],      // EVM-compatible — works on Arc Testnet
-      accountType:    'SCA',        // Smart Contract Account (ERC-4337)
+      blockchains:    ['EVM-TESTNET'],
+      accountType:    'EOA',
     },
     userToken
   );

@@ -15,12 +15,12 @@ import {
   Search, UserPlus, ChevronDown,
   Pencil, Trash2, AlertTriangle, Loader2,
   CheckCircle2, Copy, Users, Eye, EyeOff,
-  Upload, FileText, Filter,
+  Upload, FileText, Filter, Banknote,
 } from 'lucide-react';
 import {
   useWalletClient, usePublicClient, useBalance,
 } from 'wagmi';
-import { encodeFunctionData } from 'viem';
+import { encodeFunctionData, keccak256 } from 'viem';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { useApp }         from '@/context/AppContext';
 import { Modal }          from '@/components/shared/Modal';
@@ -28,6 +28,7 @@ import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { useCloneAccess } from '@/lib/useCloneAccess';
 import { trackClientEvent } from '@/lib/analyticsClient';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
 import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
@@ -121,7 +122,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
         functionName: 'createRegistry',
         args:         [],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       const clone = await publicClient.readContract({
         address:      CONTRACTS.REGISTRY_FACTORY,
         abi:          REGISTRY_FACTORY_ABI,
@@ -246,7 +247,7 @@ function EmployeeModal({
           functionName: 'updateCID',
           args:         [cid],
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await waitForSuccessfulReceipt(publicClient, hash);
       }
       onClose();
     } catch (err) {
@@ -339,18 +340,6 @@ function EmployeeModal({
           <div style={{ height: 6, borderRadius: 4, background: '#F1F5F9', overflow: 'hidden' }}>
             <div style={{ height: '100%', width: `${Math.min(100, (employeeCount / minRequired) * 100)}%`, background: setupDone ? '#059669' : '#4F46E5', transition: 'width 0.2s' }} />
           </div>
-          {setupDone && (
-            <>
-              <button onClick={handleProceed} disabled={proceeding}
-                style={{ marginTop: 14, width: '100%', padding: '12px 16px', borderRadius: 10, border: 'none', background: '#059669', color: '#fff', fontSize: 14, fontWeight: 700, cursor: proceeding ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-                {proceeding ? <><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Syncing & finalizing…</> : 'Proceed to Dashboard'}
-              </button>
-              {proceedError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{proceedError}</p>}
-              <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>
-                You can keep adding employees below, or proceed now — this syncs your employee data and anchors it Onchain.
-              </p>
-            </>
-          )}
         </div>
       )}
 
@@ -383,6 +372,22 @@ function EmployeeModal({
         )}
       </div>
     </>
+  );
+
+  // Proceed-to-dashboard action — rendered at the BOTTOM of the modal
+  // (below the form/import controls), away from the progress indicator
+  // above, per the redesign.
+  const proceedSection = setupMode && setupDone && (
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #F1F5F9' }}>
+      <button onClick={handleProceed} disabled={proceeding}
+        style={{ width: '100%', padding: '12px 16px', borderRadius: 10, border: 'none', background: '#059669', color: '#fff', fontSize: 14, fontWeight: 700, cursor: proceeding ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+        {proceeding ? <><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite' }} /> Syncing & finalizing…</> : 'Proceed to Dashboard'}
+      </button>
+      {proceedError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{proceedError}</p>}
+      <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>
+        You can keep adding employees above, or proceed now — this syncs your employee data and anchors it Onchain.
+      </p>
+    </div>
   );
 
   return (
@@ -434,6 +439,7 @@ function EmployeeModal({
               {mode === 'add' ? 'Add Employee' : 'Save Changes'}
             </Button>
           </div>
+          {proceedSection}
         </>
       )}
 
@@ -461,6 +467,7 @@ function EmployeeModal({
               Import {bulkEmployees.length > 0 ? `${bulkEmployees.length} Employees` : 'Employees'}
             </Button>
           </div>
+          {proceedSection}
         </div>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -745,7 +752,7 @@ export default function DashboardPage() {
         functionName: 'updateCID',
         args:         [cid],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       lastAnchoredCidRef.current = cid;
     } catch (err) {
       console.error('[Dashboard] Failed to anchor CID Onchain:', err);
@@ -851,7 +858,7 @@ export default function DashboardPage() {
           args: [contractAddr, totalAmount],
         });
         setExecuteStatus('Waiting for approval confirmation…');
-        await publicClient.waitForTransactionReceipt({ hash: approveTx });
+        await waitForSuccessfulReceipt(publicClient, approveTx);
       }
 
       setExecuteStatus('Executing batch payment…');
@@ -871,6 +878,11 @@ export default function DashboardPage() {
       });
       const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
         .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
+      // The real Memo contract's memoId is a caller-chosen bytes32 (see
+      // event `Memo`'s indexed memoId) — deriving it as a hash of the
+      // memo content itself keeps it deterministic and collision-safe
+      // without inventing a separate ID scheme.
+      const memoId = keccak256(memoHex);
 
       // Encode batchPay calldata for the Memo contract to forward
       setExecuteStatus('Executing batch payment…');
@@ -879,12 +891,13 @@ export default function DashboardPage() {
           abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
           args: [addrs, amounts, tokenAddr],
         });
-        // Arc Memo contract: callWithMemo(target, data, memo, value)
+        // Arc Memo contract: memo(target, data, memoId, memoData) — see
+        // lib/contracts/abis.ts for why this isn't called callWithMemo.
         // msg.sender is preserved — payroll clone sees the user's wallet address
         txHash = await walletClient.writeContract({
           address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-          functionName: 'callWithMemo',
-          args: [contractAddr, batchData as `0x${string}`, memoHex, 0n],
+          functionName: 'memo',
+          args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
         });
       } else {
         const batchData = encodeFunctionData({
@@ -893,13 +906,13 @@ export default function DashboardPage() {
         });
         txHash = await walletClient.writeContract({
           address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-          functionName: 'callWithMemo',
-          args: [contractAddr, batchData as `0x${string}`, memoHex, 0n],
+          functionName: 'memo',
+          args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
         });
       }
 
       setExecuteStatus('Confirming on-chain…');
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      await waitForSuccessfulReceipt(publicClient, txHash);
       setExecuteProgress({ current: targetEmployees.length, total: targetEmployees.length });
       setExecTxHash(txHash);
       setExecutionState('success');
@@ -1070,7 +1083,7 @@ export default function DashboardPage() {
           <StatCard label="Gross Total Pay"
             value={totalPayroll.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             sub={activeGroup !== 'All Employees' ? `for ${activeGroup}` : 'USDC'}
-            icon={<CheckCircle2 size={16} color="#14B8A6" />} />
+            icon={<Banknote size={16} color="#14B8A6" />} />
         </div>
 
         {/* ── Unauthenticated gate ───────────────────────────────────── */}

@@ -21,7 +21,7 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useWalletClient, usePublicClient } from 'wagmi';
-import { encodeFunctionData } from 'viem';
+import { encodeFunctionData, keccak256 } from 'viem';
 import { Loader2 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import type { Employee } from '@/context/AppContext';
@@ -30,6 +30,7 @@ import {
   REGISTRY_UPDATE_CID_ABI,
 } from '@/lib/contracts/agentAbis';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS, ERC20_ABI } from '@/lib/contracts/abis';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { CONTRACTS, txLink } from '@/lib/contracts/config';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
@@ -168,7 +169,7 @@ export function UnlistedPaymentCard({
           // Clear description shown in Rabby / MetaMask before signing:
           // "Allow Salden to spend up to <amount> <token> for this payment"
         });
-        await publicClient.waitForTransactionReceipt({ hash: approveTx });
+        await waitForSuccessfulReceipt(publicClient, approveTx);
       }
 
       setPayState('paying');
@@ -198,13 +199,13 @@ export function UnlistedPaymentCard({
 
       const hash = await walletClient.writeContract({
         address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-        functionName: 'callWithMemo',
-        args: [contractAddr, batchData as `0x${string}`, memoHex, 0n],
+        functionName: 'memo',
+        args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
         // Clear description: "Send <amount> <token> to <shortAddr> — AI Agent proposed, you approved"
       });
 
       setPayState('confirming');
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       setTxHash(hash);
 
       // ── Tell the server this spend actually happened, so the daily spend
@@ -404,7 +405,7 @@ export function AddEmployeeCard({
           functionName: 'updateCID', args: [cid],
           // Wallet will show: "Update employee database reference on-chain"
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await waitForSuccessfulReceipt(publicClient, hash);
       }
 
       setAddState('done');
@@ -538,7 +539,7 @@ export function EditEmployeeCard({
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await waitForSuccessfulReceipt(publicClient, hash);
       }
 
       setEditState('done');
@@ -648,7 +649,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await waitForSuccessfulReceipt(publicClient, hash);
       }
 
       setRemoveState('done');
@@ -757,7 +758,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
         });
-        await publicClient.waitForTransactionReceipt({ hash });
+        await waitForSuccessfulReceipt(publicClient, hash);
       }
 
       setAddState('done');

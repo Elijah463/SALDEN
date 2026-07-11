@@ -132,14 +132,18 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
       marginBottom:  "16px",
       alignItems:    "flex-start",
     }}>
-      <div style={{
-        width: "32px", height: "32px", borderRadius: "50%",
-        background:     isUser ? "#1E3A5F" : "#F1F5F9",
-        display:        "flex", alignItems: "center", justifyContent: "center",
-        fontSize: "14px", flexShrink: 0,
-      }}>
-        {isUser ? "👤" : "🤖"}
-      </div>
+      {!isUser && (
+        <div style={{
+          width: "32px", height: "32px", borderRadius: "50%",
+          background: "#FAFAF8",
+          border: "1px solid #F1F5F9",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0, overflow: "hidden",
+        }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/images/ai-avatar.png" alt="" width={22} height={22} style={{ objectFit: "contain" }} />
+        </div>
+      )}
 
       <div style={{ maxWidth: "75%", minWidth: "80px" }}>
         {!isUser && toolCalls && toolCalls.length > 0 && (

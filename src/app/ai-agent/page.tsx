@@ -29,7 +29,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { Settings2, RefreshCw, CheckCircle2, ExternalLink, Copy } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Copy } from 'lucide-react';
 import { useWalletClient, usePublicClient } from 'wagmi';
 import { AgentLayout }           from '@/components/agent/AgentLayout';
 import ChatInterface             from '@/components/agent/ChatInterface';
@@ -45,18 +45,6 @@ import {
 import { REGISTRY_FACTORY_ABI }  from '@/lib/contracts/abis';
 import { useCloneAccess }        from '@/lib/useCloneAccess';
 import type { ActivateResult }   from '@/lib/useAgentStatus';
-
-// ── Shared UI helpers ─────────────────────────────────────────────────────────
-
-function StatusDot({ active }: { active: boolean }) {
-  return (
-    <span style={{
-      display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-      background: active ? '#14B8A6' : '#94A3B8',
-      boxShadow: active ? '0 0 5px #14B8A6' : 'none', flexShrink: 0,
-    }} />
-  );
-}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -194,7 +182,7 @@ export default function AIAgentPage() {
 
   const payrollSync = usePayrollSync({ registryClone, address, publicClient, walletClient });
 
-  const { status, agentInfo, activating, activate, refresh } = useAgentStatus();
+  const { status, agentInfo, error: statusError, activating, activate, refresh } = useAgentStatus();
 
   const [activateResult, setActivateResult] = useState<ActivateResult | null>(null);
   const [autoTriggered,  setAutoTriggered]  = useState(false);
@@ -229,7 +217,7 @@ export default function AIAgentPage() {
       isPremiumUser      &&
       effectiveClone     &&
       !activating        &&
-      status === 'none'
+      (status === 'none' || status === 'error')
     ) {
       setAutoTriggered(true);
       activate()
@@ -254,6 +242,14 @@ export default function AIAgentPage() {
     isPremiumUser, effectiveClone, effectiveRegistry,
     status, activating, autoTriggered, activate, refresh,
   ]);
+
+  // Surface a failed STATUS CHECK the same way a failed activate() call is
+  // surfaced — reuses the existing "Agent Setup Failed" / Retry Setup UI
+  // below rather than needing a second error UI. Guards on !activateError
+  // so it doesn't clobber a more specific message from activate() itself.
+  useEffect(() => {
+    if (statusError && !activateError) setActivateError(statusError);
+  }, [statusError, activateError]);
 
   // ── Step 1: SaldenMultiTokenPayroll.addAgent(agentWallet) ─────────────────
   // Called by the Employer (owner). Grants batchPay / withdraw / addSupportedToken.
@@ -719,43 +715,6 @@ export default function AIAgentPage() {
         display: 'flex', flexDirection: 'column',
         gap: 16, height: 'calc(100vh - 120px)',
       }}>
-        <div style={{
-          display: 'flex', alignItems: 'center',
-          justifyContent: 'space-between', flexShrink: 0,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <StatusDot active />
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#059669' }}>
-              Agent Active
-            </span>
-            {agentInfo?.agentWallet && (
-              <span style={{
-                fontSize: 11, color: '#94A3B8',
-                fontFamily: "'JetBrains Mono', monospace",
-              }}>
-                {agentInfo.agentWallet.slice(0, 8)}…{agentInfo.agentWallet.slice(-4)}
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button
-              onClick={refresh}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                color: '#94A3B8', display: 'flex', alignItems: 'center',
-                gap: 4, fontSize: 12, fontFamily: 'inherit',
-              }}
-            >
-              <RefreshCw size={13} />
-            </button>
-            <Link href="/ai-agent/manage" style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              fontSize: 13, color: '#4F46E5', textDecoration: 'none', fontWeight: 600,
-            }}>
-              <Settings2 size={14} /> Manage
-            </Link>
-          </div>
-        </div>
         {payrollSync.syncAvailable && (
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',

@@ -284,7 +284,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [input]);
 
   // Resume a saved conversation. Guarded by loadedSessionIdRef so this only
@@ -498,26 +498,22 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       background: '#F8FAFC', borderRadius: '16px', border: '1px solid #E2E8F0',
       overflow: 'hidden', fontFamily: "'DM Sans', system-ui, sans-serif",
     }}>
-      {/* Header */}
-      <div style={{ padding: '16px 20px', background: '#1E3A5F', display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-        <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2">
-            <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-          </svg>
+      {/* New-chat control — only shown once there's a conversation to reset */}
+      {messages.length > 0 && (
+        <div style={{ padding: '10px 16px 0', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+          <button
+            onClick={resetConversation}
+            title="Start a new chat"
+            style={{
+              background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 8,
+              padding: '5px 12px', color: '#475569', fontSize: 12, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            + New chat
+          </button>
         </div>
-        <div>
-          <div style={{ color: '#FFF', fontWeight: 700, fontSize: 15 }}>Salden AI Payroll Agent</div>
-          <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12 }}>Gemini 2.5 Flash · Arc Testnet · {dailyCount}/{DAILY_LIMIT} req today</div>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {messages.length > 0 && (
-            <button onClick={resetConversation} title="New chat" style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 7, padding: '4px 10px', color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-              + New
-            </button>
-          )}
-          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#6EE7B7', boxShadow: '0 0 6px #6EE7B7' }} />
-        </div>
-      </div>
+      )}
 
       {dailyCount >= DAILY_WARN_AT && <UsageBanner count={dailyCount} />}
 
@@ -802,13 +798,14 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         </button>
         <textarea
           ref={textareaRef}
+          className="salden-chat-input"
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Ask me anything about payroll…"
+          placeholder="Chat Agent"
           rows={1}
           disabled={isLoading || isBlocked}
-          style={{ flex: 1, resize: 'none', border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 14px', fontSize: 14, fontFamily: 'inherit', color: '#0F172A', outline: 'none', background: isBlocked ? '#F8F9FA' : '#F8FAFC', lineHeight: 1.5, maxHeight: 120 }}
+          style={{ flex: 1, resize: 'none', border: '1px solid #E2E8F0', borderRadius: 12, padding: '11px 16px', fontSize: 14, fontFamily: 'inherit', color: '#0F172A', outline: 'none', background: isBlocked ? '#F8F9FA' : '#F8FAFC', lineHeight: 1.5, maxHeight: 200, transition: 'border-color 0.15s, background 0.15s' }}
         />
         <button
           onClick={() => { const att = pendingAttachment ? { mimeType: pendingAttachment.mimeType, data: pendingAttachment.data } : undefined; send(input, false, att); clearAttachment(); }}

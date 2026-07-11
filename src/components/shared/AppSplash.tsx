@@ -48,12 +48,6 @@ export function AppSplash({ children }: AppSplashProps) {
           pointerEvents: 'none',
         }}>
           <SaldenLogo size={56} />
-          <span style={{
-            fontSize: 28, fontWeight: 900, letterSpacing: '0.12em',
-            color: '#4F46E5', fontFamily: "'Plus Jakarta Sans', sans-serif",
-          }}>
-            SALDEN
-          </span>
         </div>
       )}
       <div style={{ opacity: fading || done ? 1 : 0, transition: 'opacity 0.3s ease 0.2s' }}>
