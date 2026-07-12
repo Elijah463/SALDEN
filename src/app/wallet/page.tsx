@@ -26,6 +26,7 @@ import { NetworkGuard }     from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { ERC20_ABI }        from '@/lib/contracts/abis';
 import { arcTestnet }       from '@/lib/contracts/config';
+import { copyToClipboard }  from '@/lib/clipboard';
 
 // Next.js statically replaces `process.env.NEXT_PUBLIC_X` at build time only
 // when it sees that exact literal expression in source — `process.env[someVar]`
@@ -47,11 +48,8 @@ const TOKENS = [
     symbol: 'USDC', name: 'USD Coin', color: '#2775CA', bgColor: '#EFF6FF',
     fromNative: true, decimals: 6,
     icon: (
-      <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-        <circle cx="16" cy="16" r="16" fill="#2775CA"/>
-        <text x="16" y="21" textAnchor="middle" fill="white" fontSize="13"
-          fontWeight="bold" fontFamily="Arial">$</text>
-      </svg>
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src="/images/tokens/usdc.webp" alt="USDC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
   {
@@ -59,11 +57,8 @@ const TOKENS = [
     fromNative: false, decimals: 6,
     envKey: 'NEXT_PUBLIC_EURC_ADDRESS',
     icon: (
-      <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-        <circle cx="16" cy="16" r="16" fill="#1B3A6B"/>
-        <text x="16" y="21" textAnchor="middle" fill="white" fontSize="14"
-          fontWeight="bold" fontFamily="Arial">€</text>
-      </svg>
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src="/images/tokens/eurc.svg" alt="EURC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
   {
@@ -71,11 +66,8 @@ const TOKENS = [
     fromNative: false, decimals: 8,
     envKey: 'NEXT_PUBLIC_CIRBTC_ADDRESS',
     icon: (
-      <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-        <circle cx="16" cy="16" r="16" fill="#F7931A"/>
-        <text x="16" y="21" textAnchor="middle" fill="white" fontSize="12"
-          fontWeight="bold" fontFamily="Arial">₿</text>
-      </svg>
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src="/images/tokens/cirbtc.png" alt="cirBTC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
 ];
@@ -193,11 +185,10 @@ export default function WalletPage() {
 
   useEffect(() => { if (address) fetchErc20(); }, [address, fetchErc20]);
 
-  function handleCopy() {
+  async function handleCopy() {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(address);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   }
 
   return (

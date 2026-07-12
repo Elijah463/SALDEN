@@ -45,13 +45,13 @@ import {
 import { REGISTRY_FACTORY_ABI }  from '@/lib/contracts/abis';
 import { useCloneAccess }        from '@/lib/useCloneAccess';
 import type { ActivateResult }   from '@/lib/useAgentStatus';
+import { copyToClipboard } from '@/lib/clipboard';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
-  function copy() {
-    navigator.clipboard.writeText(text)
-      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
-      .catch(() => {});
+  async function copy() {
+    const ok = await copyToClipboard(text);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
   }
   return (
     <button onClick={copy} title="Copy address" style={{

@@ -51,6 +51,23 @@ export const DEFAULT_TOKEN_REGISTRY: TokenRegistry = USDC_ADDRESS ? {
   },
 } : {};
 
+/**
+ * Real token logos, shared by every page that lists tokens (wallet
+ * balances, the send-token dropdown, etc.) — one place to update instead
+ * of each page hand-drawing its own placeholder icon.
+ */
+export const TOKEN_ICON_PATHS: Record<string, string> = {
+  USDC:   '/images/tokens/usdc.webp',
+  EURC:   '/images/tokens/eurc.svg',
+  cirBTC: '/images/tokens/cirbtc.png',
+};
+
+/** Icon path for a symbol, or null if there's no real logo for it (caller
+ *  should fall back to a generic placeholder — e.g. first-letter circle). */
+export function tokenIconPath(symbol: string): string | null {
+  return TOKEN_ICON_PATHS[symbol] ?? null;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Lookup token entry by address (case-insensitive) */

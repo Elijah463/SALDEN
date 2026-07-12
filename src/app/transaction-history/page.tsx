@@ -24,6 +24,7 @@ import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
 import { txLink }              from '@/lib/contracts/config';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { copyToClipboard } from '@/lib/clipboard';
 import { format, startOfMonth } from 'date-fns';
 
 // ── Dynamic Y-axis ticks ───────────────────────────────────────────────────────
@@ -163,7 +164,7 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#475569', flex: 1 }}>
             {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
           </span>
-          <button onClick={() => { navigator.clipboard?.writeText(tx.hash); setCopied(true); setTimeout(() => setCopied(false), 1800); }}
+          <button onClick={async () => { const ok = await copyToClipboard(tx.hash); if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1800); } }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied ? '#14B8A6' : '#94A3B8', padding: 0 }}>
             <Copy size={13} />
           </button>

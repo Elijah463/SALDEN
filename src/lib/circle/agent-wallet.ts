@@ -4,31 +4,134 @@
  *
  * Manages the AI Agent's developer-controlled Circle wallet using:
  * - CIRCLE_API_KEY (developer API key)
- * - CIRCLE_ENTITY_SECRET (entity secret for signing)
+ * - CIRCLE_ENTITY_SECRET (32-byte hex-encoded entity secret)
+ * - CIRCLE_WALLET_SET_ID (the wallet set every agent wallet is created under)
  * - NEXT_PUBLIC_CIRCLE_APP_ID (app ID)
  *
  * The agent wallet is a developer-controlled wallet owned by Salden.
  * It can be authorised (via addAgent on the payroll contract) to execute
  * batch payments on behalf of the employer.
  *
- * Circle SDK: @circle-fin/developer-controlled-wallets
+ * ── Entity secret ciphertext — this file's biggest fix ────────────────────
+ * Every "critical" (mutating) Developer-Controlled Wallets endpoint —
+ * create wallet, execute a contract call, transfer — requires an
+ * `entitySecretCiphertext` field IN THE REQUEST BODY: the raw 32-byte
+ * entity secret, RSA-OAEP(SHA-256) encrypted with Circle's published
+ * public key, then base64-encoded. It must be freshly generated for
+ * EVERY request — Circle rejects a reused ciphertext outright as a
+ * replay-attack guard. See:
+ *   https://developers.circle.com/wallets/dev-controlled/entity-secret-management
+ *   https://github.com/circlefin/w3s-entity-secret-sample-code
+ *
+ * A previous version of this file sent the RAW entity secret as an
+ * `X-Entity-Secret-Ciphertext` HTTP header — not encrypted, and not even
+ * in the body. That was never going to work; Circle's API has no such
+ * header at all. Combined with a missing `walletSetId` and a
+ * non-UUID `idempotencyKey` (also required, also rejected), every single
+ * developer-controlled-wallet mutation in this codebase was guaranteed to
+ * fail with exactly the "field may not be empty" / "not in the correct
+ * UUID format" errors this was built to fix.
+ *
+ * getEntitySecretCiphertext() below implements the real encryption using
+ * Node's built-in `crypto` module (no SDK dependency needed for this —
+ * it's ~15 lines once you have the algorithm right, which is the part
+ * that actually took verifying against Circle's docs). Circle's public
+ * key is fetched once and cached in module scope (the KEY itself is
+ * static; only the ciphertext must be fresh per-request, which this
+ * still does every time it's called).
  */
+
+import { publicEncrypt, constants as cryptoConstants, createHash } from 'crypto';
 
 const CIRCLE_API_BASE = 'https://api.circle.com/v1/w3s';
 
-/** Build headers per-call so env vars are resolved at runtime, not build time */
+/** Build headers per-call so env vars are resolved at runtime, not build time.
+ *  NOTE: entitySecretCiphertext is deliberately NOT a header — see file
+ *  header. It belongs in the body of each individual mutating request,
+ *  freshly generated every time; see getEntitySecretCiphertext(). */
 function getHeaders(): Record<string, string> {
-  const apiKey       = process.env.CIRCLE_API_KEY ?? '';
-  const entitySecret = process.env.CIRCLE_ENTITY_SECRET ?? '';
-
-  if (!apiKey)       throw new Error('CIRCLE_API_KEY is not set');
-  if (!entitySecret) throw new Error('CIRCLE_ENTITY_SECRET is not set');
+  const apiKey = process.env.CIRCLE_API_KEY ?? '';
+  if (!apiKey) throw new Error('CIRCLE_API_KEY is not set');
 
   return {
-    'Content-Type':              'application/json',
-    'Authorization':             `Bearer ${apiKey}`,
-    'X-Entity-Secret-Ciphertext': entitySecret,
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${apiKey}`,
   };
+}
+
+// ── Entity secret ciphertext (real implementation) ─────────────────────────
+
+let cachedPublicKeyPem: string | null = null;
+
+async function fetchEntityPublicKey(): Promise<string> {
+  if (cachedPublicKeyPem) return cachedPublicKeyPem;
+
+  const res = await fetch(`${CIRCLE_API_BASE}/config/entity/publicKey`, {
+    headers: getHeaders(),
+  });
+  if (!res.ok) throw new Error('Could not fetch Circle entity public key');
+
+  const data = await res.json();
+  const publicKey: string | undefined = data.data?.publicKey;
+  if (!publicKey) throw new Error('Circle entity public key response was missing publicKey');
+
+  cachedPublicKeyPem = publicKey;
+  return publicKey;
+}
+
+/**
+ * Encrypts CIRCLE_ENTITY_SECRET (32-byte hex string) with Circle's public
+ * key using RSA-OAEP/SHA-256, per their documented algorithm. MUST be
+ * called fresh for every mutating request — never cache or reuse the
+ * returned ciphertext, Circle rejects reused ones as replay attempts.
+ */
+async function getEntitySecretCiphertext(): Promise<string> {
+  const entitySecretHex = process.env.CIRCLE_ENTITY_SECRET ?? '';
+  if (!entitySecretHex) throw new Error('CIRCLE_ENTITY_SECRET is not set');
+
+  const entitySecretBuffer = Buffer.from(entitySecretHex, 'hex');
+  if (entitySecretBuffer.length !== 32) {
+    throw new Error(
+      `CIRCLE_ENTITY_SECRET must be a 32-byte hex-encoded string (64 hex chars) — got ${entitySecretBuffer.length} bytes. Generate one with Circle's entity-secret sample code, not an arbitrary string.`,
+    );
+  }
+
+  const publicKeyPem = await fetchEntityPublicKey();
+
+  const ciphertext = publicEncrypt(
+    {
+      key:      publicKeyPem,
+      padding:  cryptoConstants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: 'sha256',
+    },
+    entitySecretBuffer,
+  );
+
+  return ciphertext.toString('base64');
+}
+
+// ── Deterministic UUID v5 — Circle requires idempotencyKey to be a real
+// UUID, not an arbitrary string. This codebase's design intentionally
+// derives a STABLE key per employer wallet (see agentIdentity.ts) so a
+// retried/duplicate activate() call returns the same Circle wallet
+// instead of creating a second one — that idempotency behavior still
+// needs to work, it just needs to produce valid UUID syntax. UUID v5
+// (RFC 4122 §4.3, SHA-1 based) turns an arbitrary string into a stable,
+// deterministic UUID: same input always produces the same UUID, with no
+// external state or database needed.
+const SALDEN_UUID_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'; // DNS namespace UUID — used only as a fixed seed, not semantically meaningful here
+
+function toUUIDv5(name: string): string {
+  const namespaceBytes = Buffer.from(SALDEN_UUID_NAMESPACE.replace(/-/g, ''), 'hex');
+  const nameBytes = Buffer.from(name, 'utf8');
+  const hash = createHash('sha1').update(Buffer.concat([namespaceBytes, nameBytes])).digest();
+
+  const bytes = Buffer.from(hash.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x50; // version 5
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 export interface AgentWalletInfo {
@@ -43,11 +146,23 @@ export interface AgentWalletInfo {
 export async function createAgentWallet(
   idempotencyKey: string
 ): Promise<AgentWalletInfo> {
+  const walletSetId = process.env.CIRCLE_WALLET_SET_ID ?? '';
+  if (!walletSetId) throw new Error('CIRCLE_WALLET_SET_ID is not set — create one via POST /v1/w3s/developer/walletSets once and store its id');
+
+  const entitySecretCiphertext = await getEntitySecretCiphertext();
+
   const res = await fetch(`${CIRCLE_API_BASE}/developer/wallets`, {
     method:  'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      idempotencyKey,
+      // Circle requires real UUID syntax here — `idempotencyKey` as passed
+      // in by callers (e.g. `salden-agent-0xbe2e...`) is not one, so it's
+      // deterministically mapped to a UUID. The original string is still
+      // used as `refId` below unchanged, so getAgentWalletByRefId() lookups
+      // are unaffected.
+      idempotencyKey: toUUIDv5(idempotencyKey),
+      walletSetId,
+      entitySecretCiphertext,
       blockchains: ['ETH'],           // Arc Testnet uses ETH-compatible addresses
       accountType: 'EOA',
       metadata: [{ name: 'Salden AI Agent Wallet', refId: idempotencyKey }],
@@ -60,7 +175,7 @@ export async function createAgentWallet(
   }
 
   const data = await res.json();
-  const wallet = data.data?.wallet;
+  const wallet = data.data?.wallets?.[0] ?? data.data?.wallet;
   return {
     walletId:   wallet.id,
     address:    wallet.address,
@@ -147,11 +262,14 @@ export interface TxResponse {
 export async function executeContractCall(
   params: ContractCallTxParams
 ): Promise<TxResponse> {
+  const entitySecretCiphertext = await getEntitySecretCiphertext();
+
   const res = await fetch(`${CIRCLE_API_BASE}/developer/transactions/contractExecution`, {
     method:  'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      idempotencyKey:       params.idempotencyKey,
+      idempotencyKey:       toUUIDv5(params.idempotencyKey),
+      entitySecretCiphertext,
       walletId:             params.walletId,
       contractAddress:      params.contractAddress,
       abiFunctionSignature: params.abiFunctionSignature,
@@ -229,11 +347,14 @@ export async function sendUSDC(params: {
   tokenId:      string;   // Circle USDC token ID
   idempotencyKey: string;
 }): Promise<TxResponse> {
+  const entitySecretCiphertext = await getEntitySecretCiphertext();
+
   const res = await fetch(`${CIRCLE_API_BASE}/developer/transactions/transfer`, {
     method:  'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      idempotencyKey: params.idempotencyKey,
+      idempotencyKey: toUUIDv5(params.idempotencyKey),
+      entitySecretCiphertext,
       walletId:       params.fromWalletId,
       destinationAddress: params.toAddress,
       amounts:        [params.amount],

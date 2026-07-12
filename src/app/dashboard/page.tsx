@@ -24,11 +24,12 @@ import { encodeFunctionData, keccak256 } from 'viem';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { useApp }         from '@/context/AppContext';
 import { Modal }          from '@/components/shared/Modal';
-import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { useCloneAccess } from '@/lib/useCloneAccess';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { copyToClipboard } from '@/lib/clipboard';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
 import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
@@ -77,7 +78,7 @@ const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
 
 function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const { dispatch } = useApp();
-  const { address }            = useEffectiveAddress();
+  const { address, loginMethod } = useEffectiveAddress();
   const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
 
@@ -112,7 +113,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
     if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.push('A valid email is required.');
     if (!empRange) errs.push('Please select how many employees or recipients you plan to pay.');
     if (errs.length) { setErrors(errs); return; }
-    if (!walletClient || !publicClient || !address) { setErrors(['Connect your wallet first.']); return; }
+    if (!walletClient || !publicClient || !address) { setErrors([walletRequiredMessage(loginMethod)]); return; }
 
     setSubmitting(true); setErrors([]);
     try {
@@ -601,11 +602,15 @@ export default function DashboardPage() {
     ? Number(nativeBalance.formatted).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '0.00';
 
-  function handleCopyAddress() {
+  async function handleCopyAddress() {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(address);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      addToast('Could not copy — press and hold the address to copy it manually.', 'error', 3000);
+    }
   }
 
   // ── Search ─────────────────────────────────────────────────────────────────
@@ -1251,7 +1256,7 @@ export default function DashboardPage() {
                         <td style={{ padding: '12px 20px', fontSize: 14, fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>{emp.fullName}</td>
                         <td style={{ padding: '12px 20px', fontSize: 13, color: '#475569', whiteSpace: 'nowrap' }}>{emp.department}</td>
                         <td style={{ padding: '12px 20px' }}>
-                          <button onClick={e => { e.stopPropagation(); navigator.clipboard?.writeText(emp.walletAddress); addToast('Address copied', 'success', 1500); }}
+                          <button onClick={async e => { e.stopPropagation(); const ok = await copyToClipboard(emp.walletAddress); addToast(ok ? 'Address copied' : 'Could not copy address', ok ? 'success' : 'error', 1500); }}
                             style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', gap: 5 }}
                             title={emp.walletAddress}>
                             {truncAddr(emp.walletAddress)} <Copy size={11} color="#94A3B8" />

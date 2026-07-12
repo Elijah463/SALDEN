@@ -21,8 +21,8 @@ export function Button({
 }: ButtonProps) {
   const colors: Record<string, { bg: string; hover: string; text: string; border?: string }> = {
     primary: { bg: '#14B8A6', hover: '#0D9488', text: '#fff' },
-    brand:   { bg: '#4F46E5', hover: '#3730A3', text: '#fff' },
-    outline: { bg: 'transparent', hover: '#EEF2FF', text: '#4F46E5', border: '1.5px solid #4F46E5' },
+    brand:   { bg: '#14B8A6', hover: '#0D9488', text: '#fff' },
+    outline: { bg: 'transparent', hover: '#F0FDFA', text: '#14B8A6', border: '1.5px solid #14B8A6' },
     ghost:   { bg: 'transparent', hover: '#F1F5F9', text: '#64748B', border: '1.5px solid #E2E8F0' },
     danger:  { bg: '#DC2626', hover: '#B91C1C', text: '#fff' },
   };

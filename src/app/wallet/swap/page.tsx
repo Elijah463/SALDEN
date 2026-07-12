@@ -225,7 +225,7 @@ type SwapStep = 'approve' | 'swap' | 'confirm' | '';
 
 export default function SwapPage() {
   const router = useRouter();
-  const { isConnected } = useEffectiveAddress();
+  const { isConnected, loginMethod } = useEffectiveAddress();
   const { adapter, isAdapterReady, loading: adapterLoading, error: adapterError } = useCircleAdapter();
 
   const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(null);
@@ -319,7 +319,15 @@ export default function SwapPage() {
   const canSwap = tokenIn && tokenOut && amountIn && parseFloat(amountIn) > 0 && !swapping && isAdapterReady;
 
   // ── External-wallet-only notice ──────────────────────────────────────────
-  const isCircleSocialLogin = isConnected && !isAdapterReady && !adapterLoading;
+  // NOTE: this used to infer "must be Circle social login" purely from
+  // "the adapter isn't ready yet" (isConnected && !isAdapterReady &&
+  // !adapterLoading) — but the adapter can fail to become ready for a
+  // genuinely external wallet too (a slow/failed provider resolution,
+  // an adapter construction error), which wrongly told real
+  // external-wallet users they needed to connect an external wallet.
+  // Check the actual login method instead — it's the real source of
+  // truth, not an inference from adapter state.
+  const isCircleSocialLogin = loginMethod === 'circle';
 
   return (
     <NetworkGuard>

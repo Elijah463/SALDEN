@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Copy, CheckCircle2, CreditCard, Building2, Wallet } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { copyToClipboard } from '@/lib/clipboard';
 
 function QRCode({ address }: { address: string }) {
   // Simple SVG QR placeholder — in production integrate qrcode.react
@@ -96,11 +97,10 @@ export default function DepositPage() {
   const [view, setView] = useState<'options' | 'qr'>('options');
   const [copied, setCopied] = useState(false);
 
-  function handleCopy() {
+  async function handleCopy() {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(address);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   }
 
   return (

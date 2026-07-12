@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react';
-import { useAccount, useWalletClient, usePublicClient } from 'wagmi';
+import { useWalletClient, usePublicClient } from 'wagmi';
 import {
   CheckCircle2, Zap, Users, Bot, Shield, Globe,
   Loader2, ArrowRight, Lock, Star,
@@ -20,6 +20,7 @@ import { useApp }             from '@/context/AppContext';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { trackClientEvent } from '@/lib/analyticsClient';
+import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
 function Row({ label, free, premium }: { label: string; free: boolean | string; premium: boolean | string }) {
@@ -42,7 +43,7 @@ function Row({ label, free, premium }: { label: string; free: boolean | string; 
 type DeployStep = 'idle' | 'approving' | 'deploying' | 'done' | 'error';
 
 export default function PricingPage() {
-  const { address }      = useAccount();
+  const { address, loginMethod } = useEffectiveAddress();
   const { data: wallet } = useWalletClient();
   const publicClient     = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast } = useApp();
@@ -53,7 +54,7 @@ export default function PricingPage() {
   const [errMsg, setErrMsg] = useState('');
 
   async function handleUpgrade() {
-    if (!address || !wallet || !publicClient) { addToast('Connect your wallet first.', 'error'); return; }
+    if (!address || !wallet || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
     if (isPremiumUser) { addToast('You are already on the Premium plan.', 'info'); return; }
 
     setStep('approving'); setErrMsg('');

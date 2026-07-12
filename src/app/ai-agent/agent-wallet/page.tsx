@@ -12,6 +12,7 @@ import { AgentLayout } from '@/components/agent/AgentLayout';
 import { useAgentStatus } from '@/lib/useAgentStatus';
 import { ERC20_ABI }     from '@/lib/contracts/abis';
 import { arcTestnet }    from '@/lib/contracts/config';
+import { copyToClipboard } from '@/lib/clipboard';
 
 const TOKENS = [
   { symbol: 'USDC',   name: 'USD Coin',      color: '#2775CA', bg: '#EFF6FF', decimals: 6,
@@ -58,10 +59,10 @@ export default function AgentWalletPage() {
 
   useEffect(() => { if (agentAddr) fetchTokens(); }, [agentAddr, fetchTokens]);
 
-  function copy() {
+  async function copy() {
     if (!agentAddr) return;
-    navigator.clipboard?.writeText(agentAddr);
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(agentAddr);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   }
 
   const balStr = nativeBal
@@ -94,7 +95,7 @@ export default function AgentWalletPage() {
           {/* Deposit shortcut */}
           <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8, position: 'relative' }}>
             <button
-              onClick={() => agentAddr && navigator.clipboard?.writeText(agentAddr)}
+              onClick={copy}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', color: '#fff', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
               <ArrowDownToLine size={14} /> Deposit — copy address above
             </button>
