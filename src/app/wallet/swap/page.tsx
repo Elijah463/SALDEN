@@ -32,6 +32,7 @@ import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useCircleAdapter }    from '@/lib/circle/useCircleAdapter';
 import { getAppKit }           from '@/lib/circle/appKit';
 import { txLink }              from '@/lib/contracts/config';
+import { TOKEN_ICON_PATHS }    from '@/lib/token-registry';
 
 // ── Supported tokens on Arc Testnet ─────────────────────────────────────────
 
@@ -54,6 +55,14 @@ const TOKENS: TokenMeta[] = [
 // ── Token Selector ───────────────────────────────────────────────────────────
 
 function TokenIcon({ token, size = 28 }: { token: TokenMeta; size?: number }) {
+  const iconPath = TOKEN_ICON_PATHS[token.symbol];
+  if (iconPath) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={iconPath} alt={token.symbol} width={size} height={size}
+        style={{ borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+    );
+  }
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%',
@@ -88,8 +97,7 @@ function TokenSelector({
       >
         {value
           ? <><TokenIcon token={value} size={20} /> {value.symbol}</>
-          : <span style={{ color: '#4F46E5' }}>Select</span>
-        }
+          : <span style={{ color: '#14B8A6' }}>Select</span>}
         <ChevronDown size={13} color="#94A3B8" style={{ marginLeft: 'auto' }} />
       </button>
 
@@ -334,7 +342,7 @@ export default function SwapPage() {
       <AppLayout title="Swap">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <button onClick={() => router.back()}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#4F46E5', fontFamily: 'inherit', padding: 0 }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
             <ArrowLeft size={16} /> Back
           </button>
 
@@ -388,10 +396,10 @@ export default function SwapPage() {
                       cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                       boxShadow: '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.15s',
                     }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#EEF2FF'; }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#F0FDFA'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#fff'; }}
                   >
-                    <ArrowDown size={16} color="#4F46E5" />
+                    <ArrowDown size={16} color="#14B8A6" />
                   </button>
                 </div>
 
@@ -454,8 +462,8 @@ export default function SwapPage() {
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#ECFDF5', border: '2px solid #6EE7B7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <CheckCircle2 size={32} color="#059669" />
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <CheckCircle2 size={32} color="#fff" fill="#059669" />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Swap Successful</h3>
               {amountOut && (

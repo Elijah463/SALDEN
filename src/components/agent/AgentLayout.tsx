@@ -207,12 +207,12 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
               width: '100%', display: 'flex', alignItems: 'center',
               justifyContent: 'center', gap: 8,
               padding: '12px 0', borderRadius: 12,
-              background: '#4F46E5', border: 'none',
+              background: '#14B8A6', border: 'none',
               color: '#fff', fontSize: 14, fontWeight: 700,
               cursor: 'pointer', fontFamily: 'inherit',
               transition: 'background 0.15s',
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#4338CA'; }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#0D9488'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#4F46E5'; }}
           >
             <PlusCircle size={16} /> New Chat

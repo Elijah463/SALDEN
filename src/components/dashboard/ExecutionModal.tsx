@@ -83,12 +83,12 @@ export function ExecutionModal({ state, statusText, progress, txHash, error, onC
           {state === 'success' && (
             <div style={{
               width: 72, height: 72, borderRadius: '50%',
-              background: '#ECFDF5', border: '3px solid #6EE7B7',
+              background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               margin: '0 auto',
               animation: 'exec-pop 0.3s cubic-bezier(0.34,1.56,0.64,1)',
             }}>
-              <CheckCircle2 size={38} color="#059669" />
+              <CheckCircle2 size={38} color="#fff" fill="#059669" />
             </div>
           )}
           {state === 'failed' && (

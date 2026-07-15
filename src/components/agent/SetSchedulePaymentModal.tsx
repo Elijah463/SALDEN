@@ -105,7 +105,7 @@ function DateTimePicker({
                 onClick={() => day !== null && pickDay(day)}
                 style={{
                   aspectRatio: '1', border: 'none', borderRadius: 8, fontSize: 12,
-                  background: isSelected ? '#4F46E5' : 'transparent',
+                  background: isSelected ? '#14B8A6' : 'transparent',
                   color: day === null ? 'transparent' : isSelected ? '#fff' : '#334155',
                   cursor: day === null ? 'default' : 'pointer', fontWeight: isSelected ? 700 : 400,
                 }}
@@ -139,7 +139,7 @@ function DateTimePicker({
           }}>Cancel</button>
           <button onClick={handleSet} style={{
             flex: 1, padding: '10px 0', borderRadius: 8, border: 'none',
-            background: '#4F46E5', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+            background: '#14B8A6', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
           }}>Set</button>
         </div>
       </div>
@@ -278,7 +278,7 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
             disabled={saving}
             style={{
               width: '100%', padding: '12px 0', borderRadius: 10, border: 'none',
-              background: '#4F46E5', color: '#fff', fontSize: 14, fontWeight: 700,
+              background: '#14B8A6', color: '#fff', fontSize: 14, fontWeight: 700,
               cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
             }}
           >

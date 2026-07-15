@@ -72,8 +72,8 @@ export function RecurringPaymentModal({ open, schedule, onClose, onUpdated, sync
               onClick={() => setSelected(opt.value)}
               style={{
                 textAlign: 'left', padding: '12px 14px', borderRadius: 10,
-                border: selected === opt.value ? '2px solid #4F46E5' : '1px solid #E2E8F0',
-                background: selected === opt.value ? '#EEF2FF' : '#fff', cursor: 'pointer',
+                border: selected === opt.value ? '2px solid #14B8A6' : '1px solid #E2E8F0',
+                background: selected === opt.value ? '#F0FDFA' : '#fff', cursor: 'pointer',
               }}
             >
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{opt.label}</div>
@@ -89,7 +89,7 @@ export function RecurringPaymentModal({ open, schedule, onClose, onUpdated, sync
           }}>Cancel</button>
           <button onClick={handleConfirm} disabled={saving} style={{
             flex: 1, padding: '10px 0', borderRadius: 8, border: 'none',
-            background: '#4F46E5', color: '#fff', fontSize: 13, fontWeight: 700,
+            background: '#14B8A6', color: '#fff', fontSize: 13, fontWeight: 700,
             cursor: saving ? 'default' : 'pointer', opacity: saving ? 0.6 : 1,
           }}>
             {saving ? 'Saving…' : 'Confirm'}

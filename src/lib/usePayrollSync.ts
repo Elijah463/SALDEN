@@ -40,6 +40,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 
 export type PayrollSyncStatus = 'idle' | 'checking' | 'loading' | 'done' | 'error';
 
@@ -53,15 +54,11 @@ interface MinimalPublicClient {
     args: readonly unknown[];
   }) => Promise<unknown>;
 }
-interface MinimalWalletClient {
-  signMessage: (args: { message: string }) => Promise<string>;
-}
 
 interface UsePayrollSyncOpts {
   registryClone: string | null | undefined;
   address:       string | null | undefined;
   publicClient:  MinimalPublicClient | undefined;
-  walletClient:  MinimalWalletClient | undefined;
   /** Minimum time between focus-triggered re-checks, in ms. Default 60s —
    *  frequent enough to catch real changes, cheap enough (one RPC read) to
    *  not matter if the user tabs back and forth a lot. */
@@ -73,28 +70,36 @@ interface UsePayrollSyncOpts {
 const ZERO_HASH = ('0x' + '0'.repeat(64)) as `0x${string}`;
 
 export function usePayrollSync({
-  registryClone, address, publicClient, walletClient, refocusThrottleMs = 60_000,
+  registryClone, address, publicClient, refocusThrottleMs = 60_000,
 }: UsePayrollSyncOpts) {
   const { state, dispatch, hydrateFromCache, loadData, addToast } = useApp();
   const [status, setStatus] = useState<PayrollSyncStatus>('idle');
   const [currentCid, setCurrentCid] = useState<string | null>(null);
   const lastCheckedAt = useRef<number>(0);
   const inFlight      = useRef(false);
+  // signMessage here branches to wagmi (external wallet) or a Circle
+  // SIGN_MESSAGE challenge (social login) — see useUniversalWrite.ts.
+  // This used to require a wagmi walletClient directly, which meant
+  // social-login users' sync silently gave up (see the old `if
+  // (!walletClient) { setStatus('done'); return; }` below, now removed)
+  // — their employee data, and anything downstream of it like
+  // payrollSetup.email, simply never loaded, with no error shown.
+  const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
   // Identical sessionStorage key format to dashboard/page.tsx's own `sign`
   // helper (by design) — the two transparently share a cached signature
   // within the same tab instead of double-prompting the wallet.
   const sign = useCallback(async (msg: string): Promise<string> => {
-    if (!walletClient || !address) throw new Error('No wallet');
+    if (!address) throw new Error('No wallet');
     const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
     try {
       const cached = sessionStorage.getItem(storageKey);
       if (cached) return cached;
     } catch { /* sessionStorage blocked (private browsing edge cases) */ }
-    const sig = await walletClient.signMessage({ message: msg });
+    const sig = await universalSignMessage(msg);
     try { sessionStorage.setItem(storageKey, sig); } catch { /* ignore write errors */ }
     return sig;
-  }, [walletClient, address]);
+  }, [universalSignMessage, address]);
 
   const runCheck = useCallback(async () => {
     if (!registryClone || !address || !publicClient) return;
@@ -145,11 +150,27 @@ export function usePayrollSync({
         // Nothing on screen to lose — load silently (first-ever visit, or
         // an empty local cache). This matches the previous dashboard-only
         // "load if empty" behaviour, now available on every page.
-        if (!walletClient) { setStatus('done'); return; }
+        //
+        // Previously bailed out here with `if (!walletClient) { setStatus
+        // ('done'); return; }` — silently finishing with zero data loaded
+        // for every social-login user (wagmi never has a walletClient for
+        // a Circle session), with no error shown at all. sign() now
+        // routes through useUniversalWrite, which works for both wallet
+        // types, so there's no reason to give up before even trying.
         setStatus('loading');
-        const { loaded } = await loadData({ walletAddress: address, cid, signMessage: sign });
-        setStatus('done');
-        if (loaded) { setCurrentCid(cid); addToast('Restored your employee data.', 'success'); }
+        try {
+          const { loaded } = await loadData({ walletAddress: address, cid, signMessage: sign });
+          setStatus('done');
+          if (loaded) { setCurrentCid(cid); addToast('Restored your employee data.', 'success'); }
+        } catch (signErr) {
+          // A declined/failed signature is a real, user-visible outcome —
+          // surface it instead of silently finishing "done" with nothing
+          // loaded, which is what made this look like sync was just
+          // broken with no explanation.
+          console.error('[usePayrollSync] Could not sign to load data:', signErr);
+          setStatus('error');
+          addToast((signErr as Error).message || 'Could not load your employee data — please try again.', 'warning');
+        }
       } else {
         // There's already data on screen — do not silently overwrite it.
         // Surface the prompt and let the user decide via syncNow().
@@ -162,7 +183,7 @@ export function usePayrollSync({
     } finally {
       inFlight.current = false;
     }
-  }, [registryClone, address, publicClient, walletClient, hydrateFromCache, loadData, dispatch, sign, addToast, state.employees.length]);
+  }, [registryClone, address, publicClient, canWrite, hydrateFromCache, loadData, dispatch, sign, addToast, state.employees.length]);
 
   // Initial check once the registry clone + wallet are known.
   useEffect(() => {

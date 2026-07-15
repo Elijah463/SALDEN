@@ -503,7 +503,7 @@ export default function SettingsPage() {
               <a href="/pricing" style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '9px 18px', borderRadius: 10,
-                background: '#4F46E5', color: '#fff',
+                background: '#14B8A6', color: '#fff',
                 fontSize: 13, fontWeight: 600, textDecoration: 'none',
               }}>
                 <Zap size={14} /> Upgrade to Premium

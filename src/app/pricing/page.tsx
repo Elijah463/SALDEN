@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react';
-import { useWalletClient, usePublicClient } from 'wagmi';
+import { usePublicClient } from 'wagmi';
 import {
   CheckCircle2, Zap, Users, Bot, Shield, Globe,
   Loader2, ArrowRight, Lock, Star,
@@ -21,6 +21,8 @@ import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
 function Row({ label, free, premium }: { label: string; free: boolean | string; premium: boolean | string }) {
@@ -44,7 +46,7 @@ type DeployStep = 'idle' | 'approving' | 'deploying' | 'done' | 'error';
 
 export default function PricingPage() {
   const { address, loginMethod } = useEffectiveAddress();
-  const { data: wallet } = useWalletClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const publicClient     = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast } = useApp();
   const { isPremiumUser } = state;
@@ -54,7 +56,7 @@ export default function PricingPage() {
   const [errMsg, setErrMsg] = useState('');
 
   async function handleUpgrade() {
-    if (!address || !wallet || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
+    if (!address || !canWrite || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
     if (isPremiumUser) { addToast('You are already on the Premium plan.', 'info'); return; }
 
     setStep('approving'); setErrMsg('');
@@ -63,17 +65,17 @@ export default function PricingPage() {
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
       }) as bigint;
 
-      const approveTx = await wallet.writeContract({
+      const approveTx = await universalWrite({
         address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'approve',
         args: [CONTRACTS.MULTI_TOKEN_FACTORY, deployFee],
       });
-      await publicClient.waitForTransactionReceipt({ hash: approveTx });
+      await waitForSuccessfulReceipt(publicClient, approveTx);
 
       setStep('deploying');
-      const deployTx = await wallet.writeContract({
+      const deployTx = await universalWrite({
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployPayroll', args: [],
       });
-      await publicClient.waitForTransactionReceipt({ hash: deployTx });
+      await waitForSuccessfulReceipt(publicClient, deployTx);
       setTxHash(deployTx);
 
       const cloneAddr = await publicClient.readContract({

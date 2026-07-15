@@ -262,7 +262,7 @@ export function OTPForm() {
           style={{
             width: '100%', padding: '14px 18px',
             fontSize: 22, fontWeight: 700,
-            letterSpacing: '0.25em', textAlign: 'center',
+            letterSpacing: '0.25em', textAlign: 'left',
             border: `2px solid ${error ? '#FCA5A5' : code.length === OTP_LENGTH ? '#4F46E5' : '#E2E8F0'}`,
             borderRadius: 12, outline: 'none',
             fontFamily: 'inherit', color: '#0F172A',
@@ -297,7 +297,7 @@ export function OTPForm() {
           style={{
             width: '100%', padding: '13px 0', fontSize: 15, fontWeight: 700,
             borderRadius: 12, border: 'none',
-            background: isBusy || code.length < OTP_LENGTH ? '#E2E8F0' : '#4F46E5',
+            background: isBusy || code.length < OTP_LENGTH ? '#E2E8F0' : '#14B8A6',
             color: isBusy || code.length < OTP_LENGTH ? '#94A3B8' : '#fff',
             cursor: isBusy || code.length < OTP_LENGTH ? 'not-allowed' : 'pointer',
             fontFamily: 'inherit', display: 'flex', alignItems: 'center',
@@ -318,7 +318,7 @@ export function OTPForm() {
               background: 'none', border: 'none',
               cursor: cooldown > 0 ? 'not-allowed' : 'pointer',
               fontSize: 13, fontWeight: 600,
-              color: cooldown > 0 ? '#94A3B8' : '#4F46E5',
+              color: cooldown > 0 ? '#94A3B8' : '#14B8A6',
               fontFamily: 'inherit',
               display: 'flex', alignItems: 'center', gap: 4,
             }}
@@ -343,7 +343,7 @@ export function OTPForm() {
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
-        .otp-input::placeholder { font-size: 11px; letter-spacing: normal; font-weight: 500; color: #94A3B8; }
+        .otp-input::placeholder { font-size: 17px; letter-spacing: normal; font-weight: 500; color: #94A3B8; }
       `}</style>
     </div>
   );

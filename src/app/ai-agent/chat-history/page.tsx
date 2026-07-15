@@ -74,7 +74,7 @@ export default function ChatHistoryPage() {
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '9px 16px', borderRadius: 10,
-              background: '#4F46E5', border: 'none',
+              background: '#14B8A6', border: 'none',
               color: '#fff', fontSize: 13, fontWeight: 700,
               cursor: 'pointer', fontFamily: 'inherit',
             }}

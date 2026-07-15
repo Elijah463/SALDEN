@@ -60,7 +60,7 @@ export default function RouteError({
           style={{
             display: 'flex', alignItems: 'center', gap: 7,
             padding: '10px 20px', borderRadius: 10, border: 'none',
-            background: '#4F46E5', color: '#fff',
+            background: '#14B8A6', color: '#fff',
             fontSize: 14, fontWeight: 600, cursor: 'pointer',
             fontFamily: 'inherit',
           }}

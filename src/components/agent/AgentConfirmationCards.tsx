@@ -31,6 +31,8 @@ import {
 } from '@/lib/contracts/agentAbis';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS, ERC20_ABI } from '@/lib/contracts/abis';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { CONTRACTS, txLink } from '@/lib/contracts/config';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
@@ -117,8 +119,9 @@ export function UnlistedPaymentCard({
 }: UnlistedPaymentCardProps) {
   const { state, saveTxRecord } = useApp();
   const { payrollClone, tokenRegistry, payrollSetup } = state;
-  const { data: walletClient } = useWalletClient();
+  const { loginMethod } = useEffectiveAddress();
   const publicClient = usePublicClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
@@ -139,9 +142,9 @@ export function UnlistedPaymentCard({
   const handleConfirm = useCallback(async () => {
     if (executing.current) return;   // prevent double-click race
     executing.current = true;
-    if (!walletClient || !publicClient) {
+    if (!canWrite || !publicClient) {
       executing.current = false;  // reset so user can retry after connecting wallet
-      setError('Wallet not connected.'); setPayState('error'); return;
+      setError(walletRequiredMessage(loginMethod)); setPayState('error'); return;
     }
     if (!tokenEntry) {
       executing.current = false;  // reset so user can retry once the registry resolves
@@ -163,7 +166,7 @@ export function UnlistedPaymentCard({
       }) as bigint;
 
       if (allowance < amountUnits) {
-        const approveTx = await walletClient.writeContract({
+        const approveTx = await universalWrite({
           address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
           args: [contractAddr, amountUnits],
           // Clear description shown in Rabby / MetaMask before signing:
@@ -197,7 +200,7 @@ export function UnlistedPaymentCard({
         ],
       });
 
-      const hash = await walletClient.writeContract({
+      const hash = await universalWrite({
         address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
         functionName: 'memo',
         args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
@@ -271,7 +274,7 @@ export function UnlistedPaymentCard({
       setPayState('error');
       onResolved('error', msg);
     }
-  }, [walletClient, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved]);
+  }, [canWrite, universalWrite, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
 
   if (payState === 'done') {
     return (
@@ -840,7 +843,7 @@ export function PayrollRunCard({ group }: PayrollRunCardProps) {
         href={href}
         style={{
           display: 'inline-block', padding: '8px 18px', borderRadius: 8,
-          background: '#4F46E5', color: '#fff', fontSize: 13, fontWeight: 700,
+          background: '#14B8A6', color: '#fff', fontSize: 13, fontWeight: 700,
           textDecoration: 'none',
         }}
       >

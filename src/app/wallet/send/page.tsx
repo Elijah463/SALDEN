@@ -17,17 +17,18 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useWalletClient, usePublicClient, useReadContract } from 'wagmi';
+import { usePublicClient, useReadContract } from 'wagmi';
 import { getAddress } from 'viem';
 import { ArrowLeft, ExternalLink, CheckCircle2, X, Loader2, Send, ChevronDown } from 'lucide-react';
 import { AppLayout }  from '@/components/layout/AppLayout';
 import { NetworkGuard } from '@/components/shared/NetworkGuard';
 import { useApp } from '@/context/AppContext';
-import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { ERC20_ABI } from '@/lib/contracts/abis';
 import { CONTRACTS, arcTestnet, txLink } from '@/lib/contracts/config';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { TOKEN_ICON_PATHS } from '@/lib/token-registry';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 
 function genRef() { return 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase(); }
 
@@ -68,10 +69,10 @@ type SendStatus = 'idle' | 'sending' | 'confirming';
 
 export default function SendPage() {
   const router       = useRouter();
-  const { address }  = useEffectiveAddress();
-  const { data: wc } = useWalletClient();
+  const { address, loginMethod } = useEffectiveAddress();
   const pc           = usePublicClient({ chainId: arcTestnet.id });
   const { saveTxRecord } = useApp();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
   const [tokenSymbol, setTokenSymbol] = useState(SEND_TOKENS[0]?.symbol ?? 'USDC');
   const [tokenMenuOpen, setTokenMenuOpen] = useState(false);
@@ -87,6 +88,7 @@ export default function SendPage() {
   const [amtErr,   setAmtErr]   = useState('');
   const [sending,  setSending]  = useState(false);
   const [status,   setStatus]   = useState<SendStatus>('idle');
+  const [statusMessage, setStatusMessage] = useState('');
   const [successTx, setSuccessTx] = useState<string | null>(null);
 
   // Real ERC-20 balance of the SELECTED token — the previous version read
@@ -113,7 +115,10 @@ export default function SendPage() {
     const tErr = validateAddress(to);
     const aErr = validateAmount(amount, formattedBalance);
     setToErr(tErr); setAmtErr(aErr);
-    if (tErr || aErr || !wc || !pc || !address || !token) return;
+    if (tErr || aErr || !canWrite || !pc || !address || !token) {
+      if (!canWrite) setAmtErr(walletRequiredMessage(loginMethod));
+      return;
+    }
 
     setSending(true);
     try {
@@ -124,12 +129,12 @@ export default function SendPage() {
 
       setStatus('sending');
       // Direct ERC-20 transfer — msg.sender is the user's wallet (correct)
-      const txHash = await wc.writeContract({
+      const txHash = await universalWrite({
         address: tokenAddr,
         abi: ERC20_ABI,
         functionName: 'transfer',
         args: [checksumTo, rawAmt],
-      });
+      }, msg => setStatusMessage(msg));
 
       setStatus('confirming');
       await waitForSuccessfulReceipt(pc, txHash);
@@ -157,9 +162,10 @@ export default function SendPage() {
     } finally {
       setSending(false);
       setStatus('idle');
+      setStatusMessage('');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, amount, remark, wc, pc, address, token, formattedBalance, saveTxRecord, refetchBalance]);
+  }, [to, amount, remark, canWrite, universalWrite, pc, address, token, formattedBalance, saveTxRecord, refetchBalance, loginMethod]);
 
   const statusLabel: Record<SendStatus, string> = {
     idle: '', sending: 'Sending…', confirming: 'Confirming on-chain…',
@@ -281,7 +287,7 @@ export default function SendPage() {
 
             <button onClick={handleSend} disabled={sending || !address}
               style={{ width: '100%', padding: '14px 0', borderRadius: 12, background: sending || !address ? '#E2E8F0' : '#14B8A6', border: 'none', color: sending || !address ? '#94A3B8' : '#fff', fontSize: 15, fontWeight: 700, cursor: sending || !address ? 'not-allowed' : 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-              {sending ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />{statusLabel[status]}</> : <><Send size={16} /> Send {token?.symbol}</>}
+              {sending ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />{statusMessage || statusLabel[status]}</> : <><Send size={16} /> Send {token?.symbol}</>}
             </button>
           </div>
         </div>

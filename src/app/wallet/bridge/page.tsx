@@ -241,7 +241,7 @@ export default function BridgePage() {
       <AppLayout title="Bridge">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <button onClick={() => router.back()}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#4F46E5', fontFamily: 'inherit', padding: 0 }}>
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
             <ArrowLeft size={16} /> Back
           </button>
 
@@ -375,7 +375,7 @@ export default function BridgePage() {
               disabled={!canBridge}
               style={{
                 width: '100%', padding: '14px 0', borderRadius: 12,
-                background: !canBridge ? '#E2E8F0' : '#4F46E5',
+                background: !canBridge ? '#E2E8F0' : '#14B8A6',
                 border: 'none', color: !canBridge ? '#94A3B8' : '#fff',
                 fontSize: 15, fontWeight: 700, cursor: !canBridge ? 'not-allowed' : 'pointer',
                 fontFamily: 'inherit',
@@ -399,8 +399,8 @@ export default function BridgePage() {
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#ECFDF5', border: '2px solid #6EE7B7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <CheckCircle2 size={32} color="#059669" />
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <CheckCircle2 size={32} color="#fff" fill="#059669" />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Bridge Initiated</h3>
               <p style={{ fontSize: 14, color: '#64748B', marginBottom: 16, lineHeight: 1.6 }}>

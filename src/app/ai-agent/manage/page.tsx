@@ -157,7 +157,7 @@ export default function ManageAgentPage() {
             { key: 'logs',      label: 'Full Log',         icon: <List size={14} /> },
           ] as const).map(({ key, label, icon }) => (
             <button key={key} onClick={() => setActiveTab(key)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: activeTab === key ? 700 : 500, color: activeTab === key ? '#4F46E5' : '#64748B', borderBottom: activeTab === key ? '2px solid #4F46E5' : '2px solid transparent' }}>
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: activeTab === key ? 700 : 500, color: activeTab === key ? '#14B8A6' : '#64748B', borderBottom: activeTab === key ? '2px solid #14B8A6' : '2px solid transparent' }}>
               {icon} {label}
             </button>
           ))}
@@ -173,8 +173,8 @@ export default function ManageAgentPage() {
             {(['all', 'success', 'failed'] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 style={{ padding: '4px 12px', borderRadius: 99, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  background: statusFilter === s ? (s === 'success' ? '#ECFDF5' : s === 'failed' ? '#FEF2F2' : '#EEF2FF') : '#F8F9FA',
-                  color:      statusFilter === s ? (s === 'success' ? '#059669' : s === 'failed' ? '#DC2626' : '#4F46E5')  : '#64748B',
+                  background: statusFilter === s ? (s === 'success' ? '#ECFDF5' : s === 'failed' ? '#FEF2F2' : '#F0FDFA') : '#F8F9FA',
+                  color:      statusFilter === s ? (s === 'success' ? '#059669' : s === 'failed' ? '#DC2626' : '#14B8A6')  : '#64748B',
                 }}>
                 {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
               </button>
@@ -193,7 +193,7 @@ export default function ManageAgentPage() {
                 <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.08)', zIndex: 10, minWidth: 160, padding: '4px 0' }}>
                   {['All', ...groups].map(g => (
                     <button key={g} onClick={() => { setGroupFilter(g); setFilterOpen(false); }}
-                      style={{ width: '100%', padding: '8px 14px', textAlign: 'left', background: g === groupFilter ? '#EEF2FF' : 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: g === groupFilter ? '#4F46E5' : '#475569', fontFamily: 'inherit' }}>
+                      style={{ width: '100%', padding: '8px 14px', textAlign: 'left', background: g === groupFilter ? '#F0FDFA' : 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: g === groupFilter ? '#14B8A6' : '#475569', fontFamily: 'inherit' }}>
                       {g}
                     </button>
                   ))}
@@ -258,7 +258,7 @@ export default function ManageAgentPage() {
                 onClick={() => setScheduleModalOpen(true)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px',
-                  borderRadius: 9, border: 'none', background: '#4F46E5', color: '#fff',
+                  borderRadius: 9, border: 'none', background: '#14B8A6', color: '#fff',
                   fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
@@ -271,7 +271,7 @@ export default function ManageAgentPage() {
                 <Repeat size={32} color="#E2E8F0" style={{ margin: '0 auto 12px' }} />
                 <p style={{ color: '#94A3B8', fontSize: 14 }}>No scheduled jobs yet.</p>
                 <p style={{ color: '#94A3B8', fontSize: 13, marginTop: 4 }}>
-                  Use "Set Schedule Payments" above, or go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#4F46E5', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to schedule a payroll run.
+                  Use "Set Schedule Payments" above, or go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#14B8A6', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to schedule a payroll run.
                 </p>
               </div>
             ) : (

@@ -520,7 +520,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       {warnConvLen && (
         <div style={{ margin: '0 12px 8px', padding: '7px 12px', borderRadius: 9, background: '#EEF2FF', border: '1px solid #C7D2FE', fontSize: 12, color: '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>Long conversation — older context may be summarised.</span>
-          <button onClick={resetConversation} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4F46E5', fontWeight: 700, fontSize: 12, fontFamily: 'inherit' }}>Start fresh</button>
+          <button onClick={resetConversation} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#14B8A6', fontWeight: 700, fontSize: 12, fontFamily: 'inherit' }}>Start fresh</button>
         </div>
       )}
 

@@ -180,7 +180,7 @@ export default function AIAgentPage() {
   // inline here and in dashboard/page.tsx; consolidated into one hook).
   useCloneAccess();
 
-  const payrollSync = usePayrollSync({ registryClone, address, publicClient, walletClient });
+  const payrollSync = usePayrollSync({ registryClone, address, publicClient });
 
   const { status, agentInfo, error: statusError, activating, activate, refresh } = useAgentStatus();
 
@@ -369,17 +369,6 @@ export default function AIAgentPage() {
           background: 'linear-gradient(135deg, #1E3A5F 0%, #4F46E5 100%)',
           borderRadius: 20, padding: '48px 32px', textAlign: 'center', color: '#fff',
         }}>
-          <div style={{
-            width: 64, height: 64, borderRadius: 18,
-            background: 'rgba(255,255,255,0.12)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 20px',
-          }}>
-            <svg width="28" height="28" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="2" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-            </svg>
-          </div>
           <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>
             Unlock Your AI Payroll Agent
           </h2>
@@ -387,8 +376,7 @@ export default function AIAgentPage() {
             fontSize: 14, color: 'rgba(255,255,255,0.8)', lineHeight: 1.7,
             maxWidth: 420, margin: '0 auto 28px',
           }}>
-            Upgrade to Premium for autonomous payroll scheduling, AI-driven compliance
-            checks, Gemini 2.5 Flash chat, and 24/7 on-chain execution.
+            Upgrade to premium to gain access to:
           </p>
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 10,
@@ -399,7 +387,7 @@ export default function AIAgentPage() {
               'Real on-chain balance & compliance checks',
               'Structured function-calling AI (not just chat)',
               'IPFS employee database with on-chain CID anchoring',
-              'Automatic invoice emails from contact@salden.xyz',
+              'Payments invoice sent to you automatically',
             ].map((f, i) => (
               <div key={i} style={{
                 display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -458,7 +446,7 @@ export default function AIAgentPage() {
           </p>
           <Link href="/dashboard" style={{
             display: 'inline-block', padding: '11px 24px', borderRadius: 10,
-            background: '#4F46E5', color: '#fff', fontSize: 14, fontWeight: 700,
+            background: '#14B8A6', color: '#fff', fontSize: 14, fontWeight: 700,
             textDecoration: 'none',
           }}>
             Go to Dashboard →
@@ -590,7 +578,7 @@ export default function AIAgentPage() {
                 onClick={grantPayrollAgent}
                 style={{
                   padding: '9px 20px', borderRadius: 9,
-                  background: '#4F46E5', color: '#fff',
+                  background: '#14B8A6', color: '#fff',
                   border: 'none', cursor: 'pointer',
                   fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
                 }}
@@ -648,7 +636,7 @@ export default function AIAgentPage() {
                 onClick={grantRegistryAgent}
                 style={{
                   padding: '9px 20px', borderRadius: 9,
-                  background: '#4F46E5', color: '#fff',
+                  background: '#14B8A6', color: '#fff',
                   border: 'none', cursor: 'pointer',
                   fontSize: 13, fontWeight: 700, fontFamily: 'inherit',
                 }}
@@ -728,7 +716,7 @@ export default function AIAgentPage() {
               onClick={() => { void payrollSync.syncNow(); }}
               disabled={payrollSync.status === 'loading'}
               style={{
-                padding: '5px 12px', borderRadius: 7, background: '#4F46E5', color: '#fff',
+                padding: '5px 12px', borderRadius: 7, background: '#14B8A6', color: '#fff',
                 fontSize: 12, fontWeight: 700, border: 'none',
                 cursor: payrollSync.status === 'loading' ? 'default' : 'pointer',
                 opacity: payrollSync.status === 'loading' ? 0.6 : 1, fontFamily: 'inherit',

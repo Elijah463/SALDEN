@@ -182,7 +182,7 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
           </button>
           <button onClick={() => onResend(tx)} disabled={resending === tx.id || !hasEmail}
             title={!hasEmail ? 'No company email on file' : undefined}
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9, border: 'none', background: hasEmail ? '#EEF2FF' : '#F1F5F9', fontSize: 13, fontWeight: 600, color: hasEmail ? '#4F46E5' : '#94A3B8', cursor: (resending === tx.id || !hasEmail) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9, border: 'none', background: hasEmail ? '#F0FDFA' : '#F1F5F9', fontSize: 13, fontWeight: 600, color: hasEmail ? '#14B8A6' : '#94A3B8', cursor: (resending === tx.id || !hasEmail) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
             {resending === tx.id ? <Loader2 size={13} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Mail size={13} />}
             Invoice
           </button>

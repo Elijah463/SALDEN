@@ -65,7 +65,7 @@ function OptionTile({
         position: 'relative', opacity: soon ? 0.7 : 1,
         transition: 'border-color 0.15s',
       }}
-      onMouseEnter={e => { if (!soon) (e.currentTarget as HTMLButtonElement).style.borderColor = '#4F46E5'; }}
+      onMouseEnter={e => { if (!soon) (e.currentTarget as HTMLButtonElement).style.borderColor = '#14B8A6'; }}
       onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#E2E8F0'; }}
     >
       {soon && (
@@ -108,7 +108,7 @@ export default function DepositPage() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Back */}
         <button onClick={() => view === 'qr' ? setView('options') : router.back()}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#4F46E5', fontFamily: 'inherit', padding: 0 }}>
+          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
           <ArrowLeft size={16} /> Back
         </button>
 

@@ -49,7 +49,7 @@ export default function GlobalError({
               onClick={reset}
               style={{
                 padding: '10px 22px', borderRadius: 10, border: 'none',
-                background: '#4F46E5', color: '#fff',
+                background: '#14B8A6', color: '#fff',
                 fontSize: 14, fontWeight: 600, cursor: 'pointer',
               }}
             >

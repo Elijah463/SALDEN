@@ -30,6 +30,7 @@ import { useCloneAccess } from '@/lib/useCloneAccess';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { copyToClipboard } from '@/lib/clipboard';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
 import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
@@ -79,8 +80,8 @@ const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
 function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const { dispatch } = useApp();
   const { address, loginMethod } = useEffectiveAddress();
-  const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
+  const { writeContract, canWrite } = useUniversalWrite();
 
   const [fullName,    setFullName]    = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -88,6 +89,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
   const [empRange,    setEmpRange]    = useState('');
   const [errors,      setErrors]      = useState<string[]>([]);
   const [submitting,  setSubmitting]  = useState(false);
+  const [submitStatus, setSubmitStatus] = useState('');
 
   useEffect(() => {
     try {
@@ -113,16 +115,16 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
     if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errs.push('A valid email is required.');
     if (!empRange) errs.push('Please select how many employees or recipients you plan to pay.');
     if (errs.length) { setErrors(errs); return; }
-    if (!walletClient || !publicClient || !address) { setErrors([walletRequiredMessage(loginMethod)]); return; }
+    if (!canWrite || !publicClient || !address) { setErrors([walletRequiredMessage(loginMethod)]); return; }
 
     setSubmitting(true); setErrors([]);
     try {
-      const hash = await walletClient.writeContract({
+      const hash = await writeContract({
         address:      CONTRACTS.REGISTRY_FACTORY,
         abi:          REGISTRY_FACTORY_ABI,
         functionName: 'createRegistry',
         args:         [],
-      });
+      }, msg => setSubmitStatus(msg));
       await waitForSuccessfulReceipt(publicClient, hash);
       const clone = await publicClient.readContract({
         address:      CONTRACTS.REGISTRY_FACTORY,
@@ -138,7 +140,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
       onComplete();
     } catch (err) {
       setErrors([(err as Error).message ?? 'Transaction failed. Please try again.']);
-    } finally { setSubmitting(false); }
+    } finally { setSubmitting(false); setSubmitStatus(''); }
   }
 
   return (
@@ -174,8 +176,8 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
       )}
 
       <button onClick={handleSubmit} disabled={submitting}
-        style={{ width: '100%', padding: '13px 16px', borderRadius: 10, border: 'none', background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-        {submitting ? <><Loader2 size={15} style={{ animation: 'spin 0.7s linear infinite' }} /> Deploying your contract…</> : 'Complete Setup'}
+        style={{ width: '100%', padding: '13px 16px', borderRadius: 10, border: 'none', background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, cursor: submitting ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+        {submitting ? <><Loader2 size={15} style={{ animation: 'spin 0.7s linear infinite' }} /> {submitStatus || 'Deploying your contract…'}</> : 'Complete Setup'}
       </button>
       <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 10, textAlign: 'center', lineHeight: 1.5 }}>
         This deploys your own private registry contract Onchain. A small USDC gas fee applies.
@@ -367,7 +369,7 @@ function EmployeeModal({
               style={{ ...inp, flex: 1 }}
               onFocus={e => (e.target.style.borderColor = '#4F46E5')}
               onBlur={e => (e.target.style.borderColor = '#E2E8F0')} />
-            <button onClick={commitNewGroup} style={{ padding: '10px 14px', borderRadius: 10, background: '#4F46E5', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Add</button>
+            <button onClick={commitNewGroup} style={{ padding: '10px 14px', borderRadius: 10, background: '#14B8A6', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Add</button>
             <button onClick={() => { setShowNewGroup(false); setNewGroupName(''); }} style={{ padding: '10px 12px', borderRadius: 10, background: '#F8F9FA', color: '#64748B', border: '1px solid #E2E8F0', cursor: 'pointer' }}>✕</button>
           </div>
         )}
@@ -397,7 +399,7 @@ function EmployeeModal({
         <div style={{ display: 'flex', borderBottom: '1px solid #E2E8F0', marginBottom: 20 }}>
           {(['single', 'bulk'] as const).map(t => (
             <button key={t} onClick={() => { setTab(t); setErrors([]); setFileError(''); }}
-              style={{ flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: tab === t ? '#4F46E5' : '#64748B', borderBottom: tab === t ? '2px solid #4F46E5' : '2px solid transparent', fontFamily: 'inherit' }}>
+              style={{ flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: tab === t ? '#14B8A6' : '#64748B', borderBottom: tab === t ? '2px solid #14B8A6' : '2px solid transparent', fontFamily: 'inherit' }}>
               {t === 'single' ? 'Single Entry' : 'Bulk Import (CSV / JSON)'}
             </button>
           ))}
@@ -522,9 +524,10 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 export default function DashboardPage() {
   const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
   // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
-  const { address, isConnected: isLoggedIn, mounted: authMounted } = useEffectiveAddress();
+  const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
   const { data: walletClient }    = useWalletClient();
   const publicClient              = usePublicClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
   const {
     employees, groups, activeGroup,
@@ -549,7 +552,6 @@ export default function DashboardPage() {
     registryClone: registryStatus === 'exists' ? registryClone : null,
     address,
     publicClient,
-    walletClient,
   });
   const dataLoadStatus = payrollSync.status;
 
@@ -749,9 +751,9 @@ export default function DashboardPage() {
    */
   const anchorCid = useCallback(async (cid?: string) => {
     if (!cid || cid === lastAnchoredCidRef.current) return;
-    if (!registryClone || !walletClient || !publicClient) return;
+    if (!registryClone || !canWrite || !publicClient) return;
     try {
-      const hash = await walletClient.writeContract({
+      const hash = await universalWrite({
         address:      registryClone as `0x${string}`,
         abi:          REGISTRY_ABI,
         functionName: 'updateCID',
@@ -763,7 +765,7 @@ export default function DashboardPage() {
       console.error('[Dashboard] Failed to anchor CID Onchain:', err);
       addToast('Saved, but the Onchain record could not be updated. Retry from Settings → Sync Data if this keeps happening.', 'warning');
     }
-  }, [registryClone, walletClient, publicClient, addToast]);
+  }, [registryClone, canWrite, universalWrite, publicClient, addToast]);
 
   // ── Restore previously-synced data ──────────────────────────────────────────
   // Handled by usePayrollSync (called above) — see that hook for the full
@@ -840,7 +842,7 @@ export default function DashboardPage() {
     const amounts      = targetEmployees.map(e => BigInt(Math.round(Number(e.salaryAmount) * tokenScale)));
     const totalAmount  = amounts.reduce((a, b) => a + b, 0n);
 
-    if (!walletClient || !publicClient) { addToast('Wallet not connected.', 'error'); return; }
+    if (!canWrite || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
 
     setIsExecuting(true);
     setExecutionState('pending');
@@ -858,10 +860,10 @@ export default function DashboardPage() {
 
       if (allowance < totalAmount) {
         setExecuteStatus(`Approving ${tokenSymbol} transfer…`);
-        const approveTx = await walletClient.writeContract({
+        const approveTx = await universalWrite({
           address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
           args: [contractAddr, totalAmount],
-        });
+        }, setExecuteStatus);
         setExecuteStatus('Waiting for approval confirmation…');
         await waitForSuccessfulReceipt(publicClient, approveTx);
       }
@@ -899,21 +901,21 @@ export default function DashboardPage() {
         // Arc Memo contract: memo(target, data, memoId, memoData) — see
         // lib/contracts/abis.ts for why this isn't called callWithMemo.
         // msg.sender is preserved — payroll clone sees the user's wallet address
-        txHash = await walletClient.writeContract({
+        txHash = await universalWrite({
           address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
           functionName: 'memo',
           args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
-        });
+        }, setExecuteStatus);
       } else {
         const batchData = encodeFunctionData({
           abi: ENTERPRISE_PAYROLL_ABI, functionName: 'batchPay',
           args: [addrs, amounts],
         });
-        txHash = await walletClient.writeContract({
+        txHash = await universalWrite({
           address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
           functionName: 'memo',
           args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
-        });
+        }, setExecuteStatus);
       }
 
       setExecuteStatus('Confirming on-chain…');
@@ -996,7 +998,7 @@ export default function DashboardPage() {
     } finally {
       setIsExecuting(false); setExecuteStatus(''); setExecuteProgress(null);
     }
-  }, [payrollClone, employees, activeGroup, walletClient, publicClient, address, addToast, saveTxRecord, payrollSetup]);
+  }, [payrollClone, employees, activeGroup, canWrite, universalWrite, publicClient, address, addToast, saveTxRecord, payrollSetup, loginMethod]);
 
   const handleProcessPaymentClick = useCallback(() => {
     if (isPremiumUser && payrollClone) setPaymentModalOpen(true);
@@ -1031,7 +1033,7 @@ export default function DashboardPage() {
               onClick={() => { void payrollSync.syncNow(); }}
               disabled={payrollSync.status === 'loading'}
               style={{
-                padding: '7px 16px', borderRadius: 8, background: '#4F46E5', color: '#fff',
+                padding: '7px 16px', borderRadius: 8, background: '#14B8A6', color: '#fff',
                 fontSize: 13, fontWeight: 700, border: 'none',
                 cursor: payrollSync.status === 'loading' ? 'default' : 'pointer',
                 opacity: payrollSync.status === 'loading' ? 0.6 : 1, fontFamily: 'inherit',
@@ -1100,7 +1102,7 @@ export default function DashboardPage() {
               Login to manage your payroll, add employees, and process Onchain payments.
             </p>
             <button onClick={() => setLoginOpen(true)}
-              style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
               Login
             </button>
           </div>
@@ -1116,7 +1118,7 @@ export default function DashboardPage() {
               Tell us a bit about your company to set up your private, encrypted payroll database Onchain.
             </p>
             <button onClick={() => setProfileModalOpen(true)}
-              style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
               Finish Your Profile
             </button>
           </div>
@@ -1134,7 +1136,7 @@ export default function DashboardPage() {
               Add at least 2 employees to finish setting up your payroll. You can add more anytime afterward.
             </p>
             <button onClick={() => setEmployeeModal({ mode: 'add', setupMode: true })}
-              style={{ padding: '13px 40px', borderRadius: 12, background: '#4F46E5', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
               Set Up Employee Data
             </button>
           </div>
@@ -1179,7 +1181,7 @@ export default function DashboardPage() {
                   <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #E2E8F0', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.1)', zIndex: 20, minWidth: 180, padding: '4px 0' }}>
                     {['All Employees', ...groups].map(g => (
                       <button key={g} onClick={() => { dispatch({ type: 'SET_ACTIVE_GROUP', payload: g }); setGroupMenuOpen(false); }}
-                        style={{ width: '100%', padding: '9px 14px', textAlign: 'left', background: g === activeGroup ? '#EEF2FF' : 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: g === activeGroup ? 600 : 400, color: g === activeGroup ? '#4F46E5' : '#475569', fontFamily: 'inherit' }}>
+                        style={{ width: '100%', padding: '9px 14px', textAlign: 'left', background: g === activeGroup ? '#F0FDFA' : 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: g === activeGroup ? 600 : 400, color: g === activeGroup ? '#14B8A6' : '#475569', fontFamily: 'inherit' }}>
                         {g}
                       </button>
                     ))}
