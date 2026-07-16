@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { useAccount, useWalletClient, usePublicClient } from 'wagmi';
+import { useWalletClient, usePublicClient } from 'wagmi';
 import { type PayrollSetup } from '@/context/AppContext';
 import {
   Zap, Trash2, Download, ExternalLink,
@@ -21,6 +21,9 @@ import { MULTI_TOKEN_PAYROLL_ABI, REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, isValidEthAddress, sanitizeString } from '@/lib/validation';
 import { upsertToken, removeToken } from '@/lib/token-registry';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
+import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
@@ -51,11 +54,21 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 // ── Main settings page ────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { address }      = useAccount();
+  // useEffectiveAddress resolves wagmi OR Circle session — without this,
+  // `address` was always undefined for Google/email social-login users
+  // (useAccount only ever tracks an externally-connected wagmi wallet),
+  // which silently broke profile save + group add/remove sync on this
+  // page for every non-external-wallet login.
+  const { address }      = useEffectiveAddress();
   const { data: wallet } = useWalletClient();
   const publicClient     = usePublicClient();
   const { state, dispatch, addToast, syncData } = useApp();
   const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups } = state;
+  // Used only for sync/anchor (profile + groups) below — branches to a
+  // Circle SIGN_MESSAGE/PIN challenge for social login, wagmi for an
+  // external wallet. The agent/token/emergency-withdraw actions further
+  // down still use `wallet` directly and remain external-wallet-only.
+  const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
   // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
   // redundant transaction if the data hasn't actually changed since.
@@ -69,15 +82,15 @@ export default function SettingsPage() {
    *  invisible after a reload or from another device. */
   const anchorCid = async (cid?: string) => {
     if (!cid || cid === lastAnchoredCidRef.current) return;
-    if (!registryClone || !wallet || !publicClient) return;
+    if (!registryClone || !canWrite || !publicClient) return;
     try {
-      const hash = await wallet.writeContract({
+      const hash = await universalWrite({
         address:      registryClone as `0x${string}`,
         abi:          REGISTRY_ABI,
         functionName: 'updateCID',
         args:         [cid],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       lastAnchoredCidRef.current = cid;
     } catch (err) {
       console.error('[Settings] Failed to anchor CID Onchain:', err);
@@ -85,7 +98,7 @@ export default function SettingsPage() {
     }
   };
 
-  const signMsg = wallet ? (msg: string) => wallet.signMessage({ message: msg }) : undefined;
+  const signMsg = canWrite ? (msg: string) => universalSignMessage(msg) : undefined;
 
   /** Sync current state to IPFS, then anchor the resulting CID Onchain. */
   async function syncAndAnchor() {

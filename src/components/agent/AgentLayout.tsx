@@ -72,7 +72,7 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
 
   return (
     <>
-      <AppLayout title={title} headerRight={slidersBtn} showWalletAddress>
+      <AppLayout title={title} headerRight={slidersBtn}>
         {children}
       </AppLayout>
 

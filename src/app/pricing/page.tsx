@@ -23,6 +23,7 @@ import { trackClientEvent } from '@/lib/analyticsClient';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useCloneAccess } from '@/lib/useCloneAccess';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
 function Row({ label, free, premium }: { label: string; free: boolean | string; premium: boolean | string }) {
@@ -50,6 +51,7 @@ export default function PricingPage() {
   const publicClient     = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast } = useApp();
   const { isPremiumUser } = state;
+  useCloneAccess();
 
   const [step,   setStep]   = useState<DeployStep>('idle');
   const [txHash, setTxHash] = useState('');
@@ -61,6 +63,27 @@ export default function PricingPage() {
 
     setStep('approving'); setErrMsg('');
     try {
+      // Fresh on-chain check — not just the (possibly stale, or not-yet-
+      // resolved) local isPremiumUser flag. SaldenMultiTokenPayrollFactory
+      // only allows one clone per address; calling deployPayroll() again
+      // for an address that already has one reverts on-chain with no
+      // human-readable reason (viem shows this as "execution reverted for
+      // an unknown reason"). Checking payrollOf() directly here — instead
+      // of relying solely on useCloneAccess's effect, which may not have
+      // resolved yet if the user lands on /pricing first and clicks
+      // Upgrade immediately — closes that race and avoids ever sending a
+      // transaction that's guaranteed to fail.
+      const existingClone = await publicClient.readContract({
+        address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'payrollOf', args: [address],
+      }) as string;
+
+      if (existingClone && existingClone !== '0x0000000000000000000000000000000000000000') {
+        dispatch({ type: 'SET_PAYROLL_CLONE', payload: existingClone });
+        addToast('You already have a Premium payroll contract — activating it now.', 'info');
+        setStep('idle');
+        return;
+      }
+
       const deployFee = await publicClient.readContract({
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
       }) as bigint;

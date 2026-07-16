@@ -18,7 +18,7 @@ import {
   Upload, FileText, Filter, Banknote,
 } from 'lucide-react';
 import {
-  useWalletClient, usePublicClient, useBalance,
+  usePublicClient, useBalance,
 } from 'wagmi';
 import { encodeFunctionData, keccak256 } from 'viem';
 import { AppLayout }      from '@/components/layout/AppLayout';
@@ -210,8 +210,8 @@ function EmployeeModal({
 }: EmployeeModalProps) {
   const { dispatch, state, syncData } = useApp();
   const { address }            = useEffectiveAddress();
-  const { data: walletClient } = useWalletClient();
   const publicClient           = usePublicClient();
+  const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
   const [tab,           setTab]           = useState<'single' | 'bulk'>('single');
   const [form,          setForm]          = useState<Employee>({
@@ -238,13 +238,13 @@ function EmployeeModal({
   const setupDone     = employeeCount >= minRequired;
 
   async function handleProceed() {
-    if (!walletClient || !publicClient || !state.registryClone || !address) return;
+    if (!canWrite || !publicClient || !state.registryClone || !address) return;
     setProceeding(true); setProceedError('');
     try {
-      const sign = (msg: string) => walletClient.signMessage({ message: msg });
+      const sign = (msg: string) => universalSignMessage(msg);
       const { cid } = await syncData({ employees: state.employees, walletAddress: address, signMessage: sign });
       if (cid) {
-        const hash = await walletClient.writeContract({
+        const hash = await universalWrite({
           address:      state.registryClone as `0x${string}`,
           abi:          REGISTRY_ABI,
           functionName: 'updateCID',
@@ -525,9 +525,8 @@ export default function DashboardPage() {
   const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
   // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
   const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
-  const { data: walletClient }    = useWalletClient();
   const publicClient              = usePublicClient();
-  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
   const {
     employees, groups, activeGroup,
@@ -718,14 +717,16 @@ export default function DashboardPage() {
   // ── CRUD ───────────────────────────────────────────────────────────────────
   //
   // The sign function derives the encryption key that secures employee data.
-  // It must call walletClient.signMessage() exactly ONCE per browser session
-  // per (address + message) pair.
+  // It routes through useUniversalWrite's signMessage — wagmi's popup for an
+  // external wallet, or a Circle SIGN_MESSAGE PIN challenge for Google/email
+  // social login — exactly ONCE per browser session per (address + message)
+  // pair.
   //
   // We cache the result in sessionStorage so page refreshes don't re-prompt
   // the wallet. sessionStorage clears automatically when the tab closes,
   // so the key is never persisted to disk between sessions.
   const sign = useCallback(async (msg: string): Promise<string> => {
-    if (!walletClient || !address) throw new Error('No wallet');
+    if (!canWrite || !address) throw new Error('No wallet');
 
     const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
 
@@ -734,13 +735,14 @@ export default function DashboardPage() {
       if (cached) return cached;
     } catch { /* sessionStorage blocked (private browsing edge cases) */ }
 
-    // Not cached — prompt the wallet once
-    const sig = await walletClient.signMessage({ message: msg });
+    // Not cached — prompt for a signature once (wagmi popup for external
+    // wallets, Circle's PIN challenge for Google/email social login)
+    const sig = await universalSignMessage(msg);
 
     try { sessionStorage.setItem(storageKey, sig); } catch { /* ignore write errors */ }
 
     return sig;
-  }, [walletClient, address]);
+  }, [canWrite, universalSignMessage, address]);
 
   /**
    * Anchors a freshly-synced IPFS CID Onchain (SaldenRegistry.updateCID).

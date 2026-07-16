@@ -43,13 +43,19 @@ const ENV_TOKEN_ADDRESSES: Record<string, string | undefined> = {
 
 // ── Supported tokens ─────────────────────────────────────────────────────────
 
+// Icons are sized to exactly fill TokenRow's 40x40 circular slot (see
+// TOKEN_ICON_SIZE below) — no separate colored background/border behind
+// them, so every row shows a clean, equally-sized token logo with no halo.
+const TOKEN_ICON_SIZE = 40;
+
 const TOKENS = [
   {
     symbol: 'USDC', name: 'USD Coin', color: '#2775CA', bgColor: '#EFF6FF',
     fromNative: true, decimals: 6,
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/images/tokens/usdc.webp" alt="USDC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+      <img src="/images/tokens/usdc.webp" alt="USDC" width={TOKEN_ICON_SIZE} height={TOKEN_ICON_SIZE}
+        style={{ display: 'block', borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
   {
@@ -58,7 +64,8 @@ const TOKENS = [
     envKey: 'NEXT_PUBLIC_EURC_ADDRESS',
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/images/tokens/eurc.svg" alt="EURC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+      <img src="/images/tokens/eurc.svg" alt="EURC" width={TOKEN_ICON_SIZE} height={TOKEN_ICON_SIZE}
+        style={{ display: 'block', borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
   {
@@ -67,7 +74,8 @@ const TOKENS = [
     envKey: 'NEXT_PUBLIC_CIRBTC_ADDRESS',
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/images/tokens/cirbtc.png" alt="cirBTC" width={26} height={26} style={{ borderRadius: '50%', objectFit: 'cover' }} />
+      <img src="/images/tokens/cirbtc.png" alt="cirBTC" width={TOKEN_ICON_SIZE} height={TOKEN_ICON_SIZE}
+        style={{ display: 'block', borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
 ];
@@ -105,15 +113,14 @@ function ActionCard({ icon, label, href }: { icon: React.ReactNode; label: strin
 
 // ── Token row ─────────────────────────────────────────────────────────────────
 
-function TokenRow({ symbol, name, icon, balance, color, bgColor, loading }: {
+function TokenRow({ symbol, name, icon, balance, loading }: {
   symbol: string; name: string; icon: React.ReactNode;
-  balance: string; color: string; bgColor: string; loading?: boolean;
+  balance: string; loading?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', padding: '14px 0',
       gap: 14, borderBottom: '1px solid #F1F5F9' }}>
-      <div style={{ width: 40, height: 40, borderRadius: '50%',
-        background: bgColor, border: `1.5px solid ${color}20`,
+      <div style={{ width: 40, height: 40, borderRadius: '50%', overflow: 'hidden',
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
         {icon}
       </div>
@@ -257,8 +264,6 @@ export default function WalletPage() {
                 symbol={token.symbol}
                 name={token.name}
                 icon={token.icon}
-                color={token.color}
-                bgColor={token.bgColor}
                 loading={token.fromNative ? false : (loadingErc20 && !erc20Balances[token.symbol])}
                 balance={token.fromNative ? usdcDisplay : (erc20Balances[token.symbol] ?? '0.00')}
               />
