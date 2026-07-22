@@ -8,7 +8,7 @@ import { getLifiSupportedChains } from '@/lib/lifi/client';
 // that's Circle Bridge Kit's job, confirmed separately (see
 // lib/circle/appKit.ts). This endpoint only gates the optional "≈ $X.XX"
 // price hint.
-export const SALDEN_TESTNET_CANDIDATES = [
+const SALDEN_TESTNET_CANDIDATES = [
   { chainId: 5042002,   key: 'arct',  name: 'Arc Testnet' },
   { chainId: 11155111,  key: 'sep',   name: 'Ethereum Sepolia' },
   { chainId: 84532,     key: 'bast',  name: 'Base Sepolia' },
