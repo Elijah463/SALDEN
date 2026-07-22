@@ -88,11 +88,18 @@ export default function PricingPage() {
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
       }) as bigint;
 
-      const approveTx = await universalWrite({
-        address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'approve',
-        args: [CONTRACTS.MULTI_TOKEN_FACTORY, deployFee],
-      });
-      await waitForSuccessfulReceipt(publicClient, approveTx);
+      const allowance = await publicClient.readContract({
+        address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'allowance',
+        args: [address, CONTRACTS.MULTI_TOKEN_FACTORY],
+      }) as bigint;
+
+      if (allowance < deployFee) {
+        const approveTx = await universalWrite({
+          address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'approve',
+          args: [CONTRACTS.MULTI_TOKEN_FACTORY, deployFee],
+        });
+        await waitForSuccessfulReceipt(publicClient, approveTx);
+      }
 
       setStep('deploying');
       const deployTx = await universalWrite({

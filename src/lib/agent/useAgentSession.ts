@@ -15,7 +15,6 @@
  */
 
 import { useCallback, useRef } from 'react';
-import type { WalletClient } from 'viem';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 const SESSION_TTL_MS_CLIENT = 14 * 60 * 1000; // 1 min under the server's 15 min TTL
@@ -57,7 +56,7 @@ export function useAgentSession() {
 
   const getToken = useCallback(async (
     walletAddress: string,
-    walletClient: WalletClient,
+    signMessage: (message: string) => Promise<string>,
     forceRefresh = false,
   ): Promise<string> => {
     const key = walletAddress.toLowerCase();
@@ -79,12 +78,15 @@ export function useAgentSession() {
         if (!startRes.ok) throw new Error('Could not start agent session.');
         const { message } = await startRes.json() as { message: string };
 
-        const signature = await walletClient.signMessage({
-          account: walletAddress as `0x${string}`,
-          // Wallet will show the full message including:
-          // "Sign in to the Salden AI Payroll Agent — proves wallet ownership, no payment authorised"
-          message,
-        });
+        // Each call gets a fresh, server-issued one-time message (a nonce,
+        // not a fixed string), so — unlike the IPFS encryption-key
+        // signature — this one genuinely can't be cached across calls;
+        // only the resulting token can be (see writeCached below). Routes
+        // through useUniversalWrite underneath: wagmi's popup for an
+        // external wallet, Circle's PIN challenge for social login.
+        // Wallet will show the full message including:
+        // "Sign in to the Salden AI Payroll Agent — proves wallet ownership, no payment authorised"
+        const signature = await signMessage(message);
 
         const verifyRes = await fetch(`${API_BASE}/agent/session`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },

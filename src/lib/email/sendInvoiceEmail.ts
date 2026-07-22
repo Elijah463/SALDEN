@@ -16,6 +16,8 @@ import { Resend } from 'resend';
 import { generateReceiptPdf, type ReceiptPdfInput } from './generateReceiptPdf';
 
 const FROM_ADDRESS = 'Salden <contact@salden.xyz>';
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
+const LOGO_URL = `${APP_URL}/images/salden-logo.png`;
 
 function getResendClient(): Resend {
   const apiKey = process.env.RESEND_API_KEY;
@@ -70,8 +72,9 @@ function buildEmailHtml(input: InvoiceEmailInput): string {
 
   return `
   <div style="font-family: 'DM Sans', Arial, sans-serif; max-width: 540px; margin: 0 auto; color: #0F172A;">
-    <div style="padding: 24px 0; border-bottom: 2px solid #4F46E5;">
-      <span style="font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.02em;">SALDEN</span>
+    <div style="padding: 24px 0; border-bottom: 2px solid #4F46E5; display: flex; align-items: center; gap: 10px;">
+      <img src="${LOGO_URL}" alt="Salden" height="28" style="height: 28px; width: auto; display: inline-block; vertical-align: middle;" />
+      <span style="font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.02em; vertical-align: middle;">SALDEN</span>
     </div>
     <div style="padding: 24px 0;">
       <h2 style="font-size: 18px; font-weight: 700; color: #0F172A; margin: 0 0 12px;">Payroll Receipt — ${ref}</h2>
@@ -89,6 +92,9 @@ function buildEmailHtml(input: InvoiceEmailInput): string {
       <p style="font-size: 12px; color: #94A3B8; margin-top: 24px; word-break: break-all;">
         Transaction: ${txHash}<br/>
         Employer wallet: ${walletAddr}
+      </p>
+      <p style="font-size: 12px; color: #94A3B8; margin-top: 12px;">
+        A full recipient-by-recipient breakdown is included in the attached PDF.
       </p>
     </div>
     <div style="padding: 20px 0; border-top: 1px solid #E2E8F0; font-size: 11px; color: #94A3B8;">

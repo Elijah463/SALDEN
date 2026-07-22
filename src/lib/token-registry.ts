@@ -68,6 +68,35 @@ export function tokenIconPath(symbol: string): string | null {
   return TOKEN_ICON_PATHS[symbol] ?? null;
 }
 
+/**
+ * Some token logo source files have extra internal padding baked in, so
+ * rendering every icon at the same <img> width/height still leaves that
+ * one looking visibly smaller than the rest. EURC's SVG circle is drawn
+ * inside a 24x24 canvas but only spans a 18px-diameter circle centered in
+ * it (25% margin on every side — a ~0.75 fill ratio), versus USDC's and
+ * cirBTC's raster logos, which are cropped tight to ~98-100% of their
+ * canvas. Multiplying by this scale (while the surrounding container
+ * stays clipped to a circle via overflow:hidden) zooms the image in just
+ * enough to cancel that padding out, so every token reads as the same
+ * size at a glance.
+ */
+export const TOKEN_ICON_VISUAL_SCALE: Record<string, number> = {
+  // EURC previously needed a 1.32x compensation here because its old SVG
+  // had ~25% padding baked in. It's since been replaced with the official
+  // Circle brand-kit asset (already correctly sized, no internal padding),
+  // so no entry is needed — leaving this empty (rather than deleting the
+  // mechanism) so it's ready if a future token logo has the same issue.
+};
+
+/** Pixel size an icon's <img> should be rendered at (width AND height, it's
+ *  always square) to visually fill a `containerSize`-px circular slot,
+ *  compensating for the source-file padding differences noted above. Pass
+ *  the same `containerSize` you use for the wrapping circle's width/height
+ *  — the container itself never changes size, only the image inside it. */
+export function tokenIconRenderSize(symbol: string, containerSize: number): number {
+  return Math.round(containerSize * (TOKEN_ICON_VISUAL_SCALE[symbol] ?? 1));
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Lookup token entry by address (case-insensitive) */

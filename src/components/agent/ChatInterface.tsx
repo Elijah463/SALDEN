@@ -23,7 +23,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useWalletClient } from 'wagmi';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useApp }    from '@/context/AppContext';
 import ChatMessage   from '@/components/agent/ChatMessage';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
@@ -257,7 +257,7 @@ function UsageBanner({ count }: { count: number }) {
 export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId }: ChatInterfaceProps) {
   const { state } = useApp();
   const { employees, tokenRegistry, payrollClone } = state;
-  const { data: walletClient } = useWalletClient();
+  const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { getToken, invalidate } = useAgentSession();
   const sessionTokenRef = useRef<string | null>(null);
 
@@ -359,7 +359,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       setError(`Daily AI request limit almost reached (${currentCount}/${DAILY_LIMIT}). Resets at midnight UTC.`);
       return;
     }
-    if (!walletClient) {
+    if (!canWrite) {
       setError('Wallet not connected — cannot start a secure agent session.');
       return;
     }
@@ -409,7 +409,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     };
 
     try {
-      let token = await getToken(walletAddress, walletClient);
+      let token = await getToken(walletAddress, universalSignMessage);
       sessionTokenRef.current = token;
 
       let res = await fetch(`${API_BASE}/agent/chat`, {
@@ -421,7 +421,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       // Session expired mid-flight — refresh once and retry.
       if (res.status === 401) {
         invalidate(walletAddress);
-        token = await getToken(walletAddress, walletClient, true);
+        token = await getToken(walletAddress, universalSignMessage, true);
         sessionTokenRef.current = token;
         res = await fetch(`${API_BASE}/agent/chat`, {
           method:  'POST',
@@ -474,7 +474,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     } finally {
       setIsLoading(false);
     }
-  }, [messages, isLoading, walletAddress, walletClient, employees, onDataChanged, getToken, invalidate]);
+  }, [messages, isLoading, walletAddress, canWrite, universalSignMessage, employees, onDataChanged, getToken, invalidate]);
 
   const markEventResolved = useCallback((messageId: string, index: number) => {
     setMessages(prev => prev.map(m => {

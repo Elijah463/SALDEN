@@ -7,14 +7,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePublicClient } from 'wagmi';
-import { RefreshCw, ChevronDown, AlertTriangle, Loader2 } from 'lucide-react';
+import { RefreshCw, ChevronDown, AlertTriangle, Loader2, Lock } from 'lucide-react';
 import { Modal }   from '@/components/shared/Modal';
 import { Button }  from '@/components/shared/Button';
 import { useApp }  from '@/context/AppContext';
 import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { getCachedTokens, setCachedTokens } from '@/lib/db/indexeddb';
-import { getToken, tokenLabel, DEFAULT_TOKEN_REGISTRY, type TokenEntry } from '@/lib/token-registry';
+import { getToken, DEFAULT_TOKEN_REGISTRY, TOKEN_ICON_PATHS, tokenIconRenderSize, type TokenEntry } from '@/lib/token-registry';
 
 const REMARK_OPTIONS = [
   'Salary Payment',
@@ -23,6 +23,33 @@ const REMARK_OPTIONS = [
   'Salary Advance',
   'Other',
 ] as const;
+
+function TokenIcon({ token, size = 24 }: { token: TokenEntry; size?: number }) {
+  const iconPath = TOKEN_ICON_PATHS[token.symbol];
+  if (iconPath) {
+    const renderSize = tokenIconRenderSize(token.symbol, size);
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: '50%', overflow: 'hidden',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={iconPath} alt={token.symbol} width={renderSize} height={renderSize}
+          style={{ display: 'block', objectFit: 'cover' }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%', background: '#EEF2FF',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    }}>
+      <span style={{ fontSize: size * 0.32, fontWeight: 800, color: '#4F46E5' }}>
+        {token.symbol.slice(0, 3)}
+      </span>
+    </div>
+  );
+}
 
 export interface PaymentModalParams {
   token:   TokenEntry;
@@ -35,13 +62,14 @@ interface PaymentModalProps {
   onClose:      () => void;
   activeGroup:  string;
   groups:       string[];
-  payrollClone: string;
+  payrollClone?: string;
+  isPremiumUser: boolean;
   onConfirm:    (params: PaymentModalParams) => void;
 }
 
-export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone, onConfirm }: PaymentModalProps) {
+export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone, isPremiumUser, onConfirm }: PaymentModalProps) {
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
-  const { state }    = useApp();
+  const { state, addToast } = useApp();
   const { tokenRegistry } = state;
 
   const [tokens,         setTokens]         = useState<TokenEntry[]>([]);
@@ -52,6 +80,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
   const [loadingTokens,  setLoadingTokens]  = useState(true);
   const [refreshing,     setRefreshing]     = useState(false);
   const [fetchError,     setFetchError]     = useState('');
+  const [tokenDropdownOpen, setTokenDropdownOpen] = useState(false);
   const hasSetDefault = useRef(false);
 
   useEffect(() => {
@@ -60,11 +89,24 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
       setSelectedGroup(activeGroup);
       setSelectedRemark(REMARK_OPTIONS[0]);
       setCustomRemark('');
+      setTokenDropdownOpen(false);
     }
   }, [open, activeGroup]);
 
   const fetchTokens = useCallback(async (forceRefresh = false) => {
-    if (!publicClient || !payrollClone) return;
+    if (!isPremiumUser || !payrollClone) {
+      // Non-premium: no multi-token contract to query — always USDC.
+      const usdcEntry = getToken(tokenRegistry, CONTRACTS.USDC) ?? DEFAULT_TOKEN_REGISTRY[CONTRACTS.USDC.toLowerCase()] ?? {
+        address: CONTRACTS.USDC, name: 'USD Coin', symbol: 'USDC', decimals: 6, addedAt: new Date().toISOString(),
+      };
+      setTokens([usdcEntry]);
+      setSelectedToken(usdcEntry.address);
+      hasSetDefault.current = true;
+      setLoadingTokens(false);
+      setRefreshing(false);
+      return;
+    }
+    if (!publicClient) return;
     setRefreshing(forceRefresh);
     setFetchError('');
     try {
@@ -124,7 +166,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
       setTokens(fallback.length ? fallback : Object.values(DEFAULT_TOKEN_REGISTRY));
       if (!hasSetDefault.current) { setSelectedToken(CONTRACTS.USDC); hasSetDefault.current = true; }
     } finally { setLoadingTokens(false); setRefreshing(false); }
-  }, [publicClient, payrollClone, tokenRegistry]);
+  }, [publicClient, payrollClone, tokenRegistry, isPremiumUser]);
 
   useEffect(() => { if (open) fetchTokens(false); }, [open, payrollClone, fetchTokens]);
 
@@ -160,33 +202,72 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <label style={lbl}>Currency / Token</label>
-            <button onClick={() => fetchTokens(true)} disabled={refreshing}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', display: 'flex' }}>
-              <RefreshCw size={13} style={{ animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }} />
-            </button>
+            {isPremiumUser && (
+              <button onClick={() => fetchTokens(true)} disabled={refreshing}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', display: 'flex' }}>
+                <RefreshCw size={13} style={{ animation: refreshing ? 'spin 0.7s linear infinite' : 'none' }} />
+              </button>
+            )}
           </div>
           {loadingTokens
             ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0' }}><Loader2 size={14} style={{ animation: 'spin 0.7s linear infinite', color: '#94A3B8' }} /><span style={{ fontSize: 13, color: '#94A3B8' }}>Loading tokens…</span></div>
             : <div style={{ position: 'relative' }}>
-                <select value={selectedToken} onChange={e => setSelectedToken(e.target.value)} style={sel}
-                  onFocus={e => { e.target.style.borderColor = '#4F46E5'; }}
-                  onBlur={e => { e.target.style.borderColor = '#E2E8F0'; }}>
-                  {tokens.map(t => <option key={t.address} value={t.address}>{tokenLabel(t)}</option>)}
-                </select>
-                <ChevronDown size={14} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#94A3B8' }} />
+                <button
+                  onClick={() => {
+                    if (!isPremiumUser) { addToast('Upgrade to Premium to pay in other tokens.', 'info'); return; }
+                    setTokenDropdownOpen(p => !p);
+                  }}
+                  style={{
+                    ...sel, display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                    cursor: isPremiumUser ? 'pointer' : 'not-allowed',
+                    background: isPremiumUser ? '#fff' : '#F8FAFC',
+                    color: isPremiumUser ? '#0F172A' : '#64748B',
+                  }}
+                >
+                  {selectedTokenEntry
+                    ? <><TokenIcon token={selectedTokenEntry} size={22} /><span style={{ fontWeight: 700 }}>{selectedTokenEntry.name}</span><span style={{ color: '#94A3B8' }}>{selectedTokenEntry.symbol}</span></>
+                    : <span style={{ color: '#94A3B8' }}>Select a token</span>}
+                  {isPremiumUser
+                    ? <ChevronDown size={14} style={{ marginLeft: 'auto', color: '#94A3B8' }} />
+                    : <Lock size={13} style={{ marginLeft: 'auto', color: '#CBD5E1' }} />}
+                </button>
+
+                {isPremiumUser && tokenDropdownOpen && (
+                  <>
+                    <div onClick={() => setTokenDropdownOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
+                    <div style={{
+                      position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 6, zIndex: 20,
+                      background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.10)', overflow: 'hidden', maxHeight: 260, overflowY: 'auto',
+                    }}>
+                      {tokens.map(t => (
+                        <button key={t.address}
+                          onClick={() => { setSelectedToken(t.address); setTokenDropdownOpen(false); }}
+                          style={{
+                            width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                            padding: '12px 14px', background: t.address === selectedToken ? '#F8FAFC' : 'none',
+                            border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                          }}
+                        >
+                          <TokenIcon token={t} size={22} />
+                          <span style={{ fontWeight: 700, fontSize: 14, color: '#0F172A' }}>{t.name}</span>
+                          <span style={{ fontSize: 12, color: '#94A3B8' }}>{t.symbol}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </div>
           }
+          {!isPremiumUser && !loadingTokens && (
+            <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6 }}>
+              Upgrade to Premium to pay in other tokens.
+            </p>
+          )}
           {fetchError && (
             <p style={{ fontSize: 12, color: '#D97706', marginTop: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
               <AlertTriangle size={12} /> {fetchError}
             </p>
-          )}
-          {selectedTokenEntry && !loadingTokens && (
-            <div style={{ marginTop: 8, padding: '6px 12px', background: '#EEF2FF', borderRadius: 8, fontSize: 12, color: '#4F46E5', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>{selectedTokenEntry.symbol}</span>
-              <span style={{ color: '#94A3B8' }}>·</span>
-              <span>{selectedTokenEntry.decimals} decimals</span>
-            </div>
           )}
         </div>
 

@@ -124,12 +124,19 @@ export async function POST(req: NextRequest) {
       ref?:            string;
       timestamp?:      number;
       executedBy?:     'manual' | 'ai_agent';
+      employees?: {
+        fullName?:      string;
+        department?:    string;
+        walletAddress?: string;
+        salaryAmount?:  string;
+        group?:         string;
+      }[];
     };
 
     const {
       txHash, walletAddress, recipientEmail,
       recipientCount, amount, token, remark, ref, timestamp,
-      executedBy = 'manual',
+      executedBy = 'manual', employees,
     } = body;
 
     // ── Required fields ─────────────────────────────────────────────────────
@@ -195,6 +202,22 @@ export async function POST(req: NextRequest) {
     const boundedRef    = ref ? ref.slice(0, 40) : ref;
     const boundedToken  = token.slice(0, 20);
 
+    // Cap at the claimed recipientCount (or 1000, whichever is smaller) —
+    // this route is a documented external trust boundary, so a hostile or
+    // malformed caller shouldn't be able to send an unbounded array that
+    // blows up the PDF's pagination loop or bloats the outgoing email.
+    const boundedEmployees = Array.isArray(employees)
+      ? employees
+          .slice(0, Math.min(recipientCount, 1000))
+          .map(e => ({
+            fullName:      (e.fullName ?? '').slice(0, 100),
+            department:    (e.department ?? '').slice(0, 60),
+            walletAddress: (e.walletAddress ?? '').slice(0, 42),
+            salaryAmount:  (e.salaryAmount ?? '').slice(0, 30),
+            group:         e.group ? e.group.slice(0, 60) : undefined,
+          }))
+      : undefined;
+
     const result = await sendInvoiceEmail({
       ref:            boundedRef ?? generateRef(txHash),
       txHash,
@@ -206,6 +229,7 @@ export async function POST(req: NextRequest) {
       remark:         boundedRemark,
       timestamp:      timestamp ?? Date.now(),
       executedBy,
+      employees:      boundedEmployees,
     });
 
     return NextResponse.json(result, { status: result.status === 'sent' ? 200 : 502 });

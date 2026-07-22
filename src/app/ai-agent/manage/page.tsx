@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { useWalletClient } from 'wagmi';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
   Clock, CheckCircle2, AlertTriangle,
@@ -48,7 +48,7 @@ export default function ManageAgentPage() {
   const router      = useRouter();
   const { state }   = useApp();
   const { address } = useEffectiveAddress();
-  const { data: walletClient } = useWalletClient();
+  const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { getToken } = useAgentSession();
   const { groups, isPremiumUser } = state;
 
@@ -74,9 +74,9 @@ export default function ManageAgentPage() {
     const local = await getAgentSchedules(address);
     setSchedules(local);
 
-    if (walletClient && local.length > 0) {
+    if (canWrite && local.length > 0) {
       try {
-        const token = await getToken(address, walletClient);
+        const token = await getToken(address, universalSignMessage);
         await fetch('/api/agent/schedule/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -86,15 +86,15 @@ export default function ManageAgentPage() {
         /* best-effort heartbeat — schedules still work locally; next visit retries */
       }
     }
-  }, [address, walletClient, getToken]);
+  }, [address, canWrite, universalSignMessage, getToken]);
 
   useEffect(() => { void loadSchedules(); }, [loadSchedules]);
 
   const syncOneToServer = useCallback((schedule: AgentSchedule) => {
-    if (!address || !walletClient) return;
+    if (!address || !canWrite) return;
     (async () => {
       try {
-        const token = await getToken(address, walletClient);
+        const token = await getToken(address, universalSignMessage);
         await fetch('/api/agent/schedule/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -102,7 +102,7 @@ export default function ManageAgentPage() {
         });
       } catch { /* self-heals on next page load */ }
     })();
-  }, [address, walletClient, getToken]);
+  }, [address, canWrite, universalSignMessage, getToken]);
 
   useEffect(() => {
     if (!address) return;

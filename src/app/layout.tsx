@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from 'next';
+import Script from 'next/script';
 import '@/styles/globals.css';
 import { Web3Provider } from '@/components/shared/Web3Provider';
 import { AppProvider }  from '@/context/AppContext';
+import { SignatureExplainerProvider } from '@/context/SignatureExplainerContext';
 import { Toasts }       from '@/components/shared/Toasts';
 import { AppSplash }    from '@/components/shared/AppSplash';
 
@@ -108,6 +110,65 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
+        {/*
+          Runs before any other script, including Web3Provider's module-
+          level wagmi/RainbowKit config construction. Some restrictive
+          in-app browsers and automated preview crawlers (confirmed: X's
+          in-app browser: link opened from a Linktree/X post; Vercel's own
+          deployment-preview screenshot bot) either omit `indexedDB`
+          entirely or throw a SecurityError on first localStorage/
+          sessionStorage touch, instead of just not having it. A bare
+          reference to a genuinely-undeclared global — which is exactly
+          what WalletConnect's storage layer does, unguarded, deep inside
+          RainbowKit's default connector — throws ReferenceError, which
+          crashes the ENTIRE app in these environments (it happens inside
+          a root-layout provider, so it bypasses every route-level error
+          boundary and lands in global-error.tsx, which is deliberately
+          provider-free and can't help the user recover into the app).
+          This has zero effect for the overwhelming majority of real users
+          with a normal browser — indexedDB/localStorage/sessionStorage
+          all already exist there, so every check below is a no-op.
+        */}
+        <Script id="storage-api-guard" strategy="beforeInteractive">
+          {`
+            (function() {
+              try {
+                if (typeof window !== 'undefined' && !('indexedDB' in window)) {
+                  window.indexedDB = undefined;
+                }
+              } catch (e) {}
+
+              function shimStorage(name) {
+                try {
+                  var s = window[name];
+                  var testKey = '__salden_storage_test__';
+                  s.setItem(testKey, '1');
+                  s.removeItem(testKey);
+                } catch (e) {
+                  try {
+                    var memory = {};
+                    Object.defineProperty(window, name, {
+                      value: {
+                        getItem: function(k) { return Object.prototype.hasOwnProperty.call(memory, k) ? memory[k] : null; },
+                        setItem: function(k, v) { memory[k] = String(v); },
+                        removeItem: function(k) { delete memory[k]; },
+                        clear: function() { memory = {}; },
+                        key: function(i) { return Object.keys(memory)[i] || null; },
+                        get length() { return Object.keys(memory).length; }
+                      },
+                      configurable: true,
+                      writable: true
+                    });
+                  } catch (e2) {}
+                }
+              }
+              if (typeof window !== 'undefined') {
+                shimStorage('localStorage');
+                shimStorage('sessionStorage');
+              }
+            })();
+          `}
+        </Script>
         {/* Google Fonts */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
@@ -121,10 +182,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Web3Provider>
           <AppProvider>
-            <AppSplash>
-              {children}
-            </AppSplash>
-            <Toasts />
+            <SignatureExplainerProvider>
+              <AppSplash>
+                {children}
+              </AppSplash>
+              <Toasts />
+            </SignatureExplainerProvider>
           </AppProvider>
         </Web3Provider>
       </body>

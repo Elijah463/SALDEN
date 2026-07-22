@@ -77,9 +77,9 @@ function isOfacFlagged(address: string): boolean {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CompliancePage() {
-  const { address }    = useEffectiveAddress();
-  const publicClient   = usePublicClient({ chainId: arcTestnet.id });
-  const { state }      = useApp();
+  const { address, mounted } = useEffectiveAddress();
+  const publicClient         = usePublicClient({ chainId: arcTestnet.id });
+  const { state }            = useApp();
   const { employees, registryClone } = state;
 
   const [checks,       setChecks]       = useState<ComplianceCheck[]>([]);
@@ -249,8 +249,16 @@ export default function CompliancePage() {
     setIsRunning(false);
   }, [address, publicClient, employees, registryClone]);
 
-  // Run on mount
-  useEffect(() => { runChecks(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  // Run once wallet/hydration state has actually resolved. Firing this on
+  // every render (or on address changing) would also be excessive; this
+  // captures the correctly-resolved wallet exactly once, right after
+  // mount finishes settling, rather than the moment before it (mounted
+  // flips true and address resolves in the same render — see
+  // lib/useEffectiveAddress.ts).
+  useEffect(() => {
+    if (!mounted) return;
+    runChecks();
+  }, [mounted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Score colour ──────────────────────────────────────────────────────────
 
@@ -270,7 +278,7 @@ export default function CompliancePage() {
               Compliance
             </h1>
             <p style={{ fontSize: 14, color: '#64748B' }}>
-              Real-time payroll compliance screening — no third-party dependencies.
+              Real-time payroll compliance screening.
             </p>
           </div>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>

@@ -24,11 +24,14 @@ export async function GET(req: NextRequest) {
     const walletAddress = req.nextUrl.searchParams.get('wallet');
     if (!walletAddress) return NextResponse.json({ error: 'wallet required' }, { status: 400 });
 
-    const session = getSession(req, walletAddress);
-    if (!session.ok) {
-      return NextResponse.json({ error: 'Your session has expired. Please sign in again.' }, { status: 401 });
-    }
-
+    // Deliberately no session check here — this is read-only and returns
+    // nothing sensitive: PLATFORM_MAX_DAILY_TOTAL/MAX_SINGLE_PAYMENT are
+    // fixed constants, and an employer's self-configured spend ceiling
+    // grants no capability to whoever reads it (walletAddress is already
+    // public on-chain regardless). Requiring a wallet signature just to
+    // *view* this — before the employer has even decided to change
+    // anything — meant opening Settings always prompted a sign-in.
+    // Actually changing the limit (POST, below) still requires one.
     const employerLimit = await getEmployerDailyLimit(walletAddress);
     return NextResponse.json({
       employerLimit,                      // null if never configured — Settings should show the platform default as a placeholder in that case

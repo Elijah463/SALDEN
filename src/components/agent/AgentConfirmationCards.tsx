@@ -20,7 +20,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useWalletClient, usePublicClient } from 'wagmi';
+import { usePublicClient } from 'wagmi';
 import { encodeFunctionData, keccak256 } from 'viem';
 import { Loader2 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
@@ -33,6 +33,7 @@ import { MEMO_ABI, MEMO_CONTRACT_ADDRESS, ERC20_ABI } from '@/lib/contracts/abis
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { CONTRACTS, txLink } from '@/lib/contracts/config';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
@@ -226,6 +227,7 @@ export function UnlistedPaymentCard({
 
       // ── Record + invoice (executedBy: 'ai_agent' — proposed by the agent,
       //    confirmed and signed by the human) ──────────────────────────────
+      const invoiceEmail = payrollSetup?.email ?? null;
       await saveTxRecord({
         id: hash, hash, ref,
         type: 'batchPay', status: 'success',
@@ -233,11 +235,13 @@ export function UnlistedPaymentCard({
         remark: 'AI Agent — unlisted address payment',
         recipientCount: 1,
         timestamp: Date.now(),
-        invoiceEmailStatus: 'pending',
+        // Only 'pending' if we're actually about to attempt a send below —
+        // otherwise this stayed 'pending' forever with nothing left to
+        // ever move it to 'sent'/'failed'.
+        invoiceEmailStatus: invoiceEmail ? 'pending' : null,
         executedBy: 'ai_agent',
       }, walletAddress);
 
-      const invoiceEmail = payrollSetup?.email ?? null;
       if (invoiceEmail) {
         fetch(`${API_BASE}/invoice/send`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -343,7 +347,8 @@ export function AddEmployeeCard({
 }: AddEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
-  const { data: walletClient } = useWalletClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign = useCachedSignMessage();
   const publicClient = usePublicClient();
 
   const [addState, setAddState] = useState<AddState>('idle');
@@ -358,7 +363,7 @@ export function AddEmployeeCard({
   const handleConfirm = useCallback(async () => {
     if (executing.current) return;   // prevent double-click race — must be FIRST
     executing.current = true;
-    if (!walletClient || !publicClient) {
+    if (!canWrite || !publicClient) {
       executing.current = false;     // reset so user can retry after reconnecting wallet
       setError('Wallet not connected.'); setAddState('error'); return;
     }
@@ -386,12 +391,13 @@ export function AddEmployeeCard({
       dispatch({ type: 'SET_EMPLOYEES', payload: next });
 
       setAddState('syncing');
-      // account required in wagmi v2 for external wallets (Rabby, etc.)
-      // Wallet will show: "Sign to encrypt and save employee data to IPFS"
-      const sign = (msg: string) => walletClient.signMessage({
-        account: walletAddress as `0x${string}`,
-        message: msg,
-      });
+      // Routes through useUniversalWrite (wagmi popup for an external
+      // wallet, Circle's PIN challenge for social login) and is cached in
+      // sessionStorage — see lib/circle/useCachedSignMessage.ts. This used
+      // to require a raw wagmi walletClient directly, which silently
+      // broke this card for every Circle/social-login user ("Wallet not
+      // connected" even when connected) and re-prompted a fresh signature
+      // every single time for everyone else.
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       // syncData legitimately returns { cid: undefined } if walletAddress
       // was empty or the server response omitted it — writing that through
@@ -402,7 +408,7 @@ export function AddEmployeeCard({
 
       if (registryClone) {
         setAddState('anchoring');
-        const hash = await walletClient.writeContract({
+        const hash = await universalWrite({
           address: registryClone as `0x${string}`,
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
@@ -425,7 +431,7 @@ export function AddEmployeeCard({
       setAddState('error');
       onResolved('error', msg);
     }
-  }, [walletClient, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
   if (addState === 'done') {
     return (
@@ -492,7 +498,8 @@ export function EditEmployeeCard({
 }: EditEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
-  const { data: walletClient } = useWalletClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign = useCachedSignMessage();
   const publicClient = usePublicClient();
 
   const [editState, setEditState] = useState<AddState>('idle');
@@ -509,7 +516,7 @@ export function EditEmployeeCard({
   const handleConfirm = useCallback(async () => {
     if (executing.current) return;
     executing.current = true;
-    if (!walletClient || !publicClient) {
+    if (!canWrite || !publicClient) {
       executing.current = false;
       setError('Wallet not connected.'); setEditState('error'); return;
     }
@@ -531,13 +538,12 @@ export function EditEmployeeCard({
       dispatch({ type: 'SET_EMPLOYEES', payload: next });
 
       setEditState('syncing');
-      const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setEditState('anchoring');
-        const hash = await walletClient.writeContract({
+        const hash = await universalWrite({
           address: registryClone as `0x${string}`,
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
@@ -559,7 +565,7 @@ export function EditEmployeeCard({
       setEditState('error');
       onResolved('error', msg);
     }
-  }, [walletClient, publicClient, existing, fullName, department, group, salary, newAddress, currentAddress, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, existing, fullName, department, group, salary, newAddress, currentAddress, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
   useEffect(() => {
     if (autoConfirm) void handleConfirm();
@@ -616,7 +622,8 @@ export interface RemoveEmployeeCardProps {
 export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolved }: RemoveEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
-  const { data: walletClient } = useWalletClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign = useCachedSignMessage();
   const publicClient = usePublicClient();
 
   const [removeState, setRemoveState] = useState<AddState>('idle');
@@ -631,7 +638,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
   const handleConfirm = useCallback(async () => {
     if (executing.current) return;
     executing.current = true;
-    if (!walletClient || !publicClient) {
+    if (!canWrite || !publicClient) {
       executing.current = false;
       setError('Wallet not connected.'); setRemoveState('error'); return;
     }
@@ -641,13 +648,12 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       dispatch({ type: 'SET_EMPLOYEES', payload: next });
 
       setRemoveState('syncing');
-      const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setRemoveState('anchoring');
-        const hash = await walletClient.writeContract({
+        const hash = await universalWrite({
           address: registryClone as `0x${string}`,
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
@@ -669,7 +675,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       setRemoveState('error');
       onResolved('error', msg);
     }
-  }, [walletClient, publicClient, address, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, address, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
   if (removeState === 'done') {
     return <CardShell tone="success" title="✓ EMPLOYEE REMOVED"><div>{fullName} removed from the employee database.</div></CardShell>;
@@ -712,7 +718,8 @@ export interface BulkAddEmployeesCardProps {
 export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddress, autoConfirm, onResolved }: BulkAddEmployeesCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
-  const { data: walletClient } = useWalletClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign = useCachedSignMessage();
   const publicClient = usePublicClient();
 
   const [addState, setAddState] = useState<AddState>('idle');
@@ -736,7 +743,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
   const handleConfirm = useCallback(async () => {
     if (executing.current) return;
     executing.current = true;
-    if (!walletClient || !publicClient) {
+    if (!canWrite || !publicClient) {
       executing.current = false;
       setError('Wallet not connected.'); setAddState('error'); return;
     }
@@ -750,13 +757,12 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       dispatch({ type: 'SET_EMPLOYEES', payload: next });
 
       setAddState('syncing');
-      const sign = (msg: string) => walletClient.signMessage({ account: walletAddress as `0x${string}`, message: msg });
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
       if (registryClone) {
         setAddState('anchoring');
-        const hash = await walletClient.writeContract({
+        const hash = await universalWrite({
           address: registryClone as `0x${string}`,
           abi: REGISTRY_UPDATE_CID_ABI,
           functionName: 'updateCID', args: [cid],
@@ -778,7 +784,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       setAddState('error');
       onResolved('error', msg);
     }
-  }, [walletClient, publicClient, drafts, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, drafts, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
   useEffect(() => {
     if (autoConfirm && !parseError) void handleConfirm();

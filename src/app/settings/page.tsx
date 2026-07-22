@@ -6,23 +6,24 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { useWalletClient, usePublicClient } from 'wagmi';
+import Link from 'next/link';
+import { usePublicClient } from 'wagmi';
 import { type PayrollSetup } from '@/context/AppContext';
 import {
-  Zap, Trash2, Download, ExternalLink,
-  AlertTriangle, Loader2, Plus, X,
+  Zap, Trash2, AlertTriangle, Loader2, Plus, X, ChevronRight, ExternalLink,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/shared/Modal';
-import { CONTRACTS, addressLink } from '@/lib/contracts/config';
-import { MULTI_TOKEN_PAYROLL_ABI, REGISTRY_ABI } from '@/lib/contracts/abis';
-import { truncAddr, isValidEthAddress, sanitizeString } from '@/lib/validation';
-import { upsertToken, removeToken } from '@/lib/token-registry';
+import { addressLink } from '@/lib/contracts/config';
+import { REGISTRY_ABI } from '@/lib/contracts/abis';
+import { truncAddr, sanitizeString } from '@/lib/validation';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
+import { usePayrollSync } from '@/lib/usePayrollSync';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
@@ -60,14 +61,13 @@ export default function SettingsPage() {
   // which silently broke profile save + group add/remove sync on this
   // page for every non-external-wallet login.
   const { address }      = useEffectiveAddress();
-  const { data: wallet } = useWalletClient();
   const publicClient     = usePublicClient();
   const { state, dispatch, addToast, syncData } = useApp();
-  const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups } = state;
-  // Used only for sync/anchor (profile + groups) below — branches to a
-  // Circle SIGN_MESSAGE/PIN challenge for social login, wagmi for an
-  // external wallet. The agent/token/emergency-withdraw actions further
-  // down still use `wallet` directly and remain external-wallet-only.
+  const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups, employees } = state;
+  usePayrollSync({ registryClone, address, publicClient });
+  // Used for sync/anchor (profile + groups) below and by the shared
+  // cached-sign hook — branches to a Circle SIGN_MESSAGE/PIN challenge for
+  // social login, wagmi for an external wallet.
   const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
   // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
@@ -98,7 +98,8 @@ export default function SettingsPage() {
     }
   };
 
-  const signMsg = canWrite ? (msg: string) => universalSignMessage(msg) : undefined;
+  const sign = useCachedSignMessage();
+  const signMsg = canWrite ? sign : undefined;
 
   /** Sync current state to IPFS, then anchor the resulting CID Onchain. */
   async function syncAndAnchor() {
@@ -110,15 +111,28 @@ export default function SettingsPage() {
   const [companyName, setCompanyName] = useState(payrollSetup?.companyName ?? '');
   const [email,       setEmail]       = useState(payrollSetup?.email       ?? '');
   const [savingProfile, setSavingProfile] = useState(false);
+  const profileHydrated = useRef(false);
+
+  // payrollSetup can arrive asynchronously (usePayrollSync's cache/IPFS
+  // hydration above happens after this component's first render) — the
+  // useState initializers only ever see whatever was in AppContext at
+  // mount time. Without this, company name and invoice email rendered
+  // blank on any page load where this was the first page visited this
+  // session, even though the data existed and was seconds away. Syncs
+  // once, the first time real data shows up; never overwrites the form
+  // again after that (so it doesn't clobber whatever the user is
+  // actively typing, including after their own save).
+  useEffect(() => {
+    if (profileHydrated.current || !payrollSetup) return;
+    setCompanyName(payrollSetup.companyName ?? '');
+    setEmail(payrollSetup.email ?? '');
+    profileHydrated.current = true;
+  }, [payrollSetup]);
 
   // Group management
   const [newGroup,     setNewGroup]     = useState('');
   const [groupError,   setGroupError]   = useState('');
   const [groupSaving,  setGroupSaving]  = useState(false);
-
-  // Agent management
-  const [agentAddr,      setAgentAddr]      = useState('');
-  const [agentLoading,   setAgentLoading]   = useState(false);
 
   // AI Agent daily spend limit — per-employer configurable ceiling, see
   // app/api/agent/limits/route.ts and lib/agent/employerLimits.ts. This
@@ -137,15 +151,12 @@ export default function SettingsPage() {
   const grossPayrollTotal = (state.employees ?? []).reduce((sum, e) => sum + (e.salaryAmount ?? 0), 0);
 
   useEffect(() => {
-    if (!address || !wallet) return;
+    if (!address) return;
     let cancelled = false;
     (async () => {
       setLimitLoading(true);
       try {
-        const token = await getToken(address, wallet);
-        const res = await fetch(`/api/agent/limits?wallet=${address}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(`/api/agent/limits?wallet=${address}`);
         if (!res.ok) throw new Error('Could not load current limit.');
         const data = await res.json() as { employerLimit: number | null; platformCeiling: number };
         if (!cancelled) {
@@ -160,10 +171,10 @@ export default function SettingsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [address, wallet, getToken]);
+  }, [address]);
 
   async function handleSaveDailyLimit() {
-    if (!address || !wallet) return;
+    if (!address || !canWrite) return;
     const amount = Number(dailyLimitInput);
     if (!Number.isFinite(amount) || amount <= 0) {
       setLimitError('Enter a valid amount.');
@@ -173,7 +184,9 @@ export default function SettingsPage() {
     setLimitError('');
     setLimitSaved(false);
     try {
-      const token = await getToken(address, wallet);
+      // Signature is requested here — the first (and only) time this
+      // section needs one — not when the page/section merely loads.
+      const token = await getToken(address, universalSignMessage);
       const res = await fetch('/api/agent/limits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -192,22 +205,6 @@ export default function SettingsPage() {
       setLimitSaving(false);
     }
   }
-
-  // Token management — full form: address + name + symbol + decimals
-  const [tokenForm, setTokenForm] = useState({
-    address:  '',
-    name:     '',
-    symbol:   '',
-    decimals: '6',
-  });
-  const [tokenLoading,  setTokenLoading]  = useState(false);
-  const [tokenError,    setTokenError]    = useState('');
-  const [removeConfirm, setRemoveConfirm] = useState<string | null>(null); // address to remove
-
-  // Emergency withdraw modal
-  const [withdrawOpen,  setWithdrawOpen]  = useState(false);
-  const [withdrawToken, setWithdrawToken] = useState('');
-  const [withdrawing,   setWithdrawing]   = useState(false);
 
   // Delete all data modal
   const [deleteOpen,    setDeleteOpen]    = useState(false);
@@ -260,99 +257,6 @@ export default function SettingsPage() {
       addToast(`Group "${g}" removed.`, 'success');
     } catch { addToast('Saved locally — sync failed.', 'warning'); }
     finally { setGroupSaving(false); }
-  }
-
-  // ── Add agent (premium only) ────────────────────────────────────────────────
-
-  async function handleAddAgent() {
-    if (!wallet || !payrollClone || !isValidEthAddress(agentAddr)) {
-      addToast('Enter a valid Ethereum address.', 'error'); return;
-    }
-    setAgentLoading(true);
-    try {
-      const hash = await wallet.writeContract({
-        address:      payrollClone as `0x${string}`,
-        abi:          MULTI_TOKEN_PAYROLL_ABI,
-        functionName: 'addAgent',
-        args:         [agentAddr as `0x${string}`],
-      });
-      addToast(`Agent added. Tx: ${hash.slice(0, 12)}…`, 'success');
-      setAgentAddr('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
-    finally { setAgentLoading(false); }
-  }
-
-  // ── Add token to registry + Onchain ─────────────────────────────────────
-
-  async function handleAddToken() {
-    setTokenError('');
-    const { address: tAddr, name, symbol, decimals } = tokenForm;
-
-    // Client-side validation via registry helper
-    const { registry: updated, error } = upsertToken(state.tokenRegistry, {
-      address:   tAddr.trim(),
-      name:      sanitizeString(name),
-      symbol:    symbol.trim().toUpperCase(),
-      decimals:  Number(decimals),
-      addedBy:   address ?? undefined,
-    });
-    if (error) { setTokenError(error); return; }
-
-    setTokenLoading(true);
-    try {
-      // 1. Register on smart contract (premium only)
-      if (wallet && payrollClone) {
-        const hash = await wallet.writeContract({
-          address:      payrollClone as `0x${string}`,
-          abi:          MULTI_TOKEN_PAYROLL_ABI,
-          functionName: 'addSupportedToken',
-          args:         [tAddr.trim() as `0x${string}`],
-        });
-        addToast(`Token added Onchain. Tx: ${hash.slice(0, 12)}…`, 'success');
-      }
-      // 2. Save name+symbol to registry (all plans — used for display)
-      dispatch({ type: 'SET_TOKEN_REGISTRY', payload: updated });
-      await syncAndAnchor();
-      setTokenForm({ address: '', name: '', symbol: '', decimals: '6' });
-      addToast(`${symbol.toUpperCase()} added to token registry.`, 'success');
-    } catch (err) {
-      setTokenError((err as Error).message);
-    } finally {
-      setTokenLoading(false);
-    }
-  }
-
-  // ── Remove token from registry ────────────────────────────────────────────
-
-  async function handleRemoveToken(addr: string) {
-    const { registry: updated, error } = removeToken(state.tokenRegistry, addr);
-    if (error) { addToast(error, 'error'); return; }
-
-    dispatch({ type: 'SET_TOKEN_REGISTRY', payload: updated });
-    await syncAndAnchor().catch(() => {});
-    setRemoveConfirm(null);
-    addToast('Token removed from registry.', 'success');
-  }
-
-  // ── Emergency withdraw ─────────────────────────────────────────────────────
-
-  async function handleWithdraw() {
-    if (!wallet || !payrollClone || !isValidEthAddress(withdrawToken)) {
-      addToast('Enter a valid token address.', 'error'); return;
-    }
-    setWithdrawing(true);
-    try {
-      const hash = await wallet.writeContract({
-        address:      payrollClone as `0x${string}`,
-        abi:          MULTI_TOKEN_PAYROLL_ABI,
-        functionName: 'emergencyWithdraw',
-        args:         [withdrawToken as `0x${string}`],
-      });
-      addToast(`Emergency withdrawal submitted. Tx: ${hash.slice(0, 12)}…`, 'success');
-      setWithdrawOpen(false);
-      setWithdrawToken('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
-    finally { setWithdrawing(false); }
   }
 
   // ── Delete all local data ─────────────────────────────────────────────────
@@ -484,17 +388,28 @@ export default function SettingsPage() {
               No groups yet. Add a group to organise employees.
             </p>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {groups.map(g => (
+            <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 180px 36px',
+                padding: '10px 14px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0',
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4 }}>Group</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4 }}>Number of Members</span>
+                <span />
+              </div>
+              {groups.map((g, i) => (
                 <div key={g} style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  padding: '5px 12px', borderRadius: 99,
-                  background: '#EEF2FF', border: '1px solid #C7D2FE',
+                  display: 'grid', gridTemplateColumns: '1fr 180px 36px', alignItems: 'center',
+                  padding: '10px 14px',
+                  borderBottom: i < groups.length - 1 ? '1px solid #F1F5F9' : 'none',
                 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#4F46E5' }}>{g}</span>
-                  <button onClick={() => handleRemoveGroup(g)}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: '#818CF8' }}>
-                    <X size={12} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{g}</span>
+                  <span style={{ fontSize: 13, color: '#0F172A' }}>
+                    {employees.filter(e => e.group === g).length}
+                  </span>
+                  <button onClick={() => handleRemoveGroup(g)} title={`Remove ${g}`}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', justifyContent: 'flex-end', color: '#94A3B8' }}>
+                    <X size={14} />
                   </button>
                 </div>
               ))}
@@ -502,218 +417,56 @@ export default function SettingsPage() {
           )}
         </Section>
 
-        {/* ── Premium Contract Functions ──────────────────────────────────── */}
-        <Section title="Premium Contract Functions">
-          {!isPremiumUser ? (
+        {/* ── Contract Functions tile ─────────────────────────────────────── */}
+        {isPremiumUser ? (
+          <Link href="/settings/contract-functions" style={{ textDecoration: 'none' }}>
             <div style={{
-              background: '#F8F9FA', borderRadius: 12, padding: '20px',
-              textAlign: 'center',
+              background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16,
+              padding: '18px 24px', display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', cursor: 'pointer',
             }}>
-              <Zap size={24} color="#E2E8F0" style={{ margin: '0 auto 10px' }} />
-              <p style={{ fontSize: 14, color: '#94A3B8', marginBottom: 14 }}>
-                These functions require the Premium plan and a private payroll contract.
-              </p>
-              <a href="/pricing" style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '9px 18px', borderRadius: 10,
-                background: '#14B8A6', color: '#fff',
-                fontSize: 13, fontWeight: 600, textDecoration: 'none',
-              }}>
-                <Zap size={14} /> Upgrade to Premium
-              </a>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: 10, background: '#EEF2FF',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  <Zap size={18} color="#4F46E5" />
+                </div>
+                <div>
+                  <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', margin: '0 0 2px' }}>Contract Functions</p>
+                  <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Agents, payment tokens, withdrawals, and the circuit breaker</p>
+                </div>
+              </div>
+              <ChevronRight size={18} color="#94A3B8" />
             </div>
-          ) : (
-            <>
-              {/* Add agent */}
-              <div style={{ marginBottom: 20 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 8 }}>
-                  Authorise AI Agent Wallet
-                </p>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    value={agentAddr}
-                    onChange={e => setAgentAddr(e.target.value)}
-                    placeholder="Agent wallet address (0x…)"
-                    style={{ ...inputStyle, flex: 1, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}
-                    maxLength={42}
-                    onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-                    onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-                  />
-                  <Button variant="brand" loading={agentLoading} onClick={handleAddAgent} size="sm">
-                    Add Agent
-                  </Button>
-                </div>
+          </Link>
+        ) : (
+          <div style={{
+            background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16,
+            padding: '18px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: 10, background: '#F8F9FA',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <Zap size={18} color="#E2E8F0" />
               </div>
-
-              <hr style={{ border: 'none', borderTop: '1px solid #F1F5F9', margin: '16px 0' }} />
-
-              {/* Add token form */}
-              <div style={{ marginBottom: 20 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 12 }}>
-                  Add Payment Token
-                </p>
-
-                {/* Token contract address */}
-                <div style={{ marginBottom: 10 }}>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 5 }}>
-                    Contract Address
-                  </label>
-                  <input
-                    value={tokenForm.address}
-                    onChange={e => { setTokenForm(p => ({ ...p, address: e.target.value })); setTokenError(''); }}
-                    placeholder="0x… (ERC-20 contract address)"
-                    maxLength={42}
-                    style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}
-                    onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-                    onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-                  />
-                </div>
-
-                {/* Name + Symbol row */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 5 }}>
-                      Token Name
-                    </label>
-                    <input
-                      value={tokenForm.name}
-                      onChange={e => { setTokenForm(p => ({ ...p, name: e.target.value })); setTokenError(''); }}
-                      placeholder="e.g. USD Coin"
-                      maxLength={40}
-                      style={inputStyle}
-                      onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-                      onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 5 }}>
-                      Symbol
-                    </label>
-                    <input
-                      value={tokenForm.symbol}
-                      onChange={e => { setTokenForm(p => ({ ...p, symbol: e.target.value.toUpperCase() })); setTokenError(''); }}
-                      placeholder="e.g. USDC"
-                      maxLength={12}
-                      style={inputStyle}
-                      onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-                      onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-                    />
-                  </div>
-                </div>
-
-                {/* Decimals */}
-                <div style={{ marginBottom: 10 }}>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 5 }}>
-                    Decimals
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={18}
-                    value={tokenForm.decimals}
-                    onChange={e => { setTokenForm(p => ({ ...p, decimals: e.target.value })); setTokenError(''); }}
-                    style={{ ...inputStyle, width: 120 }}
-                    onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-                    onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-                  />
-                  <span style={{ fontSize: 11, color: '#94A3B8', marginLeft: 8 }}>
-                    (6 for USDC, 18 for most ERC-20s)
-                  </span>
-                </div>
-
-                {tokenError && (
-                  <p style={{ fontSize: 12, color: '#DC2626', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <AlertTriangle size={12} /> {tokenError}
-                  </p>
-                )}
-
-                <Button
-                  variant="brand"
-                  icon={<Plus size={14} />}
-                  loading={tokenLoading}
-                  onClick={handleAddToken}
-                  size="sm"
-                  disabled={!tokenForm.address || !tokenForm.name || !tokenForm.symbol}
-                >
-                  Add Token
-                </Button>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', margin: '0 0 2px' }}>Contract Functions</p>
+                <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Requires the Premium plan</p>
               </div>
-
-              {/* Token registry table */}
-              {Object.keys(state.tokenRegistry).length > 0 && (
-                <>
-                  <hr style={{ border: 'none', borderTop: '1px solid #F1F5F9', margin: '16px 0' }} />
-                  <p style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 10 }}>
-                    Token Registry
-                  </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {Object.values(state.tokenRegistry).map(token => (
-                      <div key={token.address} style={{
-                        display: 'flex', alignItems: 'center', gap: 10,
-                        padding: '10px 14px', borderRadius: 10,
-                        border: '1px solid #E2E8F0', background: '#F8F9FA',
-                      }}>
-                        {/* Token badge */}
-                        <div style={{
-                          width: 34, height: 34, borderRadius: 8,
-                          background: '#EEF2FF', display: 'flex', alignItems: 'center',
-                          justifyContent: 'center', flexShrink: 0,
-                        }}>
-                          <span style={{ fontSize: 10, fontWeight: 800, color: '#4F46E5' }}>
-                            {token.symbol.slice(0, 4)}
-                          </span>
-                        </div>
-
-                        {/* Name + address */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>
-                            {token.name}
-                            <span style={{ marginLeft: 6, fontSize: 11, color: '#94A3B8', fontWeight: 400 }}>
-                              {token.symbol}
-                            </span>
-                            <span style={{ marginLeft: 6, fontSize: 11, color: '#94A3B8' }}>
-                              · {token.decimals} decimals
-                            </span>
-                          </div>
-                          {/* Address — always shown in settings per spec */}
-                          <a
-                            href={addressLink(token.address)}
-                            target="_blank" rel="noreferrer"
-                            style={{
-                              fontSize: 11, color: '#4F46E5',
-                              fontFamily: "'JetBrains Mono', monospace",
-                              textDecoration: 'none',
-                              display: 'flex', alignItems: 'center', gap: 4,
-                            }}
-                          >
-                            {token.address}
-                            <ExternalLink size={10} />
-                          </a>
-                        </div>
-
-                        {/* Remove button — USDC cannot be removed */}
-                        {(!CONTRACTS.USDC || token.address.toLowerCase() !== CONTRACTS.USDC.toLowerCase()) && (
-                          <button
-                            onClick={() => setRemoveConfirm(token.address)}
-                            title="Remove token"
-                            style={{
-                              width: 28, height: 28, borderRadius: 7, border: 'none',
-                              background: '#FEF2F2', cursor: 'pointer',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              flexShrink: 0,
-                            }}
-                          >
-                            <X size={13} color="#DC2626" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </Section>
+            </div>
+            <a href="/pricing" style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px', borderRadius: 9,
+              background: '#14B8A6', color: '#fff',
+              fontSize: 12, fontWeight: 600, textDecoration: 'none', flexShrink: 0,
+            }}>
+              Upgrade
+            </a>
+          </div>
+        )}
 
         {/* ── AI Agent Daily Spend Limit ──────────────────────────────────── */}
         <Section title="AI Agent Daily Spend Limit">
@@ -758,17 +511,6 @@ export default function SettingsPage() {
             </h3>
           </div>
           <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {isPremiumUser && payrollClone && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                  <p style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', margin: '0 0 2px' }}>Emergency Withdrawal</p>
-                  <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Drain all tokens from your payroll contract to your wallet.</p>
-                </div>
-                <Button variant="danger" icon={<Download size={14} />} onClick={() => setWithdrawOpen(true)} size="sm">
-                  Withdraw
-                </Button>
-              </div>
-            )}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <p style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', margin: '0 0 2px' }}>Clear All Local Data</p>
@@ -781,34 +523,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
-
-      {/* Emergency withdraw modal */}
-      <Modal open={withdrawOpen} onClose={() => setWithdrawOpen(false)} title="Emergency Withdrawal" maxWidth={400}>
-        <p style={{ fontSize: 14, color: '#64748B', marginBottom: 16, lineHeight: 1.65 }}>
-          This will drain all tokens of the specified type from your payroll contract to your wallet.
-          This action cannot be undone.
-        </p>
-        <label className="label">Token Contract Address</label>
-        <input
-          value={withdrawToken}
-          onChange={e => setWithdrawToken(e.target.value)}
-          placeholder="0x… (use USDC address for USDC)"
-          style={{ ...inputStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12, marginBottom: 16 }}
-          maxLength={42}
-          onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-          onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
-        />
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setWithdrawOpen(false)} style={{
-            flex: 1, padding: '10px 0', borderRadius: 10,
-            border: '1.5px solid #E2E8F0', background: 'transparent',
-            fontSize: 14, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', color: '#475569',
-          }}>Cancel</button>
-          <Button variant="danger" loading={withdrawing} onClick={handleWithdraw} style={{ flex: 1 }}>
-            Confirm Withdrawal
-          </Button>
-        </div>
-      </Modal>
 
       {/* Delete data confirm modal */}
       <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} maxWidth={380}>
@@ -838,41 +552,6 @@ export default function SettingsPage() {
         </div>
       </Modal>
 
-      {/* Remove token confirmation modal */}
-      {removeConfirm && (
-        <Modal open={!!removeConfirm} onClose={() => setRemoveConfirm(null)} maxWidth={380}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{
-              width: 52, height: 52, borderRadius: '50%',
-              background: '#FEF2F2', border: '1px solid #FCA5A5',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              margin: '0 auto 16px',
-            }}>
-              <X size={22} color="#DC2626" />
-            </div>
-            <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
-              Remove token?
-            </h3>
-            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 6, lineHeight: 1.6 }}>
-              This removes the token name from your registry. The token address will remain
-              on your payroll contract until you call <code>removeToken</code> Onchain.
-            </p>
-            <p style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: '#475569', marginBottom: 24 }}>
-              {truncAddr(removeConfirm, 10, 8)}
-            </p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setRemoveConfirm(null)} style={{
-                flex: 1, padding: '10px 0', borderRadius: 10,
-                border: '1.5px solid #E2E8F0', background: 'transparent',
-                fontSize: 14, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', color: '#475569',
-              }}>Cancel</button>
-              <Button variant="danger" onClick={() => handleRemoveToken(removeConfirm)} style={{ flex: 1 }}>
-                Remove
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </AppLayout>
   );
 }

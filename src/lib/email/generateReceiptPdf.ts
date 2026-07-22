@@ -2,15 +2,32 @@
  * @file lib/email/generateReceiptPdf.ts
  * SERVER-SIDE ONLY.
  *
- * Generates the same Salden payroll receipt PDF as the client-side
- * "Download" button in transaction-history/page.tsx, so the emailed
- * attachment is visually identical to what a user downloads manually.
+ * Generates the Salden payroll receipt PDF attached to invoice emails
+ * (see sendInvoiceEmail.ts / api/invoice/send/route.ts).
  *
- * jsPDF runs fine in a Node/serverless environment for text-only PDFs
- * (no canvas/DOM dependency needed for this layout).
+ * jsPDF runs fine in a Node/serverless environment for this — no
+ * canvas/DOM dependency needed, just text/shape drawing plus one raster
+ * image (the logo) read from the public/ directory at module load.
+ *
+ * No jspdf-autotable dependency here (not installed, and adding a new
+ * package isn't something this change should require) — the employee
+ * table below is drawn manually with jsPDF's own primitives, including
+ * its own pagination for payroll runs with many recipients.
  */
 
 import { jsPDF } from 'jspdf';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+export interface ReceiptEmployeeRow {
+  fullName:      string;
+  department:    string;
+  walletAddress: string;
+  /** Human-formatted for the token's own decimals, e.g. "1,250.00" — the
+   *  caller already knows the token/decimals, this file just renders it. */
+  salaryAmount:  string;
+  group?:        string;
+}
 
 export interface ReceiptPdfInput {
   ref:            string;
@@ -19,9 +36,44 @@ export interface ReceiptPdfInput {
   recipientCount: number;
   token:          string;
   remark?:        string;
-  amount:         string;      // human-readable, e.g. "1,250.00"
+  amount:         string;      // human-readable total, e.g. "1,250.00"
   executedBy:     'manual' | 'ai_agent';
+  /** Per-employee breakdown for the table below. Optional — older callers
+   *  (or a caller that genuinely couldn't resolve individual employees)
+   *  still get a valid PDF, just without the per-recipient table. */
+  employees?:     ReceiptEmployeeRow[];
 }
+
+// ── Brand palette — used for backgrounds/borders/accents only. All actual
+// text stays black/dark-slate per spec, regardless of what's behind it. ──
+const BRAND_INDIGO: [number, number, number]      = [79, 70, 229];   // #4F46E5
+const BRAND_INDIGO_TINT: [number, number, number] = [238, 242, 255]; // #EEF2FF — light enough that black text stays perfectly legible on top
+const ROW_ALT_TINT: [number, number, number]      = [248, 250, 252]; // #F8FAFC — subtle zebra striping, not a color fill
+const TEXT_BLACK: [number, number, number]        = [15, 23, 42];    // #0F172A
+const TEXT_GRAY: [number, number, number]         = [100, 116, 139]; // #64748B
+const TEXT_LIGHT_GRAY: [number, number, number]   = [148, 163, 184]; // #94A3B8
+const SUCCESS_GREEN: [number, number, number]     = [5, 150, 105];   // used only for the small paid-marker dot, never for text
+
+// Logo is read once per warm serverless instance rather than on every
+// request — this file's own PNG, not a network fetch, so it's cheap and
+// safe to keep in memory for the process lifetime.
+let cachedLogoBase64: string | null | undefined;
+function getLogoBase64(): string | null {
+  if (cachedLogoBase64 !== undefined) return cachedLogoBase64;
+  try {
+    const bytes = readFileSync(join(process.cwd(), 'public', 'images', 'salden-logo.png'));
+    cachedLogoBase64 = bytes.toString('base64');
+  } catch {
+    // Missing/unreadable logo must never break invoice generation — the
+    // rest of the receipt (and the actual payroll payment it documents)
+    // is far more important than the header graphic.
+    cachedLogoBase64 = null;
+  }
+  return cachedLogoBase64;
+}
+// Real aspect ratio of public/images/salden-logo.png (1024x1536) —
+// needed so the embedded copy isn't stretched/distorted.
+const LOGO_ASPECT = 1024 / 1536;
 
 function fmtDate(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', {
@@ -29,41 +81,175 @@ function fmtDate(ts: number): string {
   });
 }
 
+function truncAddr(addr: string): string {
+  if (!addr || addr.length < 12) return addr ?? '';
+  return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
+}
+
+const PAGE_WIDTH   = 210; // A4 mm
+const PAGE_HEIGHT  = 297;
+const MARGIN       = 15;
+const CONTENT_W    = PAGE_WIDTH - MARGIN * 2; // 180mm
+const FOOTER_Y      = PAGE_HEIGHT - 14;
+
+// Table column widths (mm) — sum to CONTENT_W (180)
+const COLS = [
+  { key: 'sn',      label: 'S/N',            w: 10 },
+  { key: 'name',    label: 'Full Name',      w: 38 },
+  { key: 'dept',    label: 'Department',     w: 26 },
+  { key: 'wallet',  label: 'Wallet Address', w: 40 },
+  { key: 'salary',  label: 'Salary',         w: 26 },
+  { key: 'group',   label: 'Group',          w: 22 },
+  { key: 'status',  label: 'Status',         w: 18 },
+] as const;
+
+function drawFooter(doc: jsPDF): void {
+  doc.setFontSize(9);
+  doc.setTextColor(...TEXT_LIGHT_GRAY);
+  doc.text('Generated by Salden · Arc Testnet', MARGIN, FOOTER_Y);
+}
+
+function drawTableHeader(doc: jsPDF, y: number): number {
+  doc.setFillColor(...BRAND_INDIGO_TINT);
+  doc.rect(MARGIN, y, CONTENT_W, 9, 'F');
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...TEXT_BLACK);
+  let x = MARGIN;
+  for (const col of COLS) {
+    doc.text(col.label, x + 2, y + 6);
+    x += col.w;
+  }
+  doc.setFont('helvetica', 'normal');
+  return y + 9;
+}
+
 export function generateReceiptPdf(input: ReceiptPdfInput): Buffer {
   const doc = new jsPDF();
 
-  // Brand header — Deep Indigo #4F46E5
-  doc.setFontSize(18);
-  doc.setTextColor(79, 70, 229);
-  doc.text('SALDEN PAYROLL RECEIPT', 20, 24);
+  // ── Branded header band ─────────────────────────────────────────────────
+  doc.setFillColor(...BRAND_INDIGO_TINT);
+  doc.rect(0, 0, PAGE_WIDTH, 32, 'F');
+  doc.setDrawColor(...BRAND_INDIGO);
+  doc.setLineWidth(1);
+  doc.line(0, 32, PAGE_WIDTH, 32);
 
+  const logo = getLogoBase64();
+  let titleX = MARGIN;
+  if (logo) {
+    const logoH = 16;
+    const logoW = logoH * LOGO_ASPECT;
+    doc.addImage(logo, 'PNG', MARGIN, 8, logoW, logoH);
+    titleX = MARGIN + logoW + 5;
+  }
+  doc.setFontSize(17);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...TEXT_BLACK);
+  doc.text('SALDEN', titleX, 17);
   doc.setFontSize(10);
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Reference: ${input.ref}`,        20, 36);
-  doc.text(`Date: ${fmtDate(input.timestamp)}`, 20, 46);
-  doc.text(`Transaction: ${input.txHash}`,   20, 56);
-  doc.text(`Recipients: ${input.recipientCount}`, 20, 66);
-  doc.text(`Token: ${input.token}`,          20, 76);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(...TEXT_GRAY);
+  doc.text('Payroll Receipt', titleX, 24);
 
-  let yPos = 86;
-  if (input.remark) {
-    doc.text(`Remark: ${input.remark}`, 20, yPos);
-    yPos += 10;
+  // ── Meta info ────────────────────────────────────────────────────────────
+  let y = 44;
+  doc.setFontSize(10);
+
+  function metaRow(label: string, value: string) {
+    doc.setTextColor(...TEXT_GRAY);
+    doc.text(label, MARGIN, y);
+    doc.setTextColor(...TEXT_BLACK);
+    doc.text(value, MARGIN + 45, y);
+    y += 7;
   }
 
-  const executedByLabel = input.executedBy === 'ai_agent'
-    ? 'Executed by: Salden AI Payroll Agent (autonomous)'
-    : 'Executed by: Employer (manual)';
-  doc.text(executedByLabel, 20, yPos);
-  yPos += 14;
+  metaRow('Reference', input.ref);
+  metaRow('Date', fmtDate(input.timestamp));
+  metaRow('Transaction', truncAddr(input.txHash));
+  metaRow('Recipients', String(input.recipientCount));
+  metaRow('Token', input.token);
+  if (input.remark) metaRow('Remark', input.remark);
+  metaRow('Executed by', input.executedBy === 'ai_agent'
+    ? 'Salden AI Payroll Agent (autonomous)'
+    : 'Employer (manual)');
 
-  doc.setFontSize(14);
-  doc.setTextColor(15, 23, 42);
-  doc.text(`Total Amount: ${input.amount} ${input.token}`, 20, yPos);
+  y += 3;
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...TEXT_BLACK);
+  doc.text(`Total Amount: ${input.amount} ${input.token}`, MARGIN, y);
+  doc.setFont('helvetica', 'normal');
+  y += 12;
 
-  doc.setFontSize(9);
-  doc.setTextColor(148, 163, 184);
-  doc.text('Generated by Salden · Arc Testnet', 20, 280);
+  // ── Employee table ───────────────────────────────────────────────────────
+  const rows = input.employees ?? [];
+  if (rows.length > 0) {
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...TEXT_BLACK);
+    doc.text('Payment Breakdown', MARGIN, y);
+    doc.setFont('helvetica', 'normal');
+    y += 6;
+
+    y = drawTableHeader(doc, y);
+
+    const ROW_H = 8;
+    doc.setFontSize(8.5);
+
+    rows.forEach((emp, i) => {
+      // Paginate — leave room for the footer before wrapping to a new page
+      if (y + ROW_H > FOOTER_Y - 6) {
+        drawFooter(doc);
+        doc.addPage();
+        y = 20;
+        y = drawTableHeader(doc, y);
+      }
+
+      if (i % 2 === 1) {
+        doc.setFillColor(...ROW_ALT_TINT);
+        doc.rect(MARGIN, y, CONTENT_W, ROW_H, 'F');
+      }
+
+      doc.setTextColor(...TEXT_BLACK);
+      let x = MARGIN;
+      const cell = (text: string, colW: number, align: 'left' | 'right' = 'left') => {
+        const maxChars = Math.floor(colW / 1.7); // rough width guard so long values don't bleed into the next column
+        const clipped = text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+        if (align === 'right') doc.text(clipped, x + colW - 2, y + 5.5, { align: 'right' });
+        else doc.text(clipped, x + 2, y + 5.5);
+        x += colW;
+      };
+
+      cell(String(i + 1), COLS[0].w);
+      cell(emp.fullName || '—', COLS[1].w);
+      cell(emp.department || '—', COLS[2].w);
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(7.5);
+      cell(truncAddr(emp.walletAddress), COLS[3].w);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      cell(`${emp.salaryAmount} ${input.token}`, COLS[4].w, 'right');
+      cell(emp.group || '—', COLS[5].w);
+
+      // Status — a small filled dot for the "paid" color cue (a shape, not
+      // colored text) followed by black "Paid" text, since batchPay
+      // settles atomically on-chain: this receipt only exists because the
+      // whole transaction succeeded, so every recipient in it was paid.
+      doc.setFillColor(...SUCCESS_GREEN);
+      doc.circle(x + 3, y + 4.3, 1, 'F');
+      doc.setTextColor(...TEXT_BLACK);
+      doc.text('Paid', x + 6, y + 5.5);
+
+      y += ROW_H;
+    });
+
+    // Bottom border under the table
+    doc.setDrawColor(...BRAND_INDIGO);
+    doc.setLineWidth(0.3);
+    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
+  }
+
+  drawFooter(doc);
 
   const arrayBuffer = doc.output('arraybuffer');
   return Buffer.from(arrayBuffer);

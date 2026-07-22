@@ -31,10 +31,11 @@ import { trackClientEvent } from '@/lib/analyticsClient';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
 import { PaymentModal, type PaymentModalParams } from '@/components/dashboard/PaymentModal';
-import { ExecutionModal, type ExecutionState }   from '@/components/dashboard/ExecutionModal';
+import { ExecutionModal, type ExecutionState, type PaymentSummary } from '@/components/dashboard/ExecutionModal';
 import { LoginModal }     from '@/components/auth/LoginModal';
 import {
   AddEmployeesIllustration,
@@ -195,8 +196,8 @@ interface EmployeeModalProps {
   employee?:  Employee;
   rowIndex?:  number;
   groups:     string[];
-  onSave:     (data: Employee, idx?: number) => Promise<void>;
-  onSaveBulk?: (data: Employee[]) => Promise<void>;
+  onSave:     (data: Employee, idx?: number, deferSync?: boolean) => Promise<void>;
+  onSaveBulk?: (data: Employee[], deferSync?: boolean) => Promise<void>;
   onClose:    () => void;
   /** Onboarding mode: modal stays open after each save and shows a running
    *  count + "Proceed to Dashboard" button once `minRequired` is reached. */
@@ -211,7 +212,8 @@ function EmployeeModal({
   const { dispatch, state, syncData } = useApp();
   const { address }            = useEffectiveAddress();
   const publicClient           = usePublicClient();
-  const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign                   = useCachedSignMessage();
 
   const [tab,           setTab]           = useState<'single' | 'bulk'>('single');
   const [form,          setForm]          = useState<Employee>({
@@ -241,7 +243,6 @@ function EmployeeModal({
     if (!canWrite || !publicClient || !state.registryClone || !address) return;
     setProceeding(true); setProceedError('');
     try {
-      const sign = (msg: string) => universalSignMessage(msg);
       const { cid } = await syncData({ employees: state.employees, walletAddress: address, signMessage: sign });
       if (cid) {
         const hash = await universalWrite({
@@ -275,7 +276,7 @@ function EmployeeModal({
     if (errs.length) { setErrors(errs); return; }
     setSaving(true);
     try {
-      await onSave({ ...form, salaryAmount: Number(form.salaryAmount) }, rowIndex);
+      await onSave({ ...form, salaryAmount: Number(form.salaryAmount) }, rowIndex, setupMode);
       if (setupMode) {
         setForm({ fullName: '', department: '', walletAddress: '', salaryAmount: 0, group: form.group });
       } else {
@@ -314,7 +315,7 @@ function EmployeeModal({
     const withGroup = bulkEmployees.map(e => ({ ...e, group: form.group }));
     setImporting(true);
     try {
-      await onSaveBulk(withGroup);
+      await onSaveBulk(withGroup, setupMode);
       setBulkEmployees([]);
       if (fileRef.current) fileRef.current.value = '';
       if (!setupMode) onClose();
@@ -333,16 +334,12 @@ function EmployeeModal({
   const sharedTop = (
     <>
       {setupMode && (
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: setupDone ? '#059669' : '#475569' }}>
-              {setupDone ? 'Minimum reached — you can proceed' : `${employeeCount} of ${minRequired} employees added`}
-            </span>
-            {setupDone && <CheckCircle2 size={16} color="#059669" />}
-          </div>
-          <div style={{ height: 6, borderRadius: 4, background: '#F1F5F9', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${Math.min(100, (employeeCount / minRequired) * 100)}%`, background: setupDone ? '#059669' : '#4F46E5', transition: 'width 0.2s' }} />
-          </div>
+        <div style={{ marginBottom: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Employees added</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: setupDone ? '#059669' : '#0F172A' }}>
+            {employeeCount}/{Math.max(employeeCount, minRequired)}
+          </span>
+          {setupDone && <CheckCircle2 size={16} color="#059669" />}
         </div>
       )}
 
@@ -526,7 +523,8 @@ export default function DashboardPage() {
   // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
   const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
   const publicClient              = usePublicClient();
-  const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const sign                      = useCachedSignMessage();
 
   const {
     employees, groups, activeGroup,
@@ -671,6 +669,7 @@ export default function DashboardPage() {
   const [executionState,  setExecutionState]  = useState<ExecutionState>('idle');
   const [executeError,    setExecuteError]    = useState('');
   const [execTxHash,      setExecTxHash]      = useState('');
+  const [execSummary,     setExecSummary]     = useState<PaymentSummary | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const filteredEmployees = useMemo(() =>
@@ -716,33 +715,12 @@ export default function DashboardPage() {
 
   // ── CRUD ───────────────────────────────────────────────────────────────────
   //
-  // The sign function derives the encryption key that secures employee data.
-  // It routes through useUniversalWrite's signMessage — wagmi's popup for an
-  // external wallet, or a Circle SIGN_MESSAGE PIN challenge for Google/email
-  // social login — exactly ONCE per browser session per (address + message)
-  // pair.
-  //
-  // We cache the result in sessionStorage so page refreshes don't re-prompt
-  // the wallet. sessionStorage clears automatically when the tab closes,
-  // so the key is never persisted to disk between sessions.
-  const sign = useCallback(async (msg: string): Promise<string> => {
-    if (!canWrite || !address) throw new Error('No wallet');
-
-    const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
-
-    try {
-      const cached = sessionStorage.getItem(storageKey);
-      if (cached) return cached;
-    } catch { /* sessionStorage blocked (private browsing edge cases) */ }
-
-    // Not cached — prompt for a signature once (wagmi popup for external
-    // wallets, Circle's PIN challenge for Google/email social login)
-    const sig = await universalSignMessage(msg);
-
-    try { sessionStorage.setItem(storageKey, sig); } catch { /* ignore write errors */ }
-
-    return sig;
-  }, [canWrite, universalSignMessage, address]);
+  // `sign` (declared above via useCachedSignMessage) derives the encryption
+  // key that secures employee data. It routes through useUniversalWrite's
+  // signMessage — wagmi's popup for an external wallet, or a Circle
+  // SIGN_MESSAGE PIN challenge for Google/email social login — and is
+  // cached in sessionStorage so it only prompts once per (address,
+  // message) per browser tab session, not on every action that needs it.
 
   /**
    * Anchors a freshly-synced IPFS CID Onchain (SaldenRegistry.updateCID).
@@ -775,9 +753,10 @@ export default function DashboardPage() {
   // load vs. syncAvailable prompt). Previously this logic lived only here,
   // duplicated per-page and with no local cache or staleness detection.
 
-  const handleAddEmployee = useCallback(async (data: Employee) => {
+  const handleAddEmployee = useCallback(async (data: Employee, _rowIndex?: number, deferSync = false) => {
     const next = [...employees, data];
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
+    if (deferSync) return;
     try {
       const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
       addToast('Employee added.', 'success');
@@ -786,9 +765,10 @@ export default function DashboardPage() {
     catch { addToast('Saved locally — sync failed.', 'warning'); }
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
-  const handleAddBulk = useCallback(async (data: Employee[]) => {
+  const handleAddBulk = useCallback(async (data: Employee[], deferSync = false) => {
     const next = [...employees, ...data];
     dispatch({ type: 'SET_EMPLOYEES', payload: next });
+    if (deferSync) return;
     try {
       const { cid } = await syncData({ employees: next, walletAddress: address ?? '', signMessage: sign });
       addToast(`${data.length} employees imported.`, 'success');
@@ -850,6 +830,7 @@ export default function DashboardPage() {
     setExecutionState('pending');
     setExecuteError('');
     setExecTxHash('');
+    setExecSummary(null);
     setExecuteStatus('Preparing payroll execution…');
     try {
       setExecuteStatus(`Checking ${tokenSymbol} allowance…`);
@@ -924,9 +905,17 @@ export default function DashboardPage() {
       await waitForSuccessfulReceipt(publicClient, txHash);
       setExecuteProgress({ current: targetEmployees.length, total: targetEmployees.length });
       setExecTxHash(txHash);
-      setExecutionState('success');
 
       const totalHuman = (Number(totalAmount) / tokenScale).toLocaleString('en-US', { minimumFractionDigits: 2 });
+      setExecSummary({
+        recipientCount: targetEmployees.length,
+        amount:         totalHuman,
+        token:          tokenSymbol,
+        // usdEquivalent intentionally left unset until live price quotes
+        // (LI.FI integration) are wired in — see ExecutionModal.tsx.
+      });
+      setExecutionState('success');
+      const invoiceEmail = payrollSetup?.email ?? null;
       await saveTxRecord({
         id: txHash, hash: txHash, ref,
         type: 'batchPay', status: 'success',
@@ -934,7 +923,11 @@ export default function DashboardPage() {
         remark,
         recipientCount: targetEmployees.length,
         timestamp: Date.now(),
-        invoiceEmailStatus: 'pending',  // set to pending before firing
+        // Only 'pending' if we're actually about to attempt a send below —
+        // otherwise this stayed 'pending' forever, since nothing else
+        // would ever move it to 'sent'/'failed' if there was no email to
+        // begin with (the fetch below was simply skipped entirely).
+        invoiceEmailStatus: invoiceEmail ? 'pending' : null,
         executedBy: 'manual',
       }, address);
 
@@ -946,7 +939,6 @@ export default function DashboardPage() {
       // Auto-send invoice email after batchPay (ImportantUpdate - automatic for batchPay only).
       // Fire-and-forget: payroll already succeeded, email failure is non-critical.
       // Uses the company email stored in payrollSetup.
-      const invoiceEmail = payrollSetup?.email ?? null;
       if (invoiceEmail) {
         fetch('/api/invoice/send', {
           method:  'POST',
@@ -962,6 +954,13 @@ export default function DashboardPage() {
             ref,
             timestamp:      Date.now(),
             executedBy:     'manual',
+            employees: targetEmployees.map(e => ({
+              fullName:      e.fullName,
+              department:    e.department,
+              walletAddress: e.walletAddress,
+              salaryAmount:  Number(e.salaryAmount).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+              group:         e.group,
+            })),
           }),
         }).then(async res => {
           const newStatus = res.ok ? 'sent' : 'failed';
@@ -990,8 +989,6 @@ export default function DashboardPage() {
           }, address).catch(() => { /* ignore double failure */ });
         });
       }
-
-      addToast(`Payroll complete — ${targetEmployees.length} employee${targetEmployees.length !== 1 ? 's' : ''} paid in ${tokenSymbol}.`, 'success', 6000);
     } catch (err) {
       const msg = (err as Error).message ?? '';
       const friendly = /reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : 'Payroll failed. Please try again.';
@@ -1003,9 +1000,8 @@ export default function DashboardPage() {
   }, [payrollClone, employees, activeGroup, canWrite, universalWrite, publicClient, address, addToast, saveTxRecord, payrollSetup, loginMethod]);
 
   const handleProcessPaymentClick = useCallback(() => {
-    if (isPremiumUser && payrollClone) setPaymentModalOpen(true);
-    else handleExecutePayroll(null);
-  }, [isPremiumUser, payrollClone, handleExecutePayroll]);
+    setPaymentModalOpen(true);
+  }, []);
 
   const handleModalConfirm = useCallback(({ token, group, remark }: PaymentModalParams) => {
     if (group !== activeGroup) dispatch({ type: 'SET_ACTIVE_GROUP', payload: group });
@@ -1271,7 +1267,7 @@ export default function DashboardPage() {
                         </td>
                         <td style={{ padding: '12px 20px' }}>
                           {emp.group
-                            ? <span style={{ display: 'inline-flex', padding: '3px 10px', borderRadius: 99, background: '#EEF2FF', color: '#4F46E5', fontSize: 11, fontWeight: 600 }}>{emp.group}</span>
+                            ? <span style={{ fontSize: 13, color: '#0F172A' }}>{emp.group}</span>
                             : <span style={{ color: '#E2E8F0', fontSize: 12 }}>—</span>}
                         </td>
                       </tr>
@@ -1324,16 +1320,19 @@ export default function DashboardPage() {
       {deleteModal !== null && (
         <DeleteModal employee={employees[deleteModal]} onConfirm={() => handleDeleteEmployee(deleteModal)} onClose={() => setDeleteModal(null)} />
       )}
-      {isPremiumUser && payrollClone && (
-        <PaymentModal open={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} activeGroup={activeGroup} groups={groups} payrollClone={payrollClone} onConfirm={handleModalConfirm} />
-      )}
+      <PaymentModal
+        open={paymentModalOpen} onClose={() => setPaymentModalOpen(false)}
+        activeGroup={activeGroup} groups={groups} payrollClone={payrollClone ?? undefined}
+        isPremiumUser={isPremiumUser} onConfirm={handleModalConfirm}
+      />
       <ExecutionModal
         state={executionState}
         statusText={executeStatus}
         progress={executeProgress}
         txHash={execTxHash}
         error={executeError}
-        onClose={() => { setExecutionState('idle'); setExecuteError(''); setExecTxHash(''); }}
+        summary={execSummary}
+        onClose={() => { setExecutionState('idle'); setExecuteError(''); setExecTxHash(''); setExecSummary(null); }}
       />
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} />
       {profileModalOpen && (

@@ -2,250 +2,71 @@
 /**
  * @file app/wallet/swap/page.tsx
  *
- * Real swap using Circle Arc App Kit (kit.swap()).
- * No mocked rates, no fake tx hashes, no hardcoded logic.
+ * Real swap powered by LI.FI (quote + actual on-chain execution) — Circle
+ * App Kit's kit.swap() has been replaced here after confirmation it wasn't
+ * working, and it also only ever worked for external wallets (Circle's
+ * swap adapter needs a standard EIP-1193 provider, which a Circle
+ * social-login session doesn't expose). LI.FI's flow works for both
+ * wallet types, since execution here is just approve + a single
+ * transaction — routed through useUniversalWrite the same way every other
+ * on-chain write in this app is, rather than a wallet-type-specific SDK
+ * call.
  *
- * PACKAGES REQUIRED (add to package.json before deploying):
- *   npm install @circle-fin/app-kit @circle-fin/adapter-viem-v2
- *
- * ENV REQUIRED:
- *   NEXT_PUBLIC_KIT_KEY=<your kit key from Circle Console>
+ * This page is deliberately just an orchestrator — the actual logic lives in:
+ *   - lib/swap/tokens.ts       — token config, raw-amount conversion
+ *   - lib/swap/useSwapQuote.ts — debounced live LI.FI quote fetching
+ *   - components/wallet/SwapUI.tsx — token icon/selector/input box, step progress
+ * so a bug in any one of quote-fetching / token config / UI rendering /
+ * execution has one obvious, small place to look instead of hunting
+ * through one large file.
  *
  * Flow:
  *   1. User selects tokenIn + tokenOut + amount
- *   2. kit.swap() is called with KIT_KEY — Circle routes via on-chain DEX
- *   3. Real tx hash returned → shown with ArcScan link
- *   4. amountOut from result shown (not a hardcoded rate)
+ *   2. useSwapQuote (debounced) → GET /api/lifi/quote → live estimated
+ *      amountOut + the actual transactionRequest to execute (LI.FI API
+ *      key stays server-side in that route — never exposed here)
+ *   3. On Swap: approve tokenIn for quote.estimate.approvalAddress if the
+ *      current allowance is insufficient, then send
+ *      quote.transactionRequest via useUniversalWrite.sendTransaction
+ *   4. Real tx hash shown with ArcScan link once mined
  *
  * Supported tokens on Arc Testnet: USDC, EURC, cirBTC
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter }           from 'next/navigation';
+import { usePublicClient }     from 'wagmi';
 import {
-  ArrowLeft, ArrowDown, ChevronDown, Loader2,
-  ExternalLink, CheckCircle2, X, AlertTriangle,
+  ArrowLeft, ArrowDown, Loader2, ExternalLink, CheckCircle2, X, AlertTriangle,
 } from 'lucide-react';
 import { AppLayout }           from '@/components/layout/AppLayout';
 import { NetworkGuard }        from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { useCircleAdapter }    from '@/lib/circle/useCircleAdapter';
-import { getAppKit }           from '@/lib/circle/appKit';
-import { txLink }              from '@/lib/contracts/config';
-import { TOKEN_ICON_PATHS }    from '@/lib/token-registry';
-
-// ── Supported tokens on Arc Testnet ─────────────────────────────────────────
-
-type ChainToken = 'USDC' | 'EURC' | 'cirBTC';
-
-interface TokenMeta {
-  symbol:   ChainToken;
-  name:     string;
-  color:    string;
-  bg:       string;
-  icon:     string;     // emoji or short char for simplicity
-}
-
-const TOKENS: TokenMeta[] = [
-  { symbol: 'USDC',   name: 'USD Coin',      color: '#2775CA', bg: '#EFF6FF', icon: '$' },
-  { symbol: 'EURC',   name: 'Euro Coin',      color: '#1B3A6B', bg: '#EEF2FF', icon: '€' },
-  { symbol: 'cirBTC', name: 'Circle Bitcoin', color: '#F7931A', bg: '#FFF7ED', icon: '₿' },
-];
-
-// ── Token Selector ───────────────────────────────────────────────────────────
-
-function TokenIcon({ token, size = 28 }: { token: TokenMeta; size?: number }) {
-  const iconPath = TOKEN_ICON_PATHS[token.symbol];
-  if (iconPath) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img src={iconPath} alt={token.symbol} width={size} height={size}
-        style={{ borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
-    );
-  }
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: token.color,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      flexShrink: 0, color: '#fff', fontWeight: 800,
-      fontSize: size * 0.42,
-    }}>
-      {token.icon}
-    </div>
-  );
-}
-
-function TokenSelector({
-  value, exclude, onChange,
-}: { value: TokenMeta | null; exclude?: ChainToken; onChange: (t: TokenMeta) => void }) {
-  const [open, setOpen] = useState(false);
-  const options = TOKENS.filter(t => t.symbol !== exclude);
-
-  return (
-    <div style={{ position: 'relative' }}>
-      <button
-        onClick={() => setOpen(p => !p)}
-        style={{
-          display: 'inline-flex', alignItems: 'center', gap: 8,
-          padding: '8px 12px', borderRadius: 99,
-          background: '#fff', border: '1.5px solid #E2E8F0',
-          cursor: 'pointer', fontFamily: 'inherit',
-          fontWeight: 700, fontSize: 14, color: '#0F172A',
-          minWidth: 130,
-        }}
-      >
-        {value
-          ? <><TokenIcon token={value} size={20} /> {value.symbol}</>
-          : <span style={{ color: '#14B8A6' }}>Select</span>}
-        <ChevronDown size={13} color="#94A3B8" style={{ marginLeft: 'auto' }} />
-      </button>
-
-      {open && (
-        <>
-          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 10 }} />
-          <div style={{
-            position: 'absolute', top: '100%', left: 0, marginTop: 8, zIndex: 20,
-            background: '#fff', border: '1px solid #E2E8F0', borderRadius: 12,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.10)', minWidth: 180, overflow: 'hidden',
-          }}>
-            {options.map(t => (
-              <button key={t.symbol}
-                onClick={() => { onChange(t); setOpen(false); }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '12px 16px', background: 'none', border: 'none',
-                  cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#F8F9FA'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
-              >
-                <TokenIcon token={t} size={22} />
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{t.symbol}</div>
-                  <div style={{ fontSize: 11, color: '#94A3B8' }}>{t.name}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ── Token input box ──────────────────────────────────────────────────────────
-
-function TokenBox({
-  label, token, excludeToken, amount, editable,
-  onTokenChange, onAmountChange, loading,
-}: {
-  label:          string;
-  token:          TokenMeta | null;
-  excludeToken?:  ChainToken;
-  amount:         string;
-  editable:       boolean;
-  onTokenChange:  (t: TokenMeta) => void;
-  onAmountChange?: (v: string) => void;
-  loading?:       boolean;
-}) {
-  return (
-    <div style={{
-      background: '#F8F9FA', borderRadius: 16, padding: '16px 18px',
-      border: '1.5px solid #F1F5F9',
-    }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: '#94A3B8',
-        textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 10 }}>
-        {label}
-      </span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <TokenSelector value={token} exclude={excludeToken} onChange={onTokenChange} />
-        <div style={{ flex: 1, textAlign: 'right' }}>
-          {editable ? (
-            <input
-              type="number" value={amount} min="0" step="any"
-              onChange={e => onAmountChange?.(e.target.value)}
-              placeholder="0.00"
-              style={{
-                width: '100%', background: 'none', border: 'none', outline: 'none',
-                fontSize: 24, fontWeight: 800, color: '#0F172A',
-                textAlign: 'right', fontFamily: "'JetBrains Mono', monospace",
-              }}
-            />
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', minHeight: 36 }}>
-              {loading
-                ? <Loader2 size={20} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} />
-                : <span style={{ fontSize: 24, fontWeight: 800, color: '#0F172A',
-                    fontFamily: "'JetBrains Mono', monospace" }}>
-                    {amount || '—'}
-                  </span>
-              }
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Step progress ────────────────────────────────────────────────────────────
-
-const SWAP_STEPS = [
-  { key: 'approve', label: 'Approve token spending' },
-  { key: 'swap',    label: 'Execute swap on-chain'  },
-  { key: 'confirm', label: 'Confirm transaction'    },
-] as const;
-
-function StepProgress({ currentStep }: { currentStep: string }) {
-  return (
-    <div style={{ marginTop: 16 }}>
-      {SWAP_STEPS.map((step, i) => {
-        const done    = SWAP_STEPS.findIndex(s => s.key === currentStep) > i;
-        const active  = step.key === currentStep;
-        return (
-          <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-            <div style={{
-              width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
-              background: done ? '#14B8A6' : active ? '#4F46E5' : '#E2E8F0',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              {done
-                ? <CheckCircle2 size={13} color="#fff" />
-                : active
-                  ? <Loader2 size={13} color="#fff" style={{ animation: 'spin 0.7s linear infinite' }} />
-                  : <span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 700 }}>{i + 1}</span>
-              }
-            </div>
-            <span style={{ fontSize: 13, color: done ? '#14B8A6' : active ? '#4F46E5' : '#94A3B8', fontWeight: active ? 700 : 500 }}>
-              {step.label}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ── Main page ────────────────────────────────────────────────────────────────
+import { useUniversalWrite }   from '@/lib/circle/useUniversalWrite';
+import { txLink, arcTestnet }  from '@/lib/contracts/config';
+import { ERC20_ABI }           from '@/lib/contracts/abis';
+import { TOKENS, toRawAmount, fromRawAmount, type TokenMeta } from '@/lib/swap/tokens';
+import { useSwapQuote }        from '@/lib/swap/useSwapQuote';
+import { TokenBox, StepProgress } from '@/components/wallet/SwapUI';
 
 type SwapStep = 'approve' | 'swap' | 'confirm' | '';
 
 export default function SwapPage() {
   const router = useRouter();
-  const { isConnected, loginMethod } = useEffectiveAddress();
-  const { adapter, isAdapterReady, loading: adapterLoading, error: adapterError } = useCircleAdapter();
+  const { address, isConnected } = useEffectiveAddress();
+  const { writeContract: universalWrite, sendTransaction, canWrite } = useUniversalWrite();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
-  const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(null);
-  const [tokenOut,  setTokenOut]  = useState<TokenMeta | null>(null);
+  const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(TOKENS[0]);
+  const [tokenOut,  setTokenOut]  = useState<TokenMeta | null>(TOKENS[1]);
   const [amountIn,  setAmountIn]  = useState('');
-  const [amountOut, setAmountOut] = useState('');
   const [swapping,  setSwapping]  = useState(false);
   const [swapStep,  setSwapStep]  = useState<SwapStep>('');
   const [error,     setError]     = useState('');
   const [successTx, setSuccessTx] = useState<string | null>(null);
+  const [lastReceivedAmount, setLastReceivedAmount] = useState('');
 
-  const kitKey = process.env.NEXT_PUBLIC_KIT_KEY ?? '';
+  const { quote, amountOut, quoting, quoteError } = useSwapQuote(tokenIn, tokenOut, amountIn, address);
 
   function swapTokens() {
     const tmpIn  = tokenIn;
@@ -253,89 +74,58 @@ export default function SwapPage() {
     setTokenIn(tokenOut);
     setTokenOut(tmpIn);
     setAmountIn(tmpAmt);
-    setAmountOut('');
   }
-
-  // Clear amountOut when inputs change
-  useEffect(() => { setAmountOut(''); }, [tokenIn, tokenOut, amountIn]);
 
   const handleSwap = useCallback(async () => {
     if (!tokenIn || !tokenOut || !amountIn || parseFloat(amountIn) <= 0) return;
-    if (!adapter || !isAdapterReady) {
-      setError('Wallet adapter not ready. Please ensure your wallet is connected.');
-      return;
-    }
-    if (!kitKey) {
-      setError('Kit key not configured. Set NEXT_PUBLIC_KIT_KEY in your environment.');
-      return;
-    }
+    if (!quote) { setError('Get a quote before swapping.'); return; }
+    if (!canWrite || !address || !publicClient) { setError('Connect your wallet to swap.'); return; }
+    if (!tokenIn.address) { setError('Missing token contract address.'); return; }
 
     setSwapping(true);
     setError('');
-    setAmountOut('');
 
     try {
-      setSwapStep('approve');
-      const kit = await getAppKit();
+      const rawAmount = toRawAmount(amountIn, tokenIn.decimals);
 
-      // Real kit.swap() call — no simulation, no fake hashes
-      const result = await kit.swap({
-        from: {
-          adapter,
-          chain: 'Arc_Testnet',
-          // Same type-only gap as bridge/page.tsx's kit.bridge() call:
-          // createAdapterFromProvider() (adapter-viem-v2) declares a
-          // narrower return type than kit.swap() (app-kit) requires —
-          // missing getTokenDecimals in its TS signature even though the
-          // concrete ViemAdapter instance it builds has the full method
-          // set. Cast anchored to kit.swap's own parameter type (not a
-          // hand-typed guess) so it self-corrects if the packages
-          // realign. See bridge/page.tsx for the fuller writeup.
-        } as unknown as Parameters<typeof kit.swap>[0]['from'],
-        tokenIn:  tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        amountIn: amountIn,
-        config: {
-          kitKey,
-        },
+      // Approve LI.FI's contract to spend tokenIn, if not already approved
+      // for at least this amount.
+      setSwapStep('approve');
+      const allowance = await publicClient.readContract({
+        address: tokenIn.address, abi: ERC20_ABI, functionName: 'allowance',
+        args: [address as `0x${string}`, quote.estimate.approvalAddress],
+      }) as bigint;
+
+      if (allowance < rawAmount) {
+        await universalWrite({
+          address: tokenIn.address, abi: ERC20_ABI, functionName: 'approve',
+          args: [quote.estimate.approvalAddress, rawAmount],
+        });
+      }
+
+      // Execute the swap — LI.FI's own pre-built, already-encoded transaction
+      setSwapStep('swap');
+      const value = quote.transactionRequest.value ? BigInt(quote.transactionRequest.value) : undefined;
+      const txHash = await sendTransaction({
+        to: quote.transactionRequest.to, data: quote.transactionRequest.data, value,
       });
 
       setSwapStep('confirm');
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (receipt.status !== 'success') throw new Error('Swap transaction reverted on-chain.');
 
-      // amountOut comes from the real swap result
-      const outAmount = (result as { amountOut?: string }).amountOut;
-      setAmountOut(outAmount ?? '');
-
-      // txHash comes from the real on-chain transaction
-      const txHash = (result as { txHash?: string; transactionHash?: string })
-        .txHash ?? (result as { transactionHash?: string }).transactionHash ?? '';
-
+      setLastReceivedAmount(amountOut);
       setSuccessTx(txHash);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Swap failed';
-      if (/reject|cancel|denied/i.test(msg)) {
-        setError('Transaction cancelled.');
-      } else {
-        setError(msg);
-      }
+      setError(/reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : msg);
     } finally {
       setSwapping(false);
       setSwapStep('');
     }
-  }, [tokenIn, tokenOut, amountIn, adapter, isAdapterReady, kitKey]);
+  }, [tokenIn, tokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, universalWrite, sendTransaction]);
 
-  const canSwap = tokenIn && tokenOut && amountIn && parseFloat(amountIn) > 0 && !swapping && isAdapterReady;
-
-  // ── External-wallet-only notice ──────────────────────────────────────────
-  // NOTE: this used to infer "must be Circle social login" purely from
-  // "the adapter isn't ready yet" (isConnected && !isAdapterReady &&
-  // !adapterLoading) — but the adapter can fail to become ready for a
-  // genuinely external wallet too (a slow/failed provider resolution,
-  // an adapter construction error), which wrongly told real
-  // external-wallet users they needed to connect an external wallet.
-  // Check the actual login method instead — it's the real source of
-  // truth, not an inference from adapter state.
-  const isCircleSocialLogin = loginMethod === 'circle';
+  const canSwap = !!tokenIn && !!tokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite;
 
   return (
     <NetworkGuard>
@@ -346,34 +136,13 @@ export default function SwapPage() {
             <ArrowLeft size={16} /> Back
           </button>
 
-          {/* No wallet */}
           {!isConnected && (
             <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 32, textAlign: 'center' }}>
               <p style={{ color: '#64748B', fontSize: 14 }}>Connect your wallet to swap tokens.</p>
             </div>
           )}
 
-          {/* Circle social login notice */}
-          {isCircleSocialLogin && (
-            <div style={{ background: '#FFFBEB', border: '1px solid #FED7AA', borderRadius: 14, padding: '14px 18px', display: 'flex', gap: 12 }}>
-              <AlertTriangle size={18} color="#D97706" style={{ flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#92400E', marginBottom: 4 }}>External wallet required for Swap</div>
-                <div style={{ fontSize: 13, color: '#78350F', lineHeight: 1.6 }}>
-                  Circle App Kit Swap requires a browser wallet (MetaMask, Rabby, etc.) connected via WalletConnect or injected provider. Please connect an external wallet to use Swap.
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Adapter error */}
-          {adapterError && (
-            <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 14, padding: '12px 16px', fontSize: 13, color: '#DC2626' }}>
-              {adapterError}
-            </div>
-          )}
-
-          {isConnected && !isCircleSocialLogin && (
+          {isConnected && (
             <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24 }}>
               <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 20 }}>Swap Tokens</h2>
 
@@ -410,18 +179,22 @@ export default function SwapPage() {
                   amount={amountOut}
                   editable={false}
                   onTokenChange={setTokenOut}
-                  loading={swapping && swapStep === 'swap'}
+                  loading={quoting}
                 />
               </div>
 
-              {/* Notice: actual output determined by on-chain execution */}
-              {tokenIn && tokenOut && amountIn && (
-                <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 10, lineHeight: 1.5 }}>
-                  Actual output determined by Circle App Kit on-chain execution. Rate varies by market conditions.
+              {quoteError && !quoting && (
+                <p style={{ fontSize: 12, color: '#D97706', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <AlertTriangle size={12} /> {quoteError}
                 </p>
               )}
 
-              {/* Step progress during swap */}
+              {quote && !quoting && (
+                <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 10, lineHeight: 1.5 }}>
+                  Rate refreshes live via LI.FI. Minimum received: {fromRawAmount(quote.estimate.toAmountMin, tokenOut?.decimals ?? 6)} {tokenOut?.symbol}.
+                </p>
+              )}
+
               {swapping && swapStep && <StepProgress currentStep={swapStep} />}
 
               {error && (
@@ -445,11 +218,9 @@ export default function SwapPage() {
                 {swapping ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Swapping…</> : 'Swap'}
               </button>
 
-              <div style={{ marginTop: 12, padding: '10px 14px', background: '#F8F9FA', borderRadius: 10 }}>
-                <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>
-                  Powered by Circle Arc App Kit — on-chain DEX routing on Arc Testnet.
-                </p>
-              </div>
+              <p style={{ textAlign: 'center', fontSize: 11, color: '#CBD5E1', marginTop: 12 }}>
+                Powered by LI.FI
+              </p>
             </div>
           )}
         </div>
@@ -458,7 +229,7 @@ export default function SwapPage() {
         {successTx && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
             <div style={{ background: '#fff', borderRadius: 20, padding: 32, maxWidth: 380, width: '100%', textAlign: 'center', position: 'relative' }}>
-              <button onClick={() => { setSuccessTx(null); setAmountIn(''); setAmountOut(''); }}
+              <button onClick={() => { setSuccessTx(null); setAmountIn(''); }}
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
@@ -466,9 +237,9 @@ export default function SwapPage() {
                 <CheckCircle2 size={32} color="#fff" fill="#059669" />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Swap Successful</h3>
-              {amountOut && (
+              {lastReceivedAmount && (
                 <p style={{ fontSize: 14, color: '#64748B', marginBottom: 12 }}>
-                  Received <strong style={{ color: '#0F172A' }}>{amountOut} {tokenOut?.symbol}</strong>
+                  Received <strong style={{ color: '#0F172A' }}>~{lastReceivedAmount} {tokenOut?.symbol}</strong>
                 </p>
               )}
               {successTx && (

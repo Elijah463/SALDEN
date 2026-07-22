@@ -27,10 +27,30 @@ import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAd
 import { ERC20_ABI } from '@/lib/contracts/abis';
 import { CONTRACTS, arcTestnet, txLink } from '@/lib/contracts/config';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
-import { TOKEN_ICON_PATHS } from '@/lib/token-registry';
+import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 
 function genRef() { return 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase(); }
+
+/** Renders a token's real logo clipped to a size x size circle, zooming
+ *  EURC's <img> in slightly to compensate for its source SVG's padding so
+ *  every token icon reads as the same visual size (see
+ *  lib/token-registry.ts's tokenIconRenderSize for why). Renders nothing
+ *  if there's no real logo for the symbol. */
+function TokenIconImg({ symbol, size }: { symbol: string; size: number }) {
+  const path = TOKEN_ICON_PATHS[symbol];
+  if (!path) return null;
+  const renderSize = tokenIconRenderSize(symbol, size);
+  return (
+    <span style={{
+      width: size, height: size, borderRadius: '50%', overflow: 'hidden',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    }}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={path} alt="" width={renderSize} height={renderSize} style={{ display: 'block', objectFit: 'cover' }} />
+    </span>
+  );
+}
 
 // Next.js only statically replaces `process.env.NEXT_PUBLIC_X` when it sees
 // that exact literal — see wallet/page.tsx for the fuller note. Same
@@ -221,10 +241,7 @@ export default function SendPage() {
                     }}
                     disabled={SEND_TOKENS.length <= 1}
                   >
-                    {TOKEN_ICON_PATHS[token?.symbol ?? ''] && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={TOKEN_ICON_PATHS[token!.symbol]} alt="" width={18} height={18} style={{ borderRadius: '50%' }} />
-                    )}
+                    <TokenIconImg symbol={token?.symbol ?? ''} size={18} />
                     {token?.symbol ?? '—'}
                     {SEND_TOKENS.length > 1 && <ChevronDown size={13} color="#94A3B8" />}
                   </button>
@@ -248,10 +265,7 @@ export default function SendPage() {
                               border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
                             }}
                           >
-                            {TOKEN_ICON_PATHS[t.symbol] && (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={TOKEN_ICON_PATHS[t.symbol]} alt="" width={22} height={22} style={{ borderRadius: '50%' }} />
-                            )}
+                            <TokenIconImg symbol={t.symbol} size={22} />
                             <span>
                               <div style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>{t.symbol}</div>
                               <div style={{ fontSize: 11, color: '#94A3B8' }}>{t.name}</div>

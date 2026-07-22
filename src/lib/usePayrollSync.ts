@@ -40,7 +40,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
-import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 
 export type PayrollSyncStatus = 'idle' | 'checking' | 'loading' | 'done' | 'error';
 
@@ -84,22 +84,12 @@ export function usePayrollSync({
   // (!walletClient) { setStatus('done'); return; }` below, now removed)
   // — their employee data, and anything downstream of it like
   // payrollSetup.email, simply never loaded, with no error shown.
-  const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
-
-  // Identical sessionStorage key format to dashboard/page.tsx's own `sign`
-  // helper (by design) — the two transparently share a cached signature
-  // within the same tab instead of double-prompting the wallet.
-  const sign = useCallback(async (msg: string): Promise<string> => {
-    if (!address) throw new Error('No wallet');
-    const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
-    try {
-      const cached = sessionStorage.getItem(storageKey);
-      if (cached) return cached;
-    } catch { /* sessionStorage blocked (private browsing edge cases) */ }
-    const sig = await universalSignMessage(msg);
-    try { sessionStorage.setItem(storageKey, sig); } catch { /* ignore write errors */ }
-    return sig;
-  }, [universalSignMessage, address]);
+  //
+  // useCachedSignMessage caches the result in sessionStorage, shared
+  // across every page that needs this same signature (dashboard,
+  // settings, onboarding) — so it's requested at most once per browser
+  // tab session, not once per place that happens to need it.
+  const sign = useCachedSignMessage();
 
   const runCheck = useCallback(async () => {
     if (!registryClone || !address || !publicClient) return;
@@ -183,7 +173,7 @@ export function usePayrollSync({
     } finally {
       inFlight.current = false;
     }
-  }, [registryClone, address, publicClient, canWrite, hydrateFromCache, loadData, dispatch, sign, addToast, state.employees.length]);
+  }, [registryClone, address, publicClient, hydrateFromCache, loadData, dispatch, sign, addToast, state.employees.length]);
 
   // Initial check once the registry clone + wallet are known.
   useEffect(() => {

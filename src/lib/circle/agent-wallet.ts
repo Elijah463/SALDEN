@@ -88,7 +88,7 @@ export async function createAgentWallet(
       idempotencyKey: toUUIDv5(idempotencyKey),
       walletSetId,
       entitySecretCiphertext,
-      blockchains: ['ETH'],           // Arc Testnet uses ETH-compatible addresses
+      blockchains: ['ARC-TESTNET'],    // Circle has a native identifier for Arc Testnet — see https://developers.circle.com/api-reference/wallets/developer-controlled-wallets/get-wallets for the full enum. Using 'ETH' here was wrong on two counts: it's Ethereum MAINNET (hence "TEST_API key cannot be used with blockchain mainnets"), and Arc Testnet doesn't need an ETH-compatible stand-in — Circle supports it directly.
       accountType: 'EOA',
       metadata: [{ name: 'Salden AI Agent Wallet', refId: idempotencyKey }],
     }),

@@ -8,12 +8,13 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { usePublicClient } from 'wagmi';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer,
 } from 'recharts';
 import {
-  ExternalLink, Download, Mail, RefreshCw,
+  ExternalLink, RefreshCw,
   TrendingUp, Users, DollarSign, Loader2,
   CheckCircle2, AlertCircle, Clock, Copy, XCircle,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
 import { txLink }              from '@/lib/contracts/config';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { usePayrollSync } from '@/lib/usePayrollSync';
 import { copyToClipboard } from '@/lib/clipboard';
 import { format, startOfMonth } from 'date-fns';
 
@@ -68,11 +70,32 @@ function StatusBadge({ status }: { status: 'success' | 'failed' }) {
   );
 }
 
-function InvoiceStatus({ status }: { status?: TxRecord['invoiceEmailStatus'] }) {
+function InvoiceStatus({ status, onRetry, retrying }: {
+  status?: TxRecord['invoiceEmailStatus'];
+  onRetry?: () => void;
+  retrying?: boolean;
+}) {
   if (!status) return null;
+
+  if (status === 'failed') {
+    return (
+      <button
+        onClick={onRetry} disabled={retrying}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600,
+          color: '#DC2626', background: 'none', border: 'none', padding: 0,
+          cursor: retrying ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+        }}
+      >
+        {retrying
+          ? <><Loader2 size={12} style={{ animation: 'spin 0.7s linear infinite' }} /> Retrying…</>
+          : <><AlertCircle size={12} /> Failed — <RefreshCw size={11} /> Retry</>}
+      </button>
+    );
+  }
+
   const map = {
     sent:    { icon: <CheckCircle2 size={12} />, color: '#059669', label: 'Invoice sent'  },
-    failed:  { icon: <AlertCircle  size={12} />, color: '#DC2626', label: 'Email failed'  },
     pending: { icon: <Clock        size={12} />, color: '#D97706', label: 'Sending…'      },
   } as const;
   const s = map[status as keyof typeof map];
@@ -98,12 +121,10 @@ function StatCard({ label, value, icon, color = '#4F46E5' }: { label: string; va
 
 // ── Receipt card ───────────────────────────────────────────────────────────────
 
-function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: {
+function ReceiptCard({ tx, onResend, resending, hasEmail }: {
   tx: TxRecord;
   onResend:   (tx: TxRecord) => void;
-  onDownload: (tx: TxRecord) => void;
   resending: string | null;
-  genPdf:    string | null;
   hasEmail:  boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -156,11 +177,13 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
 
         {/* Invoice status */}
         {tx.invoiceEmailStatus && (
-          <div style={{ marginBottom: 12 }}><InvoiceStatus status={tx.invoiceEmailStatus} /></div>
+          <div style={{ marginBottom: 12 }}>
+            <InvoiceStatus status={tx.invoiceEmailStatus} onRetry={hasEmail ? () => onResend(tx) : undefined} retrying={resending === tx.id} />
+          </div>
         )}
 
         {/* Tx hash */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: '#F8F9FA', borderRadius: 9, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: '#F8F9FA', borderRadius: 9 }}>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#475569', flex: 1 }}>
             {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
           </span>
@@ -172,21 +195,6 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
             <ExternalLink size={13} />
           </a>
         </div>
-
-        {/* Actions */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => onDownload(tx)} disabled={genPdf === tx.id}
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9, border: '1.5px solid #E2E8F0', background: '#fff', fontSize: 13, fontWeight: 600, color: '#475569', cursor: genPdf === tx.id ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
-            {genPdf === tx.id ? <Loader2 size={13} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Download size={13} />}
-            Receipt
-          </button>
-          <button onClick={() => onResend(tx)} disabled={resending === tx.id || !hasEmail}
-            title={!hasEmail ? 'No company email on file' : undefined}
-            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 0', borderRadius: 9, border: 'none', background: hasEmail ? '#F0FDFA' : '#F1F5F9', fontSize: 13, fontWeight: 600, color: hasEmail ? '#14B8A6' : '#94A3B8', cursor: (resending === tx.id || !hasEmail) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
-            {resending === tx.id ? <Loader2 size={13} style={{ animation: 'spin 0.7s linear infinite' }} /> : <Mail size={13} />}
-            Invoice
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -196,12 +204,13 @@ function ReceiptCard({ tx, onResend, onDownload, resending, genPdf, hasEmail }: 
 
 export default function TransactionHistoryPage() {
   const { address } = useEffectiveAddress();
+  const publicClient = usePublicClient();
   const { state, saveTxRecord } = useApp();
-  const { payrollSetup } = state;
+  const { payrollSetup, registryClone } = state;
+  usePayrollSync({ registryClone, address, publicClient });
   const [txs,      setTxs]      = useState<TxRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [resending, setResending] = useState<string | null>(null);
-  const [genPdf,   setGenPdf]   = useState<string | null>(null);
 
   const loadTxs = useCallback(async () => {
     if (!address) { setLoading(false); return; }
@@ -280,33 +289,6 @@ export default function TransactionHistoryPage() {
     finally { setResending(null); }
   }
 
-  async function handleDownloadPdf(tx: TxRecord) {
-    setGenPdf(tx.id);
-    try {
-      const ref = tx.ref ?? ('SLD-' + tx.hash.slice(2, 8).toUpperCase());
-      const { jsPDF } = await import('jspdf');
-      const doc = new jsPDF();
-      doc.setFontSize(18); doc.setTextColor(79, 70, 229);
-      doc.text('SALDEN PAYROLL RECEIPT', 20, 24);
-      doc.setFontSize(10); doc.setTextColor(100, 116, 139);
-      doc.text(`Reference: ${ref}`, 20, 36);
-      doc.text(`Date: ${format(new Date(tx.timestamp), 'PPP')}`, 20, 44);
-      doc.text(`Transaction: ${tx.hash}`, 20, 52);
-      doc.text(`Recipients: ${tx.recipientCount}`, 20, 60);
-      doc.text(`Token: ${tx.token}`, 20, 68);
-      if (tx.remark) doc.text(`Remark: ${tx.remark}`, 20, 76);
-      const executedByLabel = tx.executedBy === 'ai_agent'
-        ? 'Executed by: Salden AI Payroll Agent (autonomous)'
-        : 'Executed by: Employer (manual)';
-      doc.text(executedByLabel, 20, tx.remark ? 84 : 76);
-      doc.setFontSize(14); doc.setTextColor(15, 23, 42);
-      doc.text(`Total Amount: ${tx.amount} ${tx.token}`, 20, tx.remark ? 100 : 92);
-      doc.setFontSize(9); doc.setTextColor(148, 163, 184);
-      doc.text('Generated by Salden · Arc Testnet', 20, 280);
-      doc.save(`salden-receipt-${ref}.pdf`);
-    } finally { setGenPdf(null); }
-  }
-
   return (
     <AppLayout title="Transaction History">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -380,8 +362,7 @@ export default function TransactionHistoryPage() {
                 {txs.map(tx => (
                   <ReceiptCard key={tx.id} tx={tx}
                     onResend={handleResendInvoice}
-                    onDownload={handleDownloadPdf}
-                    resending={resending} genPdf={genPdf}
+                    resending={resending}
                     hasEmail={!!payrollSetup?.email} />
                 ))}
               </div>

@@ -22,16 +22,29 @@ export interface ExecutionProgress {
 
 export type ExecutionState = 'idle' | 'pending' | 'success' | 'failed';
 
+export interface PaymentSummary {
+  recipientCount: number;
+  amount:         string;  // human-formatted total, e.g. "4.00"
+  token:          string;  // "USDC", "EURC", etc.
+  /** USD-equivalent value of `amount` when `token` isn't USDC — e.g. "3.98"
+   *  to render "worth ~3.98 USDC". Only set once a live price quote is
+   *  available (see LI.FI integration); left undefined otherwise, in
+   *  which case that line is simply omitted rather than showing a
+   *  fabricated/stale conversion. */
+  usdEquivalent?: string;
+}
+
 interface ExecutionModalProps {
   state:       ExecutionState;
   statusText:  string;
   progress?:   ExecutionProgress | null;
   txHash?:     string;
   error?:      string;
+  summary?:    PaymentSummary | null;
   onClose:     () => void;
 }
 
-export function ExecutionModal({ state, statusText, progress, txHash, error, onClose }: ExecutionModalProps) {
+export function ExecutionModal({ state, statusText, progress, txHash, error, summary, onClose }: ExecutionModalProps) {
   if (state === 'idle') return null;
 
   const showClose = state === 'success' || state === 'failed';
@@ -116,8 +129,18 @@ export function ExecutionModal({ state, statusText, progress, txHash, error, onC
 
         {/* Status text */}
         <p style={{ fontSize: 14, color: '#64748B', marginBottom: progress ? 20 : 0, lineHeight: 1.6 }}>
-          {state === 'failed' && error ? error : statusText}
+          {state === 'failed' && error ? error
+           : state === 'success' && summary
+             ? `Paid ${summary.recipientCount} employee${summary.recipientCount !== 1 ? 's' : ''} — ${summary.amount} ${summary.token}`
+             : statusText}
         </p>
+
+        {/* USD-equivalent line — only shown once a live quote is available for a non-USDC payout */}
+        {state === 'success' && summary?.usdEquivalent && summary.token !== 'USDC' && (
+          <p style={{ fontSize: 13, color: '#94A3B8', marginTop: -12, marginBottom: 0 }}>
+            worth ~{summary.usdEquivalent} USDC
+          </p>
+        )}
 
         {/* Batch progress bar */}
         {state === 'pending' && progress && progress.total > 30 && (

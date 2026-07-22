@@ -25,8 +25,9 @@ import { AppLayout }        from '@/components/layout/AppLayout';
 import { NetworkGuard }     from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { ERC20_ABI }        from '@/lib/contracts/abis';
-import { arcTestnet }       from '@/lib/contracts/config';
+import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { copyToClipboard }  from '@/lib/clipboard';
+import { tokenIconRenderSize } from '@/lib/token-registry';
 
 // Next.js statically replaces `process.env.NEXT_PUBLIC_X` at build time only
 // when it sees that exact literal expression in source — `process.env[someVar]`
@@ -64,7 +65,8 @@ const TOKENS = [
     envKey: 'NEXT_PUBLIC_EURC_ADDRESS',
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src="/images/tokens/eurc.svg" alt="EURC" width={TOKEN_ICON_SIZE} height={TOKEN_ICON_SIZE}
+      <img src="/images/tokens/eurc.svg" alt="EURC"
+        width={tokenIconRenderSize('EURC', TOKEN_ICON_SIZE)} height={tokenIconRenderSize('EURC', TOKEN_ICON_SIZE)}
         style={{ display: 'block', borderRadius: '50%', objectFit: 'cover' }} />
     ),
   },
@@ -192,6 +194,51 @@ export default function WalletPage() {
 
   useEffect(() => { if (address) fetchErc20(); }, [address, fetchErc20]);
 
+  // ── Total USD value across all tokens (hero card) — live prices via LI.FI ──
+  const [tokenPrices, setTokenPrices] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      TOKENS.map(async t => {
+        const addr = t.fromNative ? CONTRACTS.USDC
+          : t.envKey ? (ENV_TOKEN_ADDRESSES[t.envKey] as `0x${string}` | undefined)
+          : undefined;
+        if (!addr) return [t.symbol, null] as const;
+        try {
+          const res = await fetch(`/api/lifi/price?chainId=${arcTestnet.id}&token=${addr}`);
+          const data = await res.json() as { price: { priceUSD: string } | null };
+          return [t.symbol, data.price ? Number(data.price.priceUSD) : null] as const;
+        } catch {
+          return [t.symbol, null] as const;
+        }
+      }),
+    ).then(results => {
+      if (cancelled) return;
+      const map: Record<string, number> = {};
+      for (const [symbol, price] of results) if (price !== null) map[symbol] = price;
+      setTokenPrices(map);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const totalUsd = TOKENS.reduce((sum, t) => {
+    const balanceStr = t.fromNative ? usdcDisplay : (erc20Balances[t.symbol] ?? '0');
+    const balance = Number(balanceStr.replace(/,/g, '')) || 0;
+    const price = tokenPrices[t.symbol] ?? (t.symbol === 'USDC' ? 1 : undefined); // USDC defaults to $1 if the live price hasn't loaded yet — everything else waits for a real price rather than guessing
+    if (price === undefined) return sum;
+    return sum + balance * price;
+  }, 0);
+  const totalUsdDisplay = totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // True only once every token with a nonzero balance has a resolved price
+  // — while any are still missing, the total above is a partial sum, so we
+  // label it "≈" rather than presenting it as exact.
+  const allPricesLoaded = TOKENS.every(t => {
+    const balanceStr = t.fromNative ? usdcDisplay : (erc20Balances[t.symbol] ?? '0');
+    const balance = Number(balanceStr.replace(/,/g, '')) || 0;
+    return balance === 0 || tokenPrices[t.symbol] !== undefined || t.symbol === 'USDC';
+  });
+
   async function handleCopy() {
     if (!address) return;
     const ok = await copyToClipboard(address);
@@ -221,10 +268,13 @@ export default function WalletPage() {
             </div>
 
             <div style={{ fontSize: 38, fontWeight: 800, color: '#fff',
-              letterSpacing: '-0.02em', marginBottom: 14 }}>
-              {isAuth ? (showBalance ? `$${usdcDisplay}` : '$••••••') : '$0.00'}
-              <span style={{ fontSize: 16, fontWeight: 600,
-                color: 'rgba(255,255,255,0.55)', marginLeft: 8 }}>USDC</span>
+              letterSpacing: '-0.02em', marginBottom: 4 }}>
+              {isAuth
+                ? (showBalance ? `${allPricesLoaded ? '' : '≈'}$${totalUsdDisplay}` : '$••••••')
+                : '$0.00'}
+            </div>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)', marginBottom: 14 }}>
+              {isAuth ? 'Total value across USDC, EURC and cirBTC' : ''}
             </div>
 
             {isAuth && address ? (
