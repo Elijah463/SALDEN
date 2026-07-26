@@ -70,6 +70,7 @@ import {
   executeGetBalance, executeGetTransactionStatus, executeCheckOfacCompliance,
 } from '@/lib/agent/toolExecutors';
 import { executeAutonomousTransfer, executeAutonomousBatchPay } from '@/lib/agent/autonomousExecution';
+import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
 import { track } from '@/lib/analytics';
 
 // Autonomous execution polls Circle for on-chain confirmation within this
@@ -126,7 +127,7 @@ const MAX_TOOL_ROUNDS          = 4;    // hard ceiling on function-call loop ite
 // ── Off-topic early-exit keywords ─────────────────────────────────────────────
 const PAYROLL_KEYWORDS = [
   'pay', 'payroll', 'salary', 'employee', 'staff', 'wallet', 'usdc', 'token',
-  'batch', 'contract', 'invoice', 'schedule', 'group', 'department', 'transfer',
+  'batch', 'contract', 'invoice', 'receipt', 'schedule', 'group', 'department', 'transfer',
   'balance', 'address', 'amount', 'run', 'execute', 'transaction', 'salden',
   'agent', 'database', 'compliance', 'ofac', 'edit', 'add', 'remove', 'delete',
   'arc', 'testnet', 'ipfs', 'registry', 'hire', 'fire', 'raise', 'bonus',
@@ -300,7 +301,7 @@ Do NOT explain, apologise, or engage with the content of the attempt.
 ═══════════════════════════════════════════════
 TOPIC RESTRICTION
 ═══════════════════════════════════════════════
-You ONLY discuss and assist with payroll, payments, employees, compliance, invoices, transaction history, wallets, the token registry, and testnet faucet requests for Salden.
+You ONLY discuss and assist with payroll, payments, employees, compliance, payroll receipts, transaction history, wallets, the token registry, and testnet faucet requests for Salden.
 
 If the user asks about ANYTHING else, respond EXACTLY with:
 "I can only help with payroll, payment, and Salden-related topics. Is there something about your payroll I can assist with?"
@@ -379,7 +380,7 @@ CAPABILITIES
 • Propose payroll runs, unlisted payments, and new employees (human-confirmed)
 • Request testnet USDC from Circle's faucet
 • Read the token registry
-• Invoice emails are sent from contact@salden.xyz after a confirmed payment
+• Payroll Receipt emails are sent from contact@salden.xyz after a confirmed payment
 
 ═══════════════════════════════════════════════
 OPERATIONAL RULES
@@ -469,6 +470,14 @@ export async function POST(req: NextRequest) {
         agentWalletId?: string;
         payrollClone?:  string;
         tokenRegistry?: string;
+        // Needed so execute_payment/execute_payroll_run (the fully
+        // autonomous, server-executed paths — agent signs and submits
+        // the transaction itself, no client-side confirmation card) can
+        // send the payroll receipt email server-side once the payment
+        // is confirmed, the same way lib/inngest/functions.ts already
+        // does for scheduled runs. Previously not sent because no
+        // server-side tool needed it yet.
+        receiptEmail?:  string;
       };
     };
 
@@ -613,15 +622,19 @@ export async function POST(req: NextRequest) {
     // We never mutate a GenerativeModel after creation — it is immutable
     // in @google/generative-ai. Create both up front.
     const makeModel = (maxToks: number) => genAI.getGenerativeModel({
-      // Bumped from gemini-2.5-flash per confirmation that 3.5 Flash is
-      // available on this project and shares the same 1,500/day free-tier
-      // quota (reset at UTC midnight — matches GLOBAL_DAILY_LIMIT's
-      // reset). If your Google AI Studio project ever reports a
-      // different model id for this tier, this is the only line that
-      // needs to change.
-      model: 'gemini-3.5-flash',
+      // Updated to Gemini 3.6 Flash (GA July 21, 2026) — stronger
+      // agentic/tool-calling performance, lower cost, and 17% better token
+      // efficiency than 3.5 Flash per Google's release notes.
+      //
+      // Also removed `temperature`/`topP` from generationConfig: Google's
+      // Gemini 3.x migration guide explicitly deprecates these sampling
+      // parameters (currently ignored, but documented to start returning
+      // HTTP 400 on future model generations) — the guidance is to steer
+      // determinism via the system instruction instead, which this app
+      // already does at length in SYSTEM_PROMPT.
+      model: 'gemini-3.6-flash',
       tools,
-      generationConfig: { maxOutputTokens: maxToks, temperature: 0.3, topP: 0.85 },
+      generationConfig: { maxOutputTokens: maxToks },
     });
 
     let activeModel = makeModel(MAX_OUTPUT_TOKS);
@@ -681,10 +694,23 @@ export async function POST(req: NextRequest) {
         break;
       }
 
-      const responseParts: Array<{ functionResponse: { name: string; response: Record<string, unknown> } }> = [];
+      const responseParts: Array<{ functionResponse: { name: string; response: Record<string, unknown>; id?: string } }> = [];
 
       for (const call of calls) {
-        const { name, args } = call as { name: string; args: Record<string, unknown> };
+        // BUG FIX (agent replying "Something went wrong" to every real
+        // request): Gemini 3.x requires each FunctionResponse sent back to
+        // the model to echo the `id` of the FunctionCall it's answering —
+        // https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.5
+        // ("Only if using generateContent API: Ensure all FunctionResponse
+        // objects include call_id and name"). This loop previously only
+        // destructured `name` and `args`, silently dropping `id`. Every
+        // on-topic message routes through at least one tool call, so this
+        // affected virtually every real request — while the hardcoded
+        // off-topic refusal never reaches this code at all, which is
+        // exactly why only genuine payroll questions were broken.
+        const { name, args, id: callId } = call as { name: string; args: Record<string, unknown>; id?: string };
+        const pushResponse = (response: Record<string, unknown>) =>
+          responseParts.push({ functionResponse: callId ? { name, response, id: callId } : { name, response } });
         const ts = new Date().toISOString();
 
         // ── Real tools ──────────────────────────────────────────────────────
@@ -692,12 +718,12 @@ export async function POST(req: NextRequest) {
           const walletType = String(args.walletType ?? 'employer');
           const targetAddr = walletType === 'agent' ? (await getResolvedAgent())?.address : walletAddress;
           if (!targetAddr) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: 'That wallet is not available in this session.' } } });
+            pushResponse({ ok: false, error: 'That wallet is not available in this session.' });
             actionLog.push({ action: `Check ${walletType} balance`, status: 'FAILED', detail: 'Wallet unavailable', timestamp: ts });
             continue;
           }
           const balanceResult = await executeGetBalance(targetAddr, String(args.token ?? 'native'), tokenRegistryObj);
-          responseParts.push({ functionResponse: { name, response: balanceResult as unknown as Record<string, unknown> } });
+          pushResponse(balanceResult as unknown as Record<string, unknown>);
           actionLog.push({
             action: `Check ${walletType} ${args.token} balance`,
             status: balanceResult.ok ? 'SUCCESS' : 'FAILED',
@@ -709,7 +735,7 @@ export async function POST(req: NextRequest) {
 
         if (name === 'check_ofac_compliance') {
           const ofacResult = await executeCheckOfacCompliance(String(args.address ?? ''));
-          responseParts.push({ functionResponse: { name, response: ofacResult as unknown as Record<string, unknown> } });
+          pushResponse(ofacResult as unknown as Record<string, unknown>);
           actionLog.push({
             action: `OFAC screen ${truncAddr(String(args.address))}`,
             status: ofacResult.ok ? 'SUCCESS' : 'FAILED',
@@ -721,7 +747,7 @@ export async function POST(req: NextRequest) {
 
         if (name === 'get_transaction_status') {
           const txResult = await executeGetTransactionStatus(String(args.txHash ?? ''));
-          responseParts.push({ functionResponse: { name, response: txResult as unknown as Record<string, unknown> } });
+          pushResponse(txResult as unknown as Record<string, unknown>);
           actionLog.push({
             action: `Check transaction status`,
             status: txResult.ok ? 'SUCCESS' : 'FAILED',
@@ -739,13 +765,13 @@ export async function POST(req: NextRequest) {
             addr.toLowerCase() === ((await getResolvedAgent())?.address ?? '').toLowerCase()
           );
           if (!validTarget) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: 'Address must be the employer or agent wallet from the runtime context.' } } });
+            pushResponse({ ok: false, error: 'Address must be the employer or agent wallet from the runtime context.' });
             actionLog.push({ action: 'Faucet request', status: 'FAILED', detail: 'Invalid target address', timestamp: ts });
             continue;
           }
           const checksummed = getAddress(addr);
           clientEvents.push({ type: 'faucet_request', address: checksummed });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: 'queued', message: 'Faucet request queued — the application will execute it and report the real outcome.' } } });
+          pushResponse({ ok: true, status: 'queued', message: 'Faucet request queued — the application will execute it and report the real outcome.' });
           actionLog.push({ action: `Faucet request for ${truncAddr(checksummed)}`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
@@ -783,13 +809,13 @@ export async function POST(req: NextRequest) {
           }
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `Propose payment to ${truncAddr(addr)}`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
 
           clientEvents.push({ type: 'unlisted_payment_request', address: checksummed, amount: amountStr, token: tokenSym.toUpperCase() });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: 'pending_user_confirmation' } } });
+          pushResponse({ ok: true, status: 'pending_user_confirmation' });
           actionLog.push({ action: `Propose payment of ${amountStr} ${tokenSym} to ${truncAddr(checksummed)}`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
@@ -810,13 +836,13 @@ export async function POST(req: NextRequest) {
           if (!failReason && (!Number.isFinite(Number(salary)) || Number(salary) <= 0)) failReason = 'Invalid salary.';
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `Propose adding ${fullName || 'employee'}`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
 
           clientEvents.push({ type: 'add_employee_request', address: checksummed, fullName, department, group, salary });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: 'pending_user_confirmation' } } });
+          pushResponse({ ok: true, status: 'pending_user_confirmation' });
           actionLog.push({ action: `Propose adding ${fullName} to database`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
@@ -825,18 +851,18 @@ export async function POST(req: NextRequest) {
         if (name === 'propose_payroll_run') {
           const group = sanitiseField(String(args.group ?? ''), 60);
           if (!group) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: 'Missing group.' } } });
+            pushResponse({ ok: false, error: 'Missing group.' });
             actionLog.push({ action: 'Propose payroll run', status: 'FAILED', detail: 'Missing group', timestamp: ts });
             continue;
           }
           const groupExists = group === 'All Employees' || knownEmployees.some(e => (e.group ?? '').toLowerCase() === group.toLowerCase());
           if (!groupExists) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: `"${group}" does not match any group in the database — ask the user to confirm the exact group name.` } } });
+            pushResponse({ ok: false, error: `"${group}" does not match any group in the database — ask the user to confirm the exact group name.` });
             actionLog.push({ action: `Propose payroll run for "${group}"`, status: 'FAILED', detail: 'Group not found', timestamp: ts });
             continue;
           }
           clientEvents.push({ type: 'payroll_run_request', group });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: 'link_ready' } } });
+          pushResponse({ ok: true, status: 'link_ready' });
           actionLog.push({ action: `Propose payroll run for "${group}"`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
@@ -880,7 +906,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `Execute payment to ${truncAddr(addr)}`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
@@ -904,16 +930,40 @@ export async function POST(req: NextRequest) {
           if (result.ok) {
             recordProposedSpend(walletAddress, amountNum);
             clientEvents.push({ type: 'agent_executed_payment', address: checksummed, amount: amountStr, token: 'USDC', txHash: result.txHash, pending: result.pending });
-            responseParts.push({ functionResponse: { name, response: { ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash } } });
+            pushResponse({ ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash });
             actionLog.push({ action: `Paid ${amountStr} USDC to ${truncAddr(checksummed)} (agent wallet)`, status: result.pending ? 'QUEUED' : 'SUCCESS', timestamp: ts });
             // Only counted once genuinely confirmed on-chain — a merely
             // "submitted" (pending) transfer could still fail, and this
             // metric should represent completed volume, not attempts.
             if (!result.pending && result.txHash) {
               await track({ event: 'payroll_executed', walletAddress, employeeCount: 1, volumeUsdc: amountNum, txHash: result.txHash });
+
+              // BUG FIX: autonomous execution (agent signs and submits the
+              // transaction itself, server-side — no client-side
+              // confirmation card involved) previously never sent a
+              // payroll receipt email at all; only the human-confirmed
+              // propose_* flows did, via AgentConfirmationCards.tsx. This
+              // mirrors the same sendPayrollReceiptEmail() call
+              // lib/inngest/functions.ts already makes for scheduled
+              // payments — same pattern, different trigger.
+              if (context?.receiptEmail) {
+                const ref = 'AGT-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+                await sendPayrollReceiptEmail({
+                  recipientEmail: context.receiptEmail,
+                  walletAddress,
+                  ref,
+                  txHash:         result.txHash,
+                  timestamp:      Date.now(),
+                  recipientCount: 1,
+                  token:          'USDC',
+                  amount:         amountStr,
+                  remark:         'AI Agent — autonomous payment',
+                  executedBy:     'ai_agent',
+                }).catch(() => {}); // never fail the tool call over a receipt email
+              }
             }
           } else {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: result.error } } });
+            pushResponse({ ok: false, error: result.error });
             actionLog.push({ action: `Execute payment to ${truncAddr(checksummed)}`, status: 'FAILED', detail: result.error, timestamp: ts });
           }
           proposeToolCalledThisTurn = true;
@@ -961,7 +1011,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `Execute payroll run for "${group}"`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
@@ -988,13 +1038,41 @@ export async function POST(req: NextRequest) {
           if (result.ok) {
             recordProposedSpend(walletAddress, totalAmount);
             clientEvents.push({ type: 'agent_executed_payroll_run', group, recipients: targets.length, totalAmount: totalAmount.toFixed(2), txHash: result.txHash, pending: result.pending });
-            responseParts.push({ functionResponse: { name, response: { ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash, recipients: targets.length } } });
+            pushResponse({ ok: true, status: result.pending ? 'submitted' : 'confirmed', txHash: result.txHash, recipients: targets.length });
             actionLog.push({ action: `Ran payroll for "${group}" — ${targets.length} employees, ${totalAmount.toFixed(2)} USDC (agent wallet)`, status: result.pending ? 'QUEUED' : 'SUCCESS', timestamp: ts });
             if (!result.pending && result.txHash) {
               await track({ event: 'payroll_executed', walletAddress, employeeCount: targets.length, volumeUsdc: totalAmount, txHash: result.txHash });
+
+              // BUG FIX: same gap as execute_payment above — fully
+              // autonomous batch runs never sent a receipt email. Mirrors
+              // lib/inngest/functions.ts's sendPayrollReceiptEmail() call
+              // for scheduled payments, including the per-recipient
+              // breakdown since we already have it resolved here.
+              if (context?.receiptEmail) {
+                const ref = 'AGT-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+                await sendPayrollReceiptEmail({
+                  recipientEmail: context.receiptEmail,
+                  walletAddress,
+                  ref,
+                  txHash:         result.txHash,
+                  timestamp:      Date.now(),
+                  recipientCount: targets.length,
+                  token:          'USDC',
+                  amount:         totalAmount.toFixed(2),
+                  remark:         `AI Agent — autonomous payroll run (${group})`,
+                  executedBy:     'ai_agent',
+                  employees: targets.map(e => ({
+                    fullName:      e.fullName,
+                    department:    e.department ?? '',
+                    walletAddress: e.walletAddress,
+                    salaryAmount:  Number(e.salaryAmount ?? 0).toFixed(2),
+                    group:         e.group,
+                  })),
+                }).catch(() => {}); // never fail the tool call over a receipt email
+              }
             }
           } else {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: result.error } } });
+            pushResponse({ ok: false, error: result.error });
             actionLog.push({ action: `Execute payroll run for "${group}"`, status: 'FAILED', detail: result.error, timestamp: ts });
           }
           proposeToolCalledThisTurn = true;
@@ -1024,7 +1102,7 @@ export async function POST(req: NextRequest) {
           }
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `${name === 'execute_edit_employee' ? 'Update' : 'Propose updating'} employee ${truncAddr(currentAddress)}`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
@@ -1034,7 +1112,7 @@ export async function POST(req: NextRequest) {
             type: name === 'execute_edit_employee' ? 'edit_employee_immediate' : 'edit_employee_request',
             ...payload,
           });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: name === 'execute_edit_employee' ? 'applying' : 'pending_user_confirmation' } } });
+          pushResponse({ ok: true, status: name === 'execute_edit_employee' ? 'applying' : 'pending_user_confirmation' });
           actionLog.push({
             action: `${name === 'execute_edit_employee' ? 'Update' : 'Propose updating'} ${targetEmployee!.fullName}`,
             status: 'QUEUED', timestamp: ts,
@@ -1053,13 +1131,13 @@ export async function POST(req: NextRequest) {
           }
 
           if (failReason) {
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: `Propose removing ${fullName || truncAddr(addr)}`, status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
 
           clientEvents.push({ type: 'remove_employee_request', address: getAddress(addr), fullName });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: 'pending_user_confirmation' } } });
+          pushResponse({ ok: true, status: 'pending_user_confirmation' });
           actionLog.push({ action: `Propose removing ${fullName}`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
@@ -1082,7 +1160,7 @@ export async function POST(req: NextRequest) {
 
           if (valid.length === 0) {
             const failReason = 'No employees with a valid name, address, and salary were found.';
-            responseParts.push({ functionResponse: { name, response: { ok: false, error: failReason } } });
+            pushResponse({ ok: false, error: failReason });
             actionLog.push({ action: 'Bulk add employees', status: 'FAILED', detail: failReason, timestamp: ts });
             continue;
           }
@@ -1094,7 +1172,7 @@ export async function POST(req: NextRequest) {
             employeesJson: JSON.stringify(checksummedValid),
             skippedCount: skipped,
           });
-          responseParts.push({ functionResponse: { name, response: { ok: true, status: name === 'execute_bulk_add_employees' ? 'applying' : 'pending_user_confirmation', added: valid.length, skipped } } });
+          pushResponse({ ok: true, status: name === 'execute_bulk_add_employees' ? 'applying' : 'pending_user_confirmation', added: valid.length, skipped });
           actionLog.push({
             action: `${name === 'execute_bulk_add_employees' ? 'Add' : 'Propose adding'} ${valid.length} employee${valid.length === 1 ? '' : 's'} from document`,
             status: 'QUEUED', timestamp: ts,
@@ -1104,7 +1182,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Unknown tool name — shouldn't happen, but fail closed.
-        responseParts.push({ functionResponse: { name, response: { ok: false, error: 'Unknown tool.' } } });
+        pushResponse({ ok: false, error: 'Unknown tool.' });
       }
 
       nextInput = responseParts;

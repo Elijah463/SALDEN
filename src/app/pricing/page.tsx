@@ -118,6 +118,26 @@ export default function PricingPage() {
       setStep('done');
       addToast('Premium activated. Your private payroll contract is ready.', 'success', 8000);
     } catch (err) {
+      // If the revert is specifically because a clone already exists
+      // (AlreadyDeployed, or the older undecoded 4-byte-selector form of
+      // the same thing), recover gracefully instead of showing a raw
+      // blockchain error — re-check on-chain state and activate the
+      // existing clone rather than leaving the user stuck.
+      try {
+        if (address && publicClient) {
+          const nowClone = await publicClient.readContract({
+            address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'payrollOf', args: [address],
+          }) as string;
+          if (nowClone && nowClone !== '0x0000000000000000000000000000000000000000') {
+            dispatch({ type: 'SET_PAYROLL_CLONE', payload: nowClone });
+            dispatch({ type: 'SET_PREMIUM',       payload: true      });
+            addToast('You already have a Premium payroll contract — activating it now.', 'info');
+            setStep('idle');
+            return;
+          }
+        }
+      } catch { /* fall through to showing the original error below */ }
+
       setErrMsg((err as Error).message ?? 'Transaction failed.');
       setStep('error');
     }
@@ -283,7 +303,7 @@ export default function PricingPage() {
           <Row label="Group management"                  free={true}             premium={true}          />
           <Row label="Compliance checks"                 free="Manual only"      premium="Automated"     />
           <Row label="Emergency withdrawal"              free={false}            premium={true}          />
-          <Row label="Invoice emails"                    free={true}             premium={true}          />
+          <Row label="Payroll Receipt emails"           free={true}             premium={true}          />
           <Row label="Transaction history"               free={true}             premium={true}          />
           <Row label="Compliance dashboard"              free={true}             premium={true}          />
           <Row label="Cost"                              free="Free"             premium="$10 one-time"  />

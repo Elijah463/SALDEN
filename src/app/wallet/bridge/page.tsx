@@ -69,6 +69,7 @@ interface BridgeChainConfig {
   name:        string;
   badgeLabel:  string;
   badgeColor:  string;
+  logo:        string;
   usdcAddress: `0x${string}`;
   viemChain:   Chain;
 }
@@ -80,12 +81,12 @@ interface BridgeChainConfig {
 const USDC_DECIMALS = 6;
 
 const BRIDGE_CHAINS: BridgeChainConfig[] = [
-  { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet },
-  { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia },
-  { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia },
-  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia },
-  { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji },
-  { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia },
+  { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet },
+  { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum-sepolia.png',  usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia },
+  { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',              usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia },
+  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.png',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia },
+  { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg',        usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji },
+  { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',            usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia },
 ];
 
 function chainByKey(key: AppKitChain): BridgeChainConfig {
@@ -170,15 +171,32 @@ function BridgeStepList({ steps }: { steps: BridgeStep[] }) {
 // ── Chain badge + selector ────────────────────────────────────────────────────
 
 function ChainBadge({ chain, size = 26 }: { chain: BridgeChainConfig; size?: number }) {
+  const [imgError, setImgError] = useState(false);
+
+  if (imgError) {
+    // Fallback to the colored letter badge only if the logo file fails to load
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: '50%', flexShrink: 0,
+        background: chain.badgeColor, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <span style={{ fontSize: size * 0.36, fontWeight: 800, color: '#fff', letterSpacing: -0.3 }}>
+          {chain.badgeLabel}
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%', flexShrink: 0,
-      background: chain.badgeColor, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <span style={{ fontSize: size * 0.36, fontWeight: 800, color: '#fff', letterSpacing: -0.3 }}>
-        {chain.badgeLabel}
-      </span>
-    </div>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={chain.logo}
+      alt={chain.name}
+      width={size}
+      height={size}
+      onError={() => setImgError(true)}
+      style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, objectFit: 'cover', display: 'block' }}
+    />
   );
 }
 
@@ -311,6 +329,20 @@ export default function BridgePage() {
   const [balance,      setBalance]      = useState<bigint | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [usdPrice,      setUsdPrice]     = useState<number | null>(null);
+
+  // ── Balance (of the TO chain's USDC) — mirrors the FROM balance display ─
+  const [toBalance,        setToBalance]        = useState<bigint | null>(null);
+  const [toBalanceLoading, setToBalanceLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!address) { setToBalance(null); return; }
+    setToBalanceLoading(true);
+    fetchUsdcBalance(toChain, address as `0x${string}`).then(b => {
+      if (!cancelled) { setToBalance(b); setToBalanceLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [toChain, address]);
 
   useEffect(() => {
     let cancelled = false;
@@ -459,6 +491,42 @@ export default function BridgePage() {
   const canBridge = !!amount && parseFloat(amount) > 0 && isAdapterReady && !bridging;
   const usdValue = usdPrice && amount ? (parseFloat(amount) * usdPrice) : null;
 
+  // ── Fee / time estimate (kit.estimateBridge) ─────────────────────────────
+  // Debounced so we don't fire a new estimate on every keystroke.
+  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null; seconds: number | null } | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+
+  useEffect(() => {
+    if (!amount || parseFloat(amount) <= 0 || !adapter || !isAdapterReady || !address) {
+      setEstimate(null);
+      return;
+    }
+    let cancelled = false;
+    setEstimateLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const kit = await getAppKit();
+        const est = await (kit as unknown as { estimateBridge: (p: unknown) => Promise<unknown> }).estimateBridge({
+          from: { adapter, chain: fromKey } as unknown,
+          to:   { chain: toKey, recipientAddress: address } as unknown,
+          amount,
+        });
+        if (cancelled) return;
+        const e = est as { fees?: Array<{ amount?: string | number }>; duration?: number; estimatedDuration?: number; executionDuration?: number };
+        const feeUsdc = Array.isArray(e.fees) && e.fees.length
+          ? e.fees.reduce((sum, f) => sum + (Number(f.amount) || 0), 0)
+          : null;
+        const seconds = e.duration ?? e.estimatedDuration ?? e.executionDuration ?? null;
+        setEstimate({ feeUsdc, seconds });
+      } catch {
+        if (!cancelled) setEstimate(null);
+      } finally {
+        if (!cancelled) setEstimateLoading(false);
+      }
+    }, 500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [amount, adapter, isAdapterReady, address, fromKey, toKey]);
+
   return (
     <NetworkGuard>
       <AppLayout title="Bridge">
@@ -490,7 +558,7 @@ export default function BridgePage() {
             }}>
               <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0, marginTop: 1 }} />
               <p style={{ fontSize: 13, color: '#92400E', margin: 0, lineHeight: 1.6 }}>
-                Bridging currently requires an external wallet (like Rabby or MetaMask) — connect one to continue.
+                Bridging currently requires an external wallet (like Rabby or MetaMask) please connect one to continue.
               </p>
             </div>
           )}
@@ -583,10 +651,34 @@ export default function BridgePage() {
                 {amount || '0'}
               </span>
             </div>
-            <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 8, marginBottom: 0 }}>
-              You&apos;ll receive this on {toChain.name} — no gas needed there, Circle&apos;s relayer covers it.
-            </p>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
+              <span style={{ fontSize: 12, color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Wallet size={11} />
+                {toBalanceLoading ? 'Loading…' : toBalance !== null ? `${formatUnits6(toBalance)} USDC` : '—'}
+              </span>
+            </div>
           </div>
+
+          {!!amount && parseFloat(amount) > 0 && (estimateLoading || estimate) && (
+            <div style={{
+              background: '#F8FAFC', border: '1px solid #F1F5F9', borderRadius: 14,
+              padding: '12px 16px', marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: '#94A3B8' }}>Fees</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
+                  {estimateLoading ? '…' : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: '#94A3B8' }}>Estimated time</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
+                  {estimateLoading ? '…' : estimate?.seconds != null ? `~${estimate.seconds} secs` : '—'}
+                </span>
+              </div>
+            </div>
+          )}
 
           {error && (
             <p style={{ fontSize: 13, color: '#DC2626', marginTop: 14, display: 'flex', alignItems: 'center', gap: 6 }}>

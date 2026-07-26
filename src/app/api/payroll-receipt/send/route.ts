@@ -1,23 +1,23 @@
 /**
- * @file app/api/invoice/send/route.ts
+ * @file app/api/payroll-receipt/send/route.ts
  *
- * POST /api/invoice/send
+ * POST /api/payroll-receipt/send
  *
  * Sends a payroll receipt email via Resend after a confirmed on-chain
  * batchPay. Always sent from contact@salden.xyz. Body text states clearly
  * whether the AI Agent or the employer (manual) executed the payment.
  *
- * Used by TWO callers:
+ * Used by TWO callers, both currently inside this same codebase:
  *
  *   1. Manual payroll (dashboard/page.tsx) — fires right after
  *      `publicClient.waitForTransactionReceipt()` confirms the manual
  *      batchPay. Sends `executedBy: 'manual'`.
  *
- *   2. AI Agent autonomous payroll (separate agent execution server —
- *      NOT part of this codebase upload) — must call this same route
- *      with `executedBy: 'ai_agent'` immediately after its own
- *      `waitForTransactionReceipt()` confirms the on-chain batchPay it
- *      executed. See AI_AGENT_INTEGRATION_CONTRACT below.
+ *   2. AI Agent-proposed payroll (components/agent/AgentConfirmationCards.tsx)
+ *      — the agent proposes a batch payment, the user confirms it, and the
+ *      confirmation card itself executes the on-chain batchPay client-side.
+ *      It calls this same route with `executedBy: 'ai_agent'` immediately
+ *      after its own `waitForTransactionReceipt()` confirms the payment.
  *
  * Both callers MUST only call this route after on-chain confirmation —
  * never speculatively, and never based on an LLM's claim that a payment
@@ -34,11 +34,15 @@
  * address, with a completely fabricated txHash/amount. That's a phishing
  * / brand-abuse vector, and an unthrottled one at that.
  *
- * Since one legitimate caller (the separate AI Agent execution server,
- * per AI_AGENT_INTEGRATION_CONTRACT) is a headless server-to-server
- * caller with no browser wallet to produce a signature with, this can't
- * simply require a wallet-signature scheme the way app/api/data/sync does
- * without breaking that integration contract. Instead:
+ * Both current callers (dashboard/page.tsx and AgentConfirmationCards.tsx)
+ * run in the user's own browser and do have a wallet available — but this
+ * route deliberately does NOT require a wallet-signature scheme the way
+ * app/api/data/sync does. That's a forward-looking choice: a genuinely
+ * external, headless agent-execution server (server-to-server, no browser
+ * wallet to sign with) is a planned future capability, not something that
+ * exists today. Building the verification around "trust the chain, not
+ * the caller" now means that future caller can be added later without
+ * reworking this route's security model. Instead:
  *
  *   1. The submitted txHash must correspond to a REAL, CONFIRMED
  *      transaction on-chain (fetched via getServerPublicClient — the
@@ -67,7 +71,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { isAddress, getAddress } from 'viem';
-import { sendInvoiceEmail } from '@/lib/email/sendInvoiceEmail';
+import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
 import { getServerPublicClient } from '@/lib/agent/chain';
 import { resolveAgentWallet } from '@/lib/agent/agentIdentity';
 
@@ -75,22 +79,49 @@ function generateRef(txHash: string): string {
   return 'SLD-' + txHash.slice(2, 8).toUpperCase();
 }
 
-// IP-based rate limiter — 20 receipt emails per IP per 10 minutes. Higher
-// than send-otp's limit since a busy payroll admin legitimately running
-// several payroll groups in a row could trigger several of these in
-// quick succession; still far below anything a spam campaign would need.
-const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
-const IP_RATE_LIMIT  = 20;
-const IP_RATE_WINDOW = 10 * 60 * 1000;
+// ── Rate limiting ────────────────────────────────────────────────────────────
+// Three independent limiters, all must pass:
+//   - per IP    — blunt bot/script defense
+//   - per wallet address  — a single observed (real, public) txHash +
+//                            walletAddress pair can't be replayed against many
+//                            different recipientEmail values from many IPs
+//   - per recipient email — a single target inbox can't be spammed by
+//                            cycling through many different real txHashes
+//
+// IMPORTANT CAVEAT (flagged for a real design decision, not something rate
+// limiting alone can fix): this route verifies the TRANSACTION is real and
+// was sent by the claimed wallet, but it cannot verify that recipientEmail
+// actually belongs to that wallet's organization — payrollSetup.email is
+// encrypted client-side with a key derived from a wallet signature before
+// ever reaching IPFS (see AppContext.tsx's getEncryptionKey), so the server
+// has no way to decrypt and cross-check it without a signature it
+// structurally does not have. Since blockchain transactions are public,
+// anyone who observes a real batchPay (txHash + sender wallet — both
+// public) could in principle direct a legitimate-looking Salden receipt
+// email to an inbox of their choosing. Rate limiting shrinks the blast
+// radius (no mass abuse) but does not eliminate a single targeted
+// request. Closing this fully would mean the server storing each
+// employer's receipt email in a plaintext, server-readable location
+// (a real product/privacy tradeoff against the current "we never see your
+// plaintext data" design) — that decision shouldn't be made silently
+// inside a bug fix, so it's surfaced here instead.
+const IP_RATE_MAP     = new Map<string, { count: number; resetAt: number }>();
+const WALLET_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
+const EMAIL_RATE_MAP  = new Map<string, { count: number; resetAt: number }>();
 
-function checkIPRateLimit(ip: string): boolean {
+const IP_RATE_LIMIT      = 20;   // per IP, higher — a busy admin can legitimately trigger several in a row
+const WALLET_RATE_LIMIT  = 20;   // per wallet address
+const EMAIL_RATE_LIMIT   = 10;   // per recipient email — tighter, this is the harassment/spam vector
+const RATE_WINDOW        = 10 * 60 * 1000; // 10 minutes, shared by all three
+
+function checkRateLimit(map: Map<string, { count: number; resetAt: number }>, key: string, limit: number): boolean {
   const now = Date.now();
-  const record = IP_RATE_MAP.get(ip);
+  const record = map.get(key);
   if (!record || now > record.resetAt) {
-    IP_RATE_MAP.set(ip, { count: 1, resetAt: now + IP_RATE_WINDOW });
+    map.set(key, { count: 1, resetAt: now + RATE_WINDOW });
     return true;
   }
-  if (record.count >= IP_RATE_LIMIT) return false;
+  if (record.count >= limit) return false;
   record.count += 1;
   return true;
 }
@@ -99,7 +130,7 @@ export async function POST(req: NextRequest) {
   try {
     // IP rate limit before reading the body, same reasoning as send-otp.
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-    if (!checkIPRateLimit(ip)) {
+    if (!checkRateLimit(IP_RATE_MAP, ip, IP_RATE_LIMIT)) {
       return NextResponse.json(
         { status: 'failed', message: 'Too many receipt requests from this IP. Please wait before trying again.' },
         { status: 429 }
@@ -162,6 +193,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Per-wallet and per-recipient-email limits — see the rate limiting
+    // comment above for why these exist alongside the IP limit.
+    if (!checkRateLimit(WALLET_RATE_MAP, walletAddress.toLowerCase(), WALLET_RATE_LIMIT)) {
+      return NextResponse.json(
+        { status: 'failed', message: 'Too many receipt requests for this wallet. Please wait before trying again.' },
+        { status: 429 }
+      );
+    }
+    if (!checkRateLimit(EMAIL_RATE_MAP, recipientEmail.toLowerCase(), EMAIL_RATE_LIMIT)) {
+      return NextResponse.json(
+        { status: 'failed', message: 'Too many receipt requests for this email address. Please wait before trying again.' },
+        { status: 429 }
+      );
+    }
+
     // ── On-chain verification — see the SECURITY NOTE in the file header.
     let receipt;
     try {
@@ -193,19 +239,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // This route is a documented external trust boundary (a separate agent
-    // execution server, per AI_AGENT_INTEGRATION_CONTRACT above, is expected
-    // to call it). Cap free-text fields so a malformed/hostile caller can't
-    // send an unbounded string that blows up the PDF layout in
+    // This route is designed to eventually accept an external, untrusted
+    // caller (see the note above), so it's held to that standard already.
+    // Cap free-text fields so a malformed/hostile caller can't send an
+    // unbounded string that blows up the PDF layout in
     // generateReceiptPdf.ts or bloats the outgoing email.
     const boundedRemark = remark ? remark.slice(0, 200) : remark;
     const boundedRef    = ref ? ref.slice(0, 40) : ref;
     const boundedToken  = token.slice(0, 20);
 
     // Cap at the claimed recipientCount (or 1000, whichever is smaller) —
-    // this route is a documented external trust boundary, so a hostile or
-    // malformed caller shouldn't be able to send an unbounded array that
-    // blows up the PDF's pagination loop or bloats the outgoing email.
+    // same reasoning: a hostile or malformed caller shouldn't be able to
+    // send an unbounded array that blows up the PDF's pagination loop or
+    // bloats the outgoing email.
     const boundedEmployees = Array.isArray(employees)
       ? employees
           .slice(0, Math.min(recipientCount, 1000))
@@ -218,7 +264,7 @@ export async function POST(req: NextRequest) {
           }))
       : undefined;
 
-    const result = await sendInvoiceEmail({
+    const result = await sendPayrollReceiptEmail({
       ref:            boundedRef ?? generateRef(txHash),
       txHash,
       walletAddress,
@@ -235,6 +281,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result, { status: result.status === 'sent' ? 200 : 502 });
 
   } catch {
-    return NextResponse.json({ status: 'failed', message: 'Invoice could not be sent. Please try again.' }, { status: 500 });
+    return NextResponse.json({ status: 'failed', message: 'Payroll receipt could not be sent. Please try again.' }, { status: 500 });
   }
 }

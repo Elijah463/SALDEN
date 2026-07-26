@@ -25,6 +25,7 @@ import { AppLayout }      from '@/components/layout/AppLayout';
 import { useApp }         from '@/context/AppContext';
 import { Modal }          from '@/components/shared/Modal';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
+import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { useCloneAccess } from '@/lib/useCloneAccess';
 import { trackClientEvent } from '@/lib/analyticsClient';
@@ -533,7 +534,7 @@ export default function DashboardPage() {
 
   // ── Login state ────────────────────────────────────────────────────────────
   const [loginOpen,        setLoginOpen]        = useState(false);
-  const [showBalance,      setShowBalance]      = useState(false);
+  const [showBalance,      setShowBalance]      = useBalanceVisibility();
   const [copied,           setCopied]           = useState(false);
 
   // ── Onboarding: does the user already have a registry clone? ──────────────
@@ -643,13 +644,14 @@ export default function DashboardPage() {
 
   useEffect(() => () => { if (longPress.current) clearTimeout(longPress.current); }, []);
 
-  // Deep-link support: the AI agent's "Go to Dashboard" link (PayrollRunCard)
-  // sends the user to /dashboard?group=<name> promising the group will be
-  // pre-selected. Previously nothing on this page read that query param, so
-  // the link silently did nothing beyond a plain navigation. Runs once on
-  // mount, after `groups` is populated, and only applies if the group named
-  // in the URL still exists (a stale/bookmarked link with a deleted group
-  // should not crash — it should just fall back to "All Employees").
+  // Deep-link support: /dashboard?group=<name> pre-selects a group filter
+  // on load. Originally added for the AI agent's payroll-run card, which
+  // now executes fully in-chat instead of linking here — kept as a
+  // general-purpose capability (e.g. a bookmarked or shared link) since
+  // it's harmless and still useful on its own. Runs once on mount, after
+  // `groups` is populated, and only applies if the group named in the URL
+  // still exists (a stale/bookmarked link with a deleted group should not
+  // crash — it should just fall back to "All Employees").
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -915,7 +917,7 @@ export default function DashboardPage() {
         // (LI.FI integration) are wired in — see ExecutionModal.tsx.
       });
       setExecutionState('success');
-      const invoiceEmail = payrollSetup?.email ?? null;
+      const receiptEmail = payrollSetup?.email ?? null;
       await saveTxRecord({
         id: txHash, hash: txHash, ref,
         type: 'batchPay', status: 'success',
@@ -927,7 +929,7 @@ export default function DashboardPage() {
         // otherwise this stayed 'pending' forever, since nothing else
         // would ever move it to 'sent'/'failed' if there was no email to
         // begin with (the fetch below was simply skipped entirely).
-        invoiceEmailStatus: invoiceEmail ? 'pending' : null,
+        receiptEmailStatus: receiptEmail ? 'pending' : null,
         executedBy: 'manual',
       }, address);
 
@@ -936,17 +938,17 @@ export default function DashboardPage() {
         employeeCount: targetEmployees.length, volumeUsdc: Number(totalHuman.replace(/,/g, '')),
       });
 
-      // Auto-send invoice email after batchPay (ImportantUpdate - automatic for batchPay only).
+      // Auto-send payroll receipt email after batchPay (ImportantUpdate - automatic for batchPay only).
       // Fire-and-forget: payroll already succeeded, email failure is non-critical.
       // Uses the company email stored in payrollSetup.
-      if (invoiceEmail) {
-        fetch('/api/invoice/send', {
+      if (receiptEmail) {
+        fetch('/api/payroll-receipt/send', {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             txHash,
             walletAddress:  address,
-            recipientEmail: invoiceEmail,
+            recipientEmail: receiptEmail,
             recipientCount: targetEmployees.length,
             amount:         totalHuman,
             token:          tokenSymbol,
@@ -972,11 +974,11 @@ export default function DashboardPage() {
             remark,
             recipientCount: targetEmployees.length,
             timestamp: Date.now(),
-            invoiceEmailStatus: newStatus,
+            receiptEmailStatus: newStatus,
             executedBy: 'manual',
           }, address);
         }).catch(() => {
-          // Invoice send failed — update status silently
+          // Receipt send failed — update status silently
           saveTxRecord({
             id: txHash, hash: txHash, ref,
             type: 'batchPay', status: 'success',
@@ -984,7 +986,7 @@ export default function DashboardPage() {
             remark,
             recipientCount: targetEmployees.length,
             timestamp: Date.now(),
-            invoiceEmailStatus: 'failed',
+            receiptEmailStatus: 'failed',
             executedBy: 'manual',
           }, address).catch(() => { /* ignore double failure */ });
         });

@@ -13,22 +13,44 @@ import { useAgentStatus } from '@/lib/useAgentStatus';
 import { ERC20_ABI }     from '@/lib/contracts/abis';
 import { arcTestnet }    from '@/lib/contracts/config';
 import { copyToClipboard } from '@/lib/clipboard';
+import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
+import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
+
+const TOKEN_ICON_SIZE = 38;
 
 const TOKENS = [
-  { symbol: 'USDC',   name: 'USD Coin',      color: '#2775CA', bg: '#EFF6FF', decimals: 6,
-    icon: <svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#2775CA"/><text x="16" y="21" textAnchor="middle" fill="white" fontSize="13" fontWeight="bold" fontFamily="Arial">$</text></svg> },
-  { symbol: 'EURC',   name: 'Euro Coin',      color: '#1B3A6B', bg: '#EEF2FF', decimals: 6,
-    icon: <svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#1B3A6B"/><text x="16" y="21" textAnchor="middle" fill="white" fontSize="13" fontWeight="bold" fontFamily="Arial">€</text></svg> },
-  { symbol: 'cirBTC', name: 'Circle Bitcoin', color: '#F7931A', bg: '#FFF7ED', decimals: 8,
-    icon: <svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#F7931A"/><text x="16" y="21" textAnchor="middle" fill="white" fontSize="11" fontWeight="bold" fontFamily="Arial">₿</text></svg> },
+  { symbol: 'USDC',   name: 'USD Coin',      bg: '#EFF6FF', decimals: 6, displayDecimals: 2 },
+  { symbol: 'EURC',   name: 'Euro Coin',      bg: '#EEF2FF', decimals: 6, displayDecimals: 2 },
+  // cirBTC trades at BTC-scale value — real balances are commonly small
+  // fractions that a 2-decimal display would round away to "0.00" entirely.
+  { symbol: 'cirBTC', name: 'Circle Bitcoin', bg: '#FFF7ED', decimals: 8, displayDecimals: 6 },
 ];
+
+function AgentTokenIcon({ symbol, bg }: { symbol: string; bg: string }) {
+  const iconPath = TOKEN_ICON_PATHS[symbol];
+  if (iconPath) {
+    const renderSize = tokenIconRenderSize(symbol, TOKEN_ICON_SIZE);
+    return (
+      <div style={{ width: TOKEN_ICON_SIZE, height: TOKEN_ICON_SIZE, borderRadius: '50%', overflow: 'hidden',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={iconPath} alt={symbol} width={renderSize} height={renderSize}
+          style={{ display: 'block', objectFit: 'cover' }} />
+      </div>
+    );
+  }
+  return (
+    <div style={{ width: TOKEN_ICON_SIZE, height: TOKEN_ICON_SIZE, borderRadius: '50%', background: bg,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} />
+  );
+}
 
 export default function AgentWalletPage() {
   const { status, agentInfo }  = useAgentStatus();
   const agentAddr = agentInfo?.agentWallet as `0x${string}` | undefined;
   const pc = usePublicClient({ chainId: arcTestnet.id });
 
-  const [showBal, setShowBal] = useState(true);
+  const [showBal, setShowBal] = useBalanceVisibility();
   const [copied,  setCopied]  = useState(false);
   const [tokenBals, setTokenBals] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -47,12 +69,13 @@ export default function AgentWalletPage() {
       const addr = t.symbol === 'EURC'
         ? (process.env.NEXT_PUBLIC_EURC_ADDRESS as `0x${string}` | undefined)
         : (process.env.NEXT_PUBLIC_CIRBTC_ADDRESS as `0x${string}` | undefined);
-      if (!addr) { out[t.symbol] = '0.00'; continue; }
+      if (!addr) { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; continue; }
       try {
         const raw = await pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [agentAddr] }) as bigint;
         const div = BigInt(10 ** t.decimals);
-        out[t.symbol] = `${(raw / div).toString()}.${(raw % div).toString().padStart(t.decimals, '0').slice(0, 2)}`;
-      } catch { out[t.symbol] = '0.00'; }
+        const dp  = t.displayDecimals;
+        out[t.symbol] = `${(raw / div).toString()}.${(raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0')}`;
+      } catch { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; }
     }
     setTokenBals(out); setLoading(false);
   }, [agentAddr, pc, nativeBal]);
@@ -114,15 +137,13 @@ export default function AgentWalletPage() {
             <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Tokens</h3>
             {TOKENS.map(t => (
               <div key={t.symbol} style={{ display: 'flex', alignItems: 'center', padding: '14px 0', gap: 14, borderBottom: '1px solid #F1F5F9' }}>
-                <div style={{ width: 38, height: 38, borderRadius: '50%', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  {t.icon}
-                </div>
+                <AgentTokenIcon symbol={t.symbol} bg={t.bg} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{t.symbol}</div>
                   <div style={{ fontSize: 12, color: '#94A3B8' }}>{t.name}</div>
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', fontFamily: "'JetBrains Mono', monospace" }}>
-                  {loading ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} /> : (tokenBals[t.symbol] ?? '0.00')}
+                  {loading ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} /> : (tokenBals[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`)}
                 </div>
               </div>
             ))}

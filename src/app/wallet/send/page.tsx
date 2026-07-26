@@ -170,8 +170,9 @@ export default function SendPage() {
         amount, token: token.symbol,
         remark: remark.trim() || undefined,
         recipientCount: 1,
+        recipientAddress: checksumTo,
         timestamp: Date.now(),
-        invoiceEmailStatus: null,
+        receiptEmailStatus: null,
         executedBy: 'manual',
       }, address);
 

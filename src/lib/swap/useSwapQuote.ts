@@ -15,6 +15,8 @@ export interface LifiQuoteResponse {
     toAmountMin:        string;
     approvalAddress:    `0x${string}`;
     executionDuration:  number;
+    feeCosts?: Array<{ name?: string; amount?: string; amountUSD?: string; token?: { decimals?: number; symbol?: string } }>;
+    gasCosts?: Array<{ amount?: string; amountUSD?: string; token?: { decimals?: number; symbol?: string } }>;
   };
   transactionRequest: { to: `0x${string}`; data: `0x${string}`; value?: string };
   toolDetails?: { name?: string };

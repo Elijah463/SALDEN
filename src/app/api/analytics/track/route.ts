@@ -28,7 +28,7 @@
  * Requiring the user to sign yet another message just to log a metrics
  * event is bad UX for something this low-stakes (no funds move here).
  * Instead this follows the exact pattern already established by
- * app/api/invoice/send/route.ts for the same class of problem ("a client
+ * app/api/payroll-receipt/send/route.ts for the same class of problem ("a client
  * claims an on-chain event happened"): trust the CHAIN, not the caller.
  * The submitted txHash must be a real, confirmed, successful transaction,
  * and its `from` address must match the claimed walletAddress. A caller
@@ -63,7 +63,7 @@ const ALLOWED_EVENTS: ReadonlySet<string> = new Set<ClientTriggerableEvent>([
 ]);
 
 // Same lightweight, single-instance, best-effort pattern as
-// api/invoice/send/route.ts's own limiter — deliberately not shared with
+// api/payroll-receipt/send/route.ts's own limiter — deliberately not shared with
 // that module's instance so the two endpoints' limits stay independently
 // tunable.
 const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();

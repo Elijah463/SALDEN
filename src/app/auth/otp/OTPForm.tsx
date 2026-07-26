@@ -18,20 +18,22 @@ import { useRouter, useSearchParams }  from 'next/navigation';
 import { SaldenLogo }    from '@/components/shared/Logo';
 import { Mail, ArrowLeft, RefreshCw, Loader2 } from 'lucide-react';
 import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
+import { setStoredSession, getStoredSession } from '@/lib/useEffectiveAddress';
 
 const OTP_LENGTH      = 6;
 const RESEND_COOLDOWN = 30;
 
-// Stores a complete, verified session in localStorage.
+// Stores a complete, verified session — via the shared setStoredSession
+// helper so every already-mounted useEffectiveAddress() instance in this
+// tab picks up the change immediately (a raw localStorage.setItem would
+// leave them on the previous session until they happen to remount).
 function storeSession(email: string, walletAddress: string) {
-  try {
-    localStorage.setItem('salden_session', JSON.stringify({
-      email,
-      walletAddress,
-      loginMethod: 'email',
-      createdAt:   Date.now(),
-    }));
-  } catch { /* ignore write errors */ }
+  setStoredSession({
+    email,
+    walletAddress,
+    loginMethod: 'email',
+    createdAt:   Date.now(),
+  });
 }
 
 export function OTPForm() {
@@ -95,16 +97,13 @@ export function OTPForm() {
 
       // ── Case A: Linking email to an external wallet ─────────────────────────
       if (wallet) {
-        try {
-          const existing = localStorage.getItem('salden_session');
-          const parsed   = existing ? JSON.parse(existing) : {};
-          localStorage.setItem('salden_session', JSON.stringify({
-            ...parsed,
-            email,
-            walletAddress: wallet,
-            loginMethod:   'external',
-          }));
-        } catch { /* ignore */ }
+        const existing = getStoredSession();
+        setStoredSession({
+          ...existing,
+          email,
+          walletAddress: wallet,
+          loginMethod:   'external',
+        });
         router.push('/dashboard');
         return;
       }
@@ -130,11 +129,7 @@ export function OTPForm() {
       if (!walletRes.ok) {
         // Non-critical: store a partial session and continue.
         // User will be prompted to set up a wallet on first payroll action.
-        try {
-          localStorage.setItem('salden_session', JSON.stringify({
-            email, walletAddress: null, loginMethod: 'email', createdAt: Date.now(),
-          }));
-        } catch { /* ignore */ }
+        setStoredSession({ email, walletAddress: undefined, loginMethod: 'email', createdAt: Date.now() });
         router.push('/dashboard');
         return;
       }
@@ -167,22 +162,14 @@ export function OTPForm() {
           // Challenge failed or user cancelled. Store partial session.
           // They can retry wallet setup later from Settings.
           console.warn('[OTPForm] Circle challenge failed:', challengeErr);
-          try {
-            localStorage.setItem('salden_session', JSON.stringify({
-              email, walletAddress: null, loginMethod: 'email', createdAt: Date.now(),
-            }));
-          } catch { /* ignore */ }
+          setStoredSession({ email, walletAddress: undefined, loginMethod: 'email', createdAt: Date.now() });
           router.push('/dashboard');
         }
         return;
       }
 
       // Fallback — store partial session
-      try {
-        localStorage.setItem('salden_session', JSON.stringify({
-          email, walletAddress: null, loginMethod: 'email', createdAt: Date.now(),
-        }));
-      } catch { /* ignore */ }
+      setStoredSession({ email, walletAddress: undefined, loginMethod: 'email', createdAt: Date.now() });
       router.push('/dashboard');
 
     } catch (err) {

@@ -125,14 +125,11 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
             {/* Avatar */}
             <div style={{
-              width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
-              background: '#FAFAF8',
-              border: '1px solid #F1F5F9',
+              width: 72, height: 72, flexShrink: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              overflow: 'hidden',
             }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/ai-avatar.png" alt="" width={34} height={34} style={{ objectFit: 'contain' }} />
+              <img src="/images/ai-avatar.png" alt="" width={72} height={72} style={{ objectFit: 'contain' }} />
             </div>
             <div>
               <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>

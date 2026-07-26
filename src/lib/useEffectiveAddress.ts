@@ -12,6 +12,28 @@
  *   the app thinks no one is logged in and redirects — it simply waits until
  *   the useEffect has read localStorage before making auth decisions.
  *   Callers that gate navigation on `isConnected` should also gate on `mounted`.
+ *
+ * BUG FIX — stale session after switching social-login accounts:
+ *   This used to read localStorage exactly once, in a `useEffect(() => {...}, [])`
+ *   with an empty dependency array. Logging out and back in with a DIFFERENT
+ *   social/email account writes a new session to localStorage, but any
+ *   component using this hook that was already mounted before the switch
+ *   (e.g. a persistent layout/sidebar that survives Next.js's client-side
+ *   route navigation — logout/login here both use router.push, not a full
+ *   reload) never re-ran that effect, so it kept serving the FIRST account's
+ *   address/email from memory indefinitely. Any on-chain write made through
+ *   that stale hook instance — including Pricing's upgrade flow — was
+ *   silently signed as the OLD account, which is exactly why "upgrade"
+ *   could revert with AlreadyDeployed() for what looked like a brand-new
+ *   account: it wasn't actually acting as the new account at all. External
+ *   wallets never had this problem because useAccount() is wagmi's own
+ *   live, event-driven state — it updates automatically.
+ *
+ *   Fix: every place that writes or clears `salden_session` now also
+ *   dispatches a same-tab 'salden-session-changed' event (localStorage's
+ *   native 'storage' event only fires in OTHER tabs, never the tab that
+ *   made the change) via setStoredSession()/clearCircleSession() below.
+ *   This hook listens for both and re-reads on every change, not just once.
  */
 
 import { useState, useEffect } from 'react';
@@ -33,6 +55,16 @@ export interface StoredSession {
   createdAt?:     number;
 }
 
+const SESSION_KEY   = 'salden_session';
+const SESSION_EVENT = 'salden-session-changed';
+
+function readSession(): StoredSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as StoredSession) : null;
+  } catch { return null; }
+}
+
 export function useEffectiveAddress(): EffectiveSession {
   const { address: wagmiAddress, isConnected } = useAccount();
   const [circleSession, setCircleSession]      = useState<StoredSession | null>(null);
@@ -40,13 +72,20 @@ export function useEffectiveAddress(): EffectiveSession {
 
   useEffect(() => {
     setMounted(true);
-    try {
-      const raw = localStorage.getItem('salden_session');
-      if (raw) {
-        const parsed = JSON.parse(raw) as StoredSession;
-        if (parsed?.walletAddress) setCircleSession(parsed);
-      }
-    } catch { /* localStorage blocked in some envs */ }
+    const sync = () => {
+      const parsed = readSession();
+      setCircleSession(parsed?.walletAddress ? parsed : null);
+    };
+    sync();
+    // 'storage' catches changes made in OTHER tabs; our own custom event
+    // catches changes made in THIS tab (login/logout), which the native
+    // storage event deliberately does not fire for.
+    window.addEventListener('storage', sync);
+    window.addEventListener(SESSION_EVENT, sync);
+    return () => {
+      window.removeEventListener('storage', sync);
+      window.removeEventListener(SESSION_EVENT, sync);
+    };
   }, []);
 
   // Always return mounted so callers can defer auth decisions
@@ -76,9 +115,24 @@ export function useEffectiveAddress(): EffectiveSession {
   return { ...base, address: undefined, isConnected: false, loginMethod: null };
 }
 
+/** Writes a session to localStorage AND notifies every mounted
+ *  useEffectiveAddress() instance in this tab immediately (the native
+ *  'storage' event only reaches other tabs). Use this instead of calling
+ *  localStorage.setItem('salden_session', ...) directly — a raw setItem
+ *  silently leaves already-mounted components on the previous session. */
+export function setStoredSession(session: StoredSession): void {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    window.dispatchEvent(new Event(SESSION_EVENT));
+  } catch { /* ignore write errors */ }
+}
+
 /** Clear the Circle session from localStorage (call on logout) */
 export function clearCircleSession(): void {
-  try { localStorage.removeItem('salden_session'); } catch { /* ignore */ }
+  try {
+    localStorage.removeItem(SESSION_KEY);
+    window.dispatchEvent(new Event(SESSION_EVENT));
+  } catch { /* ignore */ }
 }
 
 /**
@@ -100,8 +154,5 @@ export function walletRequiredMessage(loginMethod: EffectiveSession['loginMethod
 
 /** Read stored session synchronously (for non-hook contexts) */
 export function getStoredSession(): StoredSession | null {
-  try {
-    const raw = localStorage.getItem('salden_session');
-    return raw ? (JSON.parse(raw) as StoredSession) : null;
-  } catch { return null; }
+  return readSession();
 }

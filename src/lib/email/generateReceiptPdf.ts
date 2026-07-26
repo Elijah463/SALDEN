@@ -2,8 +2,8 @@
  * @file lib/email/generateReceiptPdf.ts
  * SERVER-SIDE ONLY.
  *
- * Generates the Salden payroll receipt PDF attached to invoice emails
- * (see sendInvoiceEmail.ts / api/invoice/send/route.ts).
+ * Generates the Salden payroll receipt PDF attached to payroll receipt
+ * emails (see sendPayrollReceiptEmail.ts / api/payroll-receipt/send/route.ts).
  *
  * jsPDF runs fine in a Node/serverless environment for this — no
  * canvas/DOM dependency needed, just text/shape drawing plus one raster
@@ -64,7 +64,7 @@ function getLogoBase64(): string | null {
     const bytes = readFileSync(join(process.cwd(), 'public', 'images', 'salden-logo.png'));
     cachedLogoBase64 = bytes.toString('base64');
   } catch {
-    // Missing/unreadable logo must never break invoice generation — the
+    // Missing/unreadable logo must never break receipt generation — the
     // rest of the receipt (and the actual payroll payment it documents)
     // is far more important than the header graphic.
     cachedLogoBase64 = null;
@@ -155,17 +155,21 @@ export function generateReceiptPdf(input: ReceiptPdfInput): Buffer {
   let y = 44;
   doc.setFontSize(10);
 
-  function metaRow(label: string, value: string) {
+  function metaRow(label: string, value: string, valueFontSize = 10) {
+    doc.setFontSize(10);
     doc.setTextColor(...TEXT_GRAY);
     doc.text(label, MARGIN, y);
     doc.setTextColor(...TEXT_BLACK);
+    doc.setFontSize(valueFontSize);
     doc.text(value, MARGIN + 45, y);
     y += 7;
   }
 
   metaRow('Reference', input.ref);
   metaRow('Date', fmtDate(input.timestamp));
-  metaRow('Transaction', truncAddr(input.txHash));
+  // Full hash (not truncated) — a smaller font size keeps the full 66
+  // characters reliably within the page width instead of risking overflow.
+  metaRow('Transaction', input.txHash, 8);
   metaRow('Recipients', String(input.recipientCount));
   metaRow('Token', input.token);
   if (input.remark) metaRow('Remark', input.remark);

@@ -2,10 +2,10 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: 'Transaction History',
-  description: 'View all your Onchain payroll transactions, download PDF receipts, and resend invoice emails.',
+  description: 'View all your Onchain payroll transactions, download PDF receipts, and resend payroll receipt emails.',
   openGraph: {
     title:       'Salden — Transaction History',
-    description: 'Full Onchain payroll transaction history with receipts and invoice emails.',
+    description: 'Full Onchain payroll transaction history with receipts and payroll receipt emails.',
     images:      [{ url: '/images/og-image.jpg', width: 1512, height: 756 }],
   },
   twitter: {

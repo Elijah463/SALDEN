@@ -117,14 +117,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           in-app browser: link opened from a Linktree/X post; Vercel's own
           deployment-preview screenshot bot) either omit `indexedDB`
           entirely or throw a SecurityError on first localStorage/
-          sessionStorage touch, instead of just not having it. A bare
-          reference to a genuinely-undeclared global — which is exactly
-          what WalletConnect's storage layer does, unguarded, deep inside
-          RainbowKit's default connector — throws ReferenceError, which
-          crashes the ENTIRE app in these environments (it happens inside
-          a root-layout provider, so it bypasses every route-level error
-          boundary and lands in global-error.tsx, which is deliberately
-          provider-free and can't help the user recover into the app).
+          sessionStorage touch, instead of just not having it. WalletConnect's
+          storage layer (deep inside RainbowKit's default connector) calls
+          these APIs unguarded, and previously crashed the ENTIRE app in
+          these environments (it happens inside a root-layout provider, so
+          it bypasses every route-level error boundary and lands in
+          global-error.tsx, which is deliberately provider-free and can't
+          help the user recover into the app).
+
+          BUG FIX: the indexedDB branch below used to just set
+          `window.indexedDB = undefined` when it was already undefined —
+          a no-op that didn't stop later `indexedDB.open(...)` calls from
+          still throwing. It now installs an actual minimal functional
+          stub (async open/error lifecycle, matching the real API's
+          contract) so calling code degrades gracefully instead of
+          crashing. Combined with the error boundary now wrapping
+          Web3Provider's own tree (see components/shared/Web3Provider.tsx),
+          this closes the crash off at both the storage-API layer and the
+          React-render layer.
+
           This has zero effect for the overwhelming majority of real users
           with a normal browser — indexedDB/localStorage/sessionStorage
           all already exist there, so every check below is a no-op.
@@ -132,9 +143,71 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Script id="storage-api-guard" strategy="beforeInteractive">
           {`
             (function() {
+              // BUG FIX: this used to just do "window.indexedDB = undefined"
+              // when indexedDB was missing — but it's already undefined at
+              // that point (that's the condition that triggered the branch),
+              // so that line changed nothing. Any later WalletConnect/
+              // RainbowKit code calling indexedDB.open(...) still threw
+              // "Cannot read properties of undefined", crashing the whole
+              // app in exactly the restricted browsers (X's in-app browser,
+              // Vercel's OG-image screenshot bot) this was meant to guard
+              // against. Fix: install a minimal but real functional stub —
+              // one that behaves like a real (empty, non-persistent)
+              // IndexedDB so calling code gets the async open/error
+              // lifecycle it expects instead of a hard crash.
               try {
-                if (typeof window !== 'undefined' && !('indexedDB' in window)) {
-                  window.indexedDB = undefined;
+                var needsIdbStub = (typeof window !== 'undefined') &&
+                  (typeof window.indexedDB === 'undefined' || window.indexedDB === null);
+                if (!needsIdbStub && typeof window !== 'undefined') {
+                  // Exists by name, but some restricted contexts still throw
+                  // the moment you actually call a method on it (rather than
+                  // just referencing it) — verify it's really usable.
+                  try { window.indexedDB.open('__salden_idb_test__'); }
+                  catch (e) { needsIdbStub = true; }
+                }
+                if (needsIdbStub && typeof window !== 'undefined') {
+                  function fakeRequest() {
+                    var req = {
+                      result: null, error: null,
+                      onsuccess: null, onerror: null, onupgradeneeded: null, onblocked: null,
+                      _listeners: {},
+                      addEventListener: function(type, fn) {
+                        this._listeners[type] = this._listeners[type] || [];
+                        this._listeners[type].push(fn);
+                      },
+                      removeEventListener: function(type, fn) {
+                        if (!this._listeners[type]) return;
+                        this._listeners[type] = this._listeners[type].filter(function(f) { return f !== fn; });
+                      },
+                      _fire: function(type, evt) {
+                        var handler = this['on' + type];
+                        if (typeof handler === 'function') handler.call(this, evt);
+                        (this._listeners[type] || []).forEach(function(fn) { fn.call(req, evt); });
+                      },
+                    };
+                    return req;
+                  }
+                  window.indexedDB = {
+                    open: function() {
+                      var req = fakeRequest();
+                      // Fire asynchronously, same contract as the real API —
+                      // callers typically attach onsuccess/onerror right
+                      // after calling open(), expecting them to fire later.
+                      setTimeout(function() {
+                        req.error = new Error('IndexedDB unavailable in this browser context');
+                        req._fire('error', { target: req });
+                      }, 0);
+                      return req;
+                    },
+                    deleteDatabase: function() {
+                      var req = fakeRequest();
+                      setTimeout(function() { req._fire('success', { target: req }); }, 0);
+                      return req;
+                    },
+                    databases: function() {
+                      return Promise.resolve([]);
+                    },
+                  };
                 }
               } catch (e) {}
 

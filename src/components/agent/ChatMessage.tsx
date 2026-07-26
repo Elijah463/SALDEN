@@ -134,14 +134,12 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
     }}>
       {!isUser && (
         <div style={{
-          width: "32px", height: "32px", borderRadius: "50%",
-          background: "#FAFAF8",
-          border: "1px solid #F1F5F9",
+          width: "64px", height: "64px",
           display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0, overflow: "hidden",
+          flexShrink: 0,
         }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/images/ai-avatar.png" alt="" width={22} height={22} style={{ objectFit: "contain" }} />
+          <img src="/images/ai-avatar.png" alt="" width={64} height={64} style={{ objectFit: "contain" }} />
         </div>
       )}
 
@@ -152,7 +150,7 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
           </div>
         )}
         <div style={{
-          background:   isUser ? "#1E3A5F" : "#FFFFFF",
+          background:   isUser ? "#4F46E5" : "#FFFFFF",
           color:        isUser ? "#FFFFFF" : "#0F172A",
           border:       isUser ? "none" : "1px solid #E2E8F0",
           borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",

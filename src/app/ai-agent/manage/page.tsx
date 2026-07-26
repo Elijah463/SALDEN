@@ -146,7 +146,7 @@ export default function ManageAgentPage() {
           <StatCard label="Successful Actions" value={successCount} icon={<CheckCircle2 size={18} color="#059669" />} color="#059669" />
           <StatCard label="Failed Actions"     value={failedCount}  icon={<AlertTriangle size={18} color="#DC2626" />} color="#DC2626" />
           <StatCard label="Active Schedules"   value={activeScheds} icon={<Clock size={18} color="#4F46E5" />}         color="#4F46E5" />
-          <StatCard label="Total Runs"         value={logs.length}  icon={<List size={18} color="#14B8A6" />}          color="#14B8A6" />
+          <StatCard label="Total Runs"         value={logs.length}  icon={<List size={18} color="#4F46E5" />}          color="#4F46E5" />
         </div>
 
         {/* Tabs */}
@@ -157,7 +157,7 @@ export default function ManageAgentPage() {
             { key: 'logs',      label: 'Full Log',         icon: <List size={14} /> },
           ] as const).map(({ key, label, icon }) => (
             <button key={key} onClick={() => setActiveTab(key)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: activeTab === key ? 700 : 500, color: activeTab === key ? '#14B8A6' : '#64748B', borderBottom: activeTab === key ? '2px solid #14B8A6' : '2px solid transparent' }}>
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '11px 18px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: activeTab === key ? 700 : 500, color: activeTab === key ? '#4F46E5' : '#64748B', borderBottom: activeTab === key ? '2px solid #4F46E5' : '2px solid transparent' }}>
               {icon} {label}
             </button>
           ))}
@@ -173,8 +173,8 @@ export default function ManageAgentPage() {
             {(['all', 'success', 'failed'] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 style={{ padding: '4px 12px', borderRadius: 99, border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
-                  background: statusFilter === s ? (s === 'success' ? '#ECFDF5' : s === 'failed' ? '#FEF2F2' : '#F0FDFA') : '#F8F9FA',
-                  color:      statusFilter === s ? (s === 'success' ? '#059669' : s === 'failed' ? '#DC2626' : '#14B8A6')  : '#64748B',
+                  background: statusFilter === s ? (s === 'success' ? '#ECFDF5' : s === 'failed' ? '#FEF2F2' : '#EEF2FF') : '#F8F9FA',
+                  color:      statusFilter === s ? (s === 'success' ? '#059669' : s === 'failed' ? '#DC2626' : '#4F46E5')  : '#64748B',
                 }}>
                 {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
               </button>
@@ -193,7 +193,7 @@ export default function ManageAgentPage() {
                 <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.08)', zIndex: 10, minWidth: 160, padding: '4px 0' }}>
                   {['All', ...groups].map(g => (
                     <button key={g} onClick={() => { setGroupFilter(g); setFilterOpen(false); }}
-                      style={{ width: '100%', padding: '8px 14px', textAlign: 'left', background: g === groupFilter ? '#F0FDFA' : 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: g === groupFilter ? '#14B8A6' : '#475569', fontFamily: 'inherit' }}>
+                      style={{ width: '100%', padding: '8px 14px', textAlign: 'left', background: g === groupFilter ? '#EEF2FF' : 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: g === groupFilter ? '#4F46E5' : '#475569', fontFamily: 'inherit' }}>
                       {g}
                     </button>
                   ))}
@@ -258,7 +258,7 @@ export default function ManageAgentPage() {
                 onClick={() => setScheduleModalOpen(true)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px',
-                  borderRadius: 9, border: 'none', background: '#14B8A6', color: '#fff',
+                  borderRadius: 9, border: 'none', background: '#4F46E5', color: '#fff',
                   fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
@@ -271,59 +271,83 @@ export default function ManageAgentPage() {
                 <Repeat size={32} color="#E2E8F0" style={{ margin: '0 auto 12px' }} />
                 <p style={{ color: '#94A3B8', fontSize: 14 }}>No scheduled jobs yet.</p>
                 <p style={{ color: '#94A3B8', fontSize: 13, marginTop: 4 }}>
-                  Use "Set Schedule Payments" above, or go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#14B8A6', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to schedule a payroll run.
+                  Use "Set Schedule Payments" above, or go to the <button onClick={() => router.push('/ai-agent')} style={{ background: 'none', border: 'none', color: '#4F46E5', cursor: 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 0 }}>AI Agent chat</button> and ask it to schedule a payroll run.
                 </p>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {schedules.map(schedule => (
-                  <div key={schedule.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 10, background: schedule.status === 'active' ? '#EEF2FF' : '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <Repeat size={18} color={schedule.status === 'active' ? '#4F46E5' : '#94A3B8'} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 180 }}>
-                      <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{schedule.label}</div>
-                      <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
-                        {schedule.group ?? 'All Employees'} · Next run: {schedule.nextRunAt ? format(new Date(schedule.nextRunAt), 'dd MMM yyyy, HH:mm') + ' UTC' : '—'}
-                        {schedule.lastRunAt ? ` · Last run: ${format(new Date(schedule.lastRunAt), 'dd MMM, HH:mm')}` : ''}
-                        {schedule.type === 'recurring' && schedule.recurrence ? ` · Repeats ${schedule.recurrence}` : ''}
+                {schedules.map(schedule => {
+                  const isActive = schedule.status === 'active';
+                  const recipientCount = schedule.employees?.length ?? 0;
+                  return (
+                    <div key={schedule.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '16px 18px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                        <div style={{ width: 40, height: 40, borderRadius: 10, background: isActive ? '#EEF2FF' : '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                          <Calendar size={18} color={isActive ? '#4F46E5' : '#94A3B8'} />
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{schedule.label}</div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Status</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: isActive ? '#059669' : '#94A3B8' }}>
+                          {isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Group</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{schedule.group ?? 'All Employees'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Number of Recipients</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{recipientCount}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Token</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{schedule.token}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                        <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Date</span>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', textAlign: 'right' }}>
+                          {schedule.nextRunAt ? format(new Date(schedule.nextRunAt), 'dd MMM yyyy, HH:mm') + ' UTC' : '—'}
+                          {schedule.lastRunAt ? ` · Last: ${format(new Date(schedule.lastRunAt), 'dd MMM, HH:mm')}` : ''}
+                          {schedule.type === 'recurring' && schedule.recurrence ? ` · Repeats ${schedule.recurrence}` : ''}
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 10, borderTop: '1px solid #F1F5F9' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', cursor: 'pointer' }}>
+                          Recurring
+                          <span
+                            role="switch"
+                            aria-checked={schedule.type === 'recurring'}
+                            onClick={() => {
+                              if (schedule.type === 'recurring') {
+                                // Turning off recurring — revert to a one-off schedule keeping the same next run.
+                                const reverted: AgentSchedule = { ...schedule, type: 'scheduled', recurrence: undefined };
+                                void saveAgentSchedule(reverted).then(() => {
+                                  setSchedules(prev => prev.map(s => s.id === reverted.id ? reverted : s));
+                                  syncOneToServer(reverted);
+                                });
+                              } else {
+                                setRecurringTarget(schedule);
+                              }
+                            }}
+                            style={{
+                              width: 34, height: 19, borderRadius: 99, position: 'relative', cursor: 'pointer',
+                              background: schedule.type === 'recurring' ? '#4F46E5' : '#E2E8F0', transition: 'background 0.15s',
+                            }}
+                          >
+                            <span style={{
+                              position: 'absolute', top: 2, left: schedule.type === 'recurring' ? 17 : 2,
+                              width: 15, height: 15, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+                            }} />
+                          </span>
+                        </label>
                       </div>
                     </div>
-
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', cursor: 'pointer' }}>
-                      Recurring
-                      <span
-                        role="switch"
-                        aria-checked={schedule.type === 'recurring'}
-                        onClick={() => {
-                          if (schedule.type === 'recurring') {
-                            // Turning off recurring — revert to a one-off schedule keeping the same next run.
-                            const reverted: AgentSchedule = { ...schedule, type: 'scheduled', recurrence: undefined };
-                            void saveAgentSchedule(reverted).then(() => {
-                              setSchedules(prev => prev.map(s => s.id === reverted.id ? reverted : s));
-                              syncOneToServer(reverted);
-                            });
-                          } else {
-                            setRecurringTarget(schedule);
-                          }
-                        }}
-                        style={{
-                          width: 34, height: 19, borderRadius: 99, position: 'relative', cursor: 'pointer',
-                          background: schedule.type === 'recurring' ? '#4F46E5' : '#E2E8F0', transition: 'background 0.15s',
-                        }}
-                      >
-                        <span style={{
-                          position: 'absolute', top: 2, left: schedule.type === 'recurring' ? 17 : 2,
-                          width: 15, height: 15, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
-                        }} />
-                      </span>
-                    </label>
-
-                    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '4px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600, background: schedule.status === 'active' ? '#EEF2FF' : '#F8F9FA', color: schedule.status === 'active' ? '#4F46E5' : '#94A3B8' }}>
-                      {schedule.status}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

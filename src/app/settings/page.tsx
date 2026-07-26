@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { usePublicClient } from 'wagmi';
 import { type PayrollSetup } from '@/context/AppContext';
 import {
-  Zap, Trash2, AlertTriangle, Loader2, Plus, X, ChevronRight, ExternalLink,
+  Zap, Trash2, AlertTriangle, Loader2, Plus, X, ChevronRight, ExternalLink, Pencil,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
@@ -41,7 +41,57 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-// ── Field row ─────────────────────────────────────────────────────────────────
+// ── Editable field — plain text + edit icon by default; the input only
+//    appears once the edit icon is clicked (saved via the section's own
+//    Save button, same as before) ──────────────────────────────────────────
+
+function EditableField({
+  value, onChange, placeholder, emptyLabel, type = 'text', inputStyle,
+}: {
+  value:        string;
+  onChange:     (v: string) => void;
+  placeholder:  string;
+  emptyLabel:   string;
+  type?:        string;
+  inputStyle:   React.CSSProperties;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return (
+      <input
+        type={type}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        maxLength={type === 'text' ? 100 : undefined}
+        autoFocus
+        style={inputStyle}
+        onFocus={e => (e.target.style.borderColor = '#4F46E5')}
+        onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <button
+        onClick={() => setEditing(true)}
+        aria-label="Edit"
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 26, height: 26, borderRadius: 8, flexShrink: 0,
+          background: '#F8F9FA', border: '1px solid #E2E8F0', cursor: 'pointer', color: '#64748B',
+        }}
+      >
+        <Pencil size={13} />
+      </button>
+      <span style={{ fontSize: 14, color: value ? '#0F172A' : '#94A3B8' }}>
+        {value || emptyLabel}
+      </span>
+    </div>
+  );
+}
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -111,12 +161,13 @@ export default function SettingsPage() {
   const [companyName, setCompanyName] = useState(payrollSetup?.companyName ?? '');
   const [email,       setEmail]       = useState(payrollSetup?.email       ?? '');
   const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaveVersion, setProfileSaveVersion] = useState(0);
   const profileHydrated = useRef(false);
 
   // payrollSetup can arrive asynchronously (usePayrollSync's cache/IPFS
   // hydration above happens after this component's first render) — the
   // useState initializers only ever see whatever was in AppContext at
-  // mount time. Without this, company name and invoice email rendered
+  // mount time. Without this, company name and receipt email rendered
   // blank on any page load where this was the first page visited this
   // session, even though the data existed and was seconds away. Syncs
   // once, the first time real data shows up; never overwrites the form
@@ -223,6 +274,7 @@ export default function SettingsPage() {
       dispatch({ type: 'SET_PAYROLL_DATA', payload: { payrollSetup: updated } });
       dispatch({ type: 'SET_COMPANY_NAME', payload: updated.companyName });
       await syncAndAnchor();
+      setProfileSaveVersion(v => v + 1);
       addToast('Profile saved.', 'success');
     } catch { addToast('Failed to save profile.', 'error'); }
     finally { setSavingProfile(false); }
@@ -287,25 +339,24 @@ export default function SettingsPage() {
         {/* ── Company Profile ─────────────────────────────────────────────── */}
         <Section title="Company Profile">
           <FieldRow label="Company Name">
-            <input
+            <EditableField
+              key={`company-${profileSaveVersion}`}
               value={companyName}
-              onChange={e => setCompanyName(e.target.value)}
+              onChange={setCompanyName}
               placeholder="Acme Corp"
-              maxLength={100}
-              style={inputStyle}
-              onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-              onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
+              emptyLabel="Add your company's name"
+              inputStyle={inputStyle}
             />
           </FieldRow>
-          <FieldRow label="Invoice Email">
-            <input
-              type="email"
+          <FieldRow label="Payroll Receipt Email">
+            <EditableField
+              key={`email-${profileSaveVersion}`}
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={setEmail}
+              type="email"
               placeholder="payroll@yourcompany.com"
-              style={inputStyle}
-              onFocus={e => (e.target.style.borderColor = '#4F46E5')}
-              onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
+              emptyLabel="Add payroll receipt email"
+              inputStyle={inputStyle}
             />
           </FieldRow>
           <FieldRow label="Wallet Address">
@@ -394,7 +445,7 @@ export default function SettingsPage() {
                 padding: '10px 14px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0',
               }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4 }}>Group</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4 }}>Number of Members</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4, borderLeft: '1px solid #E2E8F0', paddingLeft: 14 }}>Number of Members</span>
                 <span />
               </div>
               {groups.map((g, i) => (
@@ -404,7 +455,7 @@ export default function SettingsPage() {
                   borderBottom: i < groups.length - 1 ? '1px solid #F1F5F9' : 'none',
                 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>{g}</span>
-                  <span style={{ fontSize: 13, color: '#0F172A' }}>
+                  <span style={{ fontSize: 13, color: '#0F172A', borderLeft: '1px solid #F1F5F9', paddingLeft: 14, alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}>
                     {employees.filter(e => e.group === g).length}
                   </span>
                   <button onClick={() => handleRemoveGroup(g)} title={`Remove ${g}`}

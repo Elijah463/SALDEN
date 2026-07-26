@@ -24,6 +24,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useAccount } from 'wagmi';
 import { Mail, ArrowRight, Loader2 } from 'lucide-react';
 import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
+import { setStoredSession } from '@/lib/useEffectiveAddress';
 
 // ── Google icon ───────────────────────────────────────────────────────────────
 function GoogleIcon() {
@@ -77,14 +78,12 @@ declare global {
 
 // ── Session helpers ────────────────────────────────────────────────────────────
 function storeSession(email: string, walletAddress: string) {
-  try {
-    localStorage.setItem('salden_session', JSON.stringify({
-      email,
-      walletAddress,
-      loginMethod: 'google',
-      createdAt: Date.now(),
-    }));
-  } catch { /* ignore */ }
+  setStoredSession({
+    email,
+    walletAddress,
+    loginMethod: 'google',
+    createdAt: Date.now(),
+  });
 }
 
 // ── Load a <script> tag once (idempotent) ─────────────────────────────────────

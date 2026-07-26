@@ -19,13 +19,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'fromAmount must be a raw integer amount' }, { status: 400 });
   }
 
-  const quote = await getSwapQuote({
+  const { quote, reason } = await getSwapQuote({
     chainId: arcTestnet.id,
     fromToken, toToken, fromAmount, fromAddress,
   });
 
   if (!quote) {
-    return NextResponse.json({ quote: null, error: 'No route available for this pair right now.' });
+    return NextResponse.json({ quote: null, error: reason || 'No route available for this pair right now.' });
   }
   return NextResponse.json({ quote });
 }

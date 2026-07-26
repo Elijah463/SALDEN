@@ -256,7 +256,7 @@ function UsageBanner({ count }: { count: number }) {
 
 export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId }: ChatInterfaceProps) {
   const { state } = useApp();
-  const { employees, tokenRegistry, payrollClone } = state;
+  const { employees, tokenRegistry, payrollClone, payrollSetup } = state;
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { getToken, invalidate } = useAgentSession();
   const sessionTokenRef = useRef<string | null>(null);
@@ -406,6 +406,11 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       agentWalletId,
       payrollClone:  payrollClone ?? undefined,
       tokenRegistry: tokenRegistryJson,
+      // Lets execute_payment/execute_payroll_run (the fully autonomous,
+      // server-executed paths) send a payroll receipt email after
+      // confirming on-chain — see the matching comment on the server side
+      // in app/api/agent/chat/route.ts.
+      receiptEmail:  payrollSetup?.email || undefined,
     };
 
     try {
@@ -710,7 +715,26 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                 }
 
                 if (ev.type === 'payroll_run_request' && ev.group) {
-                  return <PayrollRunCard key={i} group={ev.group} />;
+                  if (expired) return <ExpiredCard key={i} label="payroll run" />;
+                  return (
+                    <PayrollRunCard
+                      key={i}
+                      group={ev.group}
+                      walletAddress={walletAddress}
+                      sessionToken={sessionTokenRef.current ?? undefined}
+                      onResolved={(outcome, detail) => {
+                        markEventResolved(m.id, i);
+                        if (outcome === 'confirmed') {
+                          onDataChanged?.();
+                          send(`[CONFIRMATION_EVENT] The user confirmed and signed the payroll run for "${ev.group}". It executed successfully on-chain. Transaction hash: ${detail}.`, true);
+                        } else if (outcome === 'declined') {
+                          send(`[CONFIRMATION_EVENT] The user declined the proposed payroll run for "${ev.group}". Do not propose it again unless they ask.`, true);
+                        } else {
+                          send(`[CONFIRMATION_EVENT] The payroll run for "${ev.group}" failed before confirmation: ${detail}.`, true);
+                        }
+                      }}
+                    />
+                  );
                 }
 
                 if (ev.type === 'agent_executed_payment' && ev.address) {
@@ -768,7 +792,6 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       {pendingAttachment && (
         <div style={{ margin: '0 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
           <img src={pendingAttachment.previewUrl} alt="Attached document preview" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid #E2E8F0' }} />
-          <span style={{ fontSize: 12, color: '#64748B' }}>Document attached — I&apos;ll extract employee data from it.</span>
           <button onClick={clearAttachment} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', fontSize: 12, marginLeft: 'auto' }}>Remove</button>
         </div>
       )}
@@ -778,7 +801,17 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          // A MIME-only accept list (the old value here) is what makes many
+          // mobile browsers skip the general file picker and deep-link
+          // straight into the Photos/gallery app, since they read it as
+          // "this is a photo picker." Including file extensions alongside
+          // the MIME types is the standard mitigation — it reads as a
+          // generic "pick a file" request, so the OS shows its normal file
+          // browser (which still offers Photos as one of several sources,
+          // rather than forcing it). The real type/size gate is still
+          // handleFileSelect's own check against ALLOWED_ATTACHMENT_TYPES
+          // below, so this is safe to broaden.
+          accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
           onChange={handleFileSelect}
           style={{ display: 'none' }}
         />

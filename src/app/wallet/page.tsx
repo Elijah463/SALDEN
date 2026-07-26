@@ -24,6 +24,7 @@ import {
 import { AppLayout }        from '@/components/layout/AppLayout';
 import { NetworkGuard }     from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
+import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { ERC20_ABI }        from '@/lib/contracts/abis';
 import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { copyToClipboard }  from '@/lib/clipboard';
@@ -52,7 +53,7 @@ const TOKEN_ICON_SIZE = 40;
 const TOKENS = [
   {
     symbol: 'USDC', name: 'USD Coin', color: '#2775CA', bgColor: '#EFF6FF',
-    fromNative: true, decimals: 6,
+    fromNative: true, decimals: 6, displayDecimals: 2,
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
       <img src="/images/tokens/usdc.webp" alt="USDC" width={TOKEN_ICON_SIZE} height={TOKEN_ICON_SIZE}
@@ -61,7 +62,7 @@ const TOKENS = [
   },
   {
     symbol: 'EURC', name: 'Euro Coin', color: '#1B3A6B', bgColor: '#EEF2FF',
-    fromNative: false, decimals: 6,
+    fromNative: false, decimals: 6, displayDecimals: 2,
     envKey: 'NEXT_PUBLIC_EURC_ADDRESS',
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
@@ -71,8 +72,12 @@ const TOKENS = [
     ),
   },
   {
+    // cirBTC trades at BTC-scale value, so real-world balances are commonly
+    // small fractions (e.g. 0.00004) that a 2-decimal display rounds away
+    // to "0.00" entirely. 6 decimal places, always shown in full (never
+    // trimmed), so a real non-zero balance is never invisible.
     symbol: 'cirBTC', name: 'Circle Bitcoin', color: '#F7931A', bgColor: '#FFF7ED',
-    fromNative: false, decimals: 8,
+    fromNative: false, decimals: 8, displayDecimals: 6,
     envKey: 'NEXT_PUBLIC_CIRBTC_ADDRESS',
     icon: (
       // eslint-disable-next-line @next/next/no-img-element
@@ -146,7 +151,7 @@ export default function WalletPage() {
   const { address, isConnected: isAuth } = useEffectiveAddress();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
-  const [showBalance,   setShowBalance]   = useState(true);
+  const [showBalance,   setShowBalance]   = useBalanceVisibility();
   const [copied,        setCopied]        = useState(false);
   const [erc20Balances, setErc20Balances] = useState<Record<string, string>>({});
   const [loadingErc20,  setLoadingErc20]  = useState(false);
@@ -175,7 +180,7 @@ export default function WalletPage() {
       const addr = t.envKey
         ? (ENV_TOKEN_ADDRESSES[t.envKey] as `0x${string}` | undefined)
         : undefined;
-      if (!addr) { out[t.symbol] = '0.00'; continue; }
+      if (!addr) { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; continue; }
       try {
         const raw = await publicClient.readContract({
           address: addr, abi: ERC20_ABI,
@@ -184,9 +189,10 @@ export default function WalletPage() {
         }) as bigint;
         const div   = BigInt(10 ** t.decimals);
         const whole = raw / div;
-        const frac  = (raw % div).toString().padStart(t.decimals, '0').slice(0, 2);
+        const dp    = t.displayDecimals;
+        const frac  = (raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0');
         out[t.symbol] = `${Number(whole).toLocaleString()}.${frac}`;
-      } catch { out[t.symbol] = '0.00'; }
+      } catch { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; }
     }
     setErc20Balances(out);
     setLoadingErc20(false);
@@ -268,13 +274,10 @@ export default function WalletPage() {
             </div>
 
             <div style={{ fontSize: 38, fontWeight: 800, color: '#fff',
-              letterSpacing: '-0.02em', marginBottom: 4 }}>
+              letterSpacing: '-0.02em', marginBottom: 14 }}>
               {isAuth
                 ? (showBalance ? `${allPricesLoaded ? '' : '≈'}$${totalUsdDisplay}` : '$••••••')
                 : '$0.00'}
-            </div>
-            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.65)', marginBottom: 14 }}>
-              {isAuth ? 'Total value across USDC, EURC and cirBTC' : ''}
             </div>
 
             {isAuth && address ? (

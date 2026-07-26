@@ -9,7 +9,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, Loader2, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, Loader2, CheckCircle2, Wallet } from 'lucide-react';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
 import { TOKENS, type TokenMeta, type ChainToken } from '@/lib/swap/tokens';
 
@@ -101,7 +101,7 @@ export function TokenSelector({
 
 export function TokenBox({
   label, token, excludeToken, amount, editable,
-  onTokenChange, onAmountChange, loading,
+  onTokenChange, onAmountChange, loading, balance, balanceLoading,
 }: {
   label:          string;
   token:          TokenMeta | null;
@@ -111,6 +111,8 @@ export function TokenBox({
   onTokenChange:  (t: TokenMeta) => void;
   onAmountChange?: (v: string) => void;
   loading?:       boolean;
+  balance?:       string | null;
+  balanceLoading?: boolean;
 }) {
   return (
     <div style={{
@@ -148,6 +150,15 @@ export function TokenBox({
           )}
         </div>
       </div>
+
+      {token && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
+          <span style={{ fontSize: 12, color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Wallet size={11} />
+            {balanceLoading ? 'Loading…' : balance != null ? `${balance} ${token.symbol}` : '—'}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -19,7 +19,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { useConnectorClient }  from 'wagmi';
+import { useConnectorClient, useAccount } from 'wagmi';
 
 export type CircleAdapter = Awaited<
   ReturnType<typeof import('@circle-fin/adapter-viem-v2').createAdapterFromProvider>
@@ -33,23 +33,48 @@ export interface UseCircleAdapterResult {
   isAdapterReady: boolean;
 }
 
+/**
+ * Extracts a raw EIP-1193 provider from whatever wagmi gives us.
+ *
+ * BUG FIX (previously the only strategy tried here): reaching into
+ * `client.transport.value.provider` assumes viem's `custom()` transport
+ * shape. That shape isn't guaranteed across wagmi/viem versions or across
+ * different connector types (injected vs. WalletConnect vs. Coinbase), and
+ * when it doesn't match, `provider` silently ends up `undefined` — with NO
+ * error surfaced (the old code explicitly did `setError(null)` in that
+ * branch). The result: `isAdapterReady` stays false forever and the Bridge
+ * button never activates, with no visible explanation. That silent failure
+ * is what was reported as "the bridge button just doesn't become active."
+ *
+ * Fix: prefer the public, documented wagmi API — `connector.getProvider()`
+ * — which every wagmi connector implements regardless of internal client
+ * shape. Fall back to the old transport-probing path only if that isn't
+ * available, and otherwise report a real error instead of failing silently.
+ */
+async function extractProvider(
+  client: unknown,
+  connector: { getProvider?: () => Promise<unknown> } | undefined,
+): Promise<any> {
+  if (connector?.getProvider) {
+    const p = await connector.getProvider();
+    if (p) return p;
+  }
+  // Legacy fallback: some transport shapes (viem's `custom()` transport)
+  // expose the provider at transport.value.provider.
+  const fallback = (client as { transport?: { value?: { provider?: unknown } } })
+    ?.transport?.value?.provider;
+  return fallback ?? null;
+}
+
 export function useCircleAdapter(): UseCircleAdapterResult {
   const { data: client, isLoading: clientLoading } = useConnectorClient();
+  const { connector, isConnected } = useAccount();
   const [adapter, setAdapter] = useState<CircleAdapter | null>(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState<string | null>(null);
 
   useEffect(() => {
-    // Extract EIP-1193 provider from wagmi connector transport.
-    // Typed `any` deliberately: the object at runtime is a genuine EIP-1193
-    // provider from wagmi, but its `request` method uses a generic overload
-    // signature (EIP1193RequestFn<_returnType>) that cannot be losslessly
-    // reproduced with a hand-written interface — any attempt at a narrower
-    // type here will mismatch on the generic return type.
-    const provider = (client as { transport?: { value?: { provider?: any } } })
-      ?.transport?.value?.provider;
-
-    if (!provider) {
+    if (!isConnected) {
       setAdapter(null);
       setLoading(false);
       setError(null);
@@ -60,12 +85,18 @@ export function useCircleAdapter(): UseCircleAdapterResult {
     setLoading(true);
     setError(null);
 
-    import('@circle-fin/adapter-viem-v2')
-      .then(({ createAdapterFromProvider }) =>
-        createAdapterFromProvider({ provider })
-      )
+    extractProvider(client, connector)
+      .then(provider => {
+        if (cancelled) return null;
+        if (!provider) {
+          throw new Error('Could not access your wallet\u2019s connection. Try reconnecting your wallet.');
+        }
+        return import('@circle-fin/adapter-viem-v2').then(({ createAdapterFromProvider }) =>
+          createAdapterFromProvider({ provider })
+        );
+      })
       .then(ad => {
-        if (!cancelled) { setAdapter(ad); setLoading(false); }
+        if (!cancelled && ad) { setAdapter(ad); setLoading(false); }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -78,7 +109,7 @@ export function useCircleAdapter(): UseCircleAdapterResult {
       });
 
     return () => { cancelled = true; };
-  }, [client]);
+  }, [client, connector, isConnected]);
 
   return {
     adapter,

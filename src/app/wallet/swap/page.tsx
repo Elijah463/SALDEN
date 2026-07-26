@@ -33,7 +33,7 @@
  * Supported tokens on Arc Testnet: USDC, EURC, cirBTC
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useRouter }           from 'next/navigation';
 import { usePublicClient }     from 'wagmi';
 import {
@@ -47,6 +47,7 @@ import { txLink, arcTestnet }  from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { TOKENS, toRawAmount, fromRawAmount, type TokenMeta } from '@/lib/swap/tokens';
 import { useSwapQuote }        from '@/lib/swap/useSwapQuote';
+import { useTokenDecimals, withResolvedDecimals } from '@/lib/swap/useTokenDecimals';
 import { TokenBox, StepProgress } from '@/components/wallet/SwapUI';
 
 type SwapStep = 'approve' | 'swap' | 'confirm' | '';
@@ -66,7 +67,45 @@ export default function SwapPage() {
   const [successTx, setSuccessTx] = useState<string | null>(null);
   const [lastReceivedAmount, setLastReceivedAmount] = useState('');
 
-  const { quote, amountOut, quoting, quoteError } = useSwapQuote(tokenIn, tokenOut, amountIn, address);
+  // Real on-chain decimals override the hardcoded guesses in tokens.ts where available
+  const resolvedDecimals = useTokenDecimals([tokenIn, tokenOut]);
+  const effTokenIn  = withResolvedDecimals(tokenIn,  resolvedDecimals);
+  const effTokenOut = withResolvedDecimals(tokenOut, resolvedDecimals);
+
+  const { quote, amountOut, quoting, quoteError } = useSwapQuote(effTokenIn, effTokenOut, amountIn, address);
+
+  // ── Wallet balances for both tokens — mirrors the Bridge page's balance
+  //    display, shown for both From and To here (Bridge only shows From) ──
+  const [balanceIn,         setBalanceIn]         = useState<string | null>(null);
+  const [balanceInLoading,  setBalanceInLoading]  = useState(false);
+  const [balanceOut,        setBalanceOut]        = useState<string | null>(null);
+  const [balanceOutLoading, setBalanceOutLoading] = useState(false);
+
+  const fetchTokenBalance = useCallback(async (token: TokenMeta | null): Promise<string | null> => {
+    if (!token || !address || !publicClient || !token.address) return null;
+    try {
+      const raw = await publicClient.readContract({
+        address: token.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [address as `0x${string}`],
+      }) as bigint;
+      return fromRawAmount(raw.toString(), token.decimals);
+    } catch { return null; }
+  }, [address, publicClient]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBalanceInLoading(true);
+    fetchTokenBalance(effTokenIn).then(b => { if (!cancelled) { setBalanceIn(b); setBalanceInLoading(false); } });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effTokenIn?.symbol, effTokenIn?.decimals, address, fetchTokenBalance]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBalanceOutLoading(true);
+    fetchTokenBalance(effTokenOut).then(b => { if (!cancelled) { setBalanceOut(b); setBalanceOutLoading(false); } });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effTokenOut?.symbol, effTokenOut?.decimals, address, fetchTokenBalance]);
 
   function swapTokens() {
     const tmpIn  = tokenIn;
@@ -77,30 +116,40 @@ export default function SwapPage() {
   }
 
   const handleSwap = useCallback(async () => {
-    if (!tokenIn || !tokenOut || !amountIn || parseFloat(amountIn) <= 0) return;
+    if (!effTokenIn || !effTokenOut || !amountIn || parseFloat(amountIn) <= 0) return;
     if (!quote) { setError('Get a quote before swapping.'); return; }
     if (!canWrite || !address || !publicClient) { setError('Connect your wallet to swap.'); return; }
-    if (!tokenIn.address) { setError('Missing token contract address.'); return; }
+    if (!effTokenIn.address) { setError('Missing token contract address.'); return; }
 
     setSwapping(true);
     setError('');
 
     try {
-      const rawAmount = toRawAmount(amountIn, tokenIn.decimals);
+      const rawAmount = toRawAmount(amountIn, effTokenIn.decimals);
 
       // Approve LI.FI's contract to spend tokenIn, if not already approved
       // for at least this amount.
       setSwapStep('approve');
       const allowance = await publicClient.readContract({
-        address: tokenIn.address, abi: ERC20_ABI, functionName: 'allowance',
+        address: effTokenIn.address, abi: ERC20_ABI, functionName: 'allowance',
         args: [address as `0x${string}`, quote.estimate.approvalAddress],
       }) as bigint;
 
       if (allowance < rawAmount) {
-        await universalWrite({
-          address: tokenIn.address, abi: ERC20_ABI, functionName: 'approve',
+        const approveTxHash = await universalWrite({
+          address: effTokenIn.address, abi: ERC20_ABI, functionName: 'approve',
           args: [quote.estimate.approvalAddress, rawAmount],
         });
+        // BUG FIX: the swap transaction right below depends on this
+        // allowance actually being live on-chain. Previously we moved on
+        // the instant the approve tx was *broadcast*, not once it was
+        // *mined* — so the swap's internal transferFrom would run against
+        // an allowance that was still 0 (approve still pending in the
+        // mempool), reverting with TRANSFER_FROM_FAILED. That's also why
+        // clicking Swap a second time "just worked": by then the approve
+        // from the first attempt had finally landed. Waiting for the
+        // receipt here closes that race for good.
+        await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
       }
 
       // Execute the swap — LI.FI's own pre-built, already-encoded transaction
@@ -123,17 +172,37 @@ export default function SwapPage() {
       setSwapping(false);
       setSwapStep('');
     }
-  }, [tokenIn, tokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, universalWrite, sendTransaction]);
+  }, [effTokenIn, effTokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, universalWrite, sendTransaction]);
 
-  const canSwap = !!tokenIn && !!tokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite;
+  const canSwap = !!effTokenIn && !!effTokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite;
+
+  // ── Quote panel figures — all derived straight from the live LI.FI quote ──
+  let priceLabel: string | null = null;
+  let feesLabel:  string | null = null;
+  let timeLabel:  string | null = null;
+  if (quote && effTokenIn && effTokenOut) {
+    const fromAmt = parseFloat(fromRawAmount(quote.estimate.fromAmount, effTokenIn.decimals));
+    const toAmt   = parseFloat(fromRawAmount(quote.estimate.toAmount, effTokenOut.decimals));
+    if (fromAmt > 0) {
+      const rate = toAmt / fromAmt;
+      priceLabel = `1 ${effTokenIn.symbol} = ~${rate.toFixed(rate < 1 ? 6 : 4)} ${effTokenOut.symbol}`;
+    }
+    const allCosts = [...(quote.estimate.feeCosts ?? []), ...(quote.estimate.gasCosts ?? [])];
+    const totalUsd = allCosts.reduce((sum, c) => sum + (c.amountUSD ? parseFloat(c.amountUSD) : 0), 0);
+    feesLabel = allCosts.length ? `$${totalUsd.toFixed(2)}` : 'No provider fee';
+    if (quote.estimate.executionDuration) timeLabel = `~${quote.estimate.executionDuration} secs`;
+  }
 
   return (
     <NetworkGuard>
       <AppLayout title="Swap">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <button onClick={() => router.back()}
-            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
-            <ArrowLeft size={16} /> Back
+          <button onClick={() => router.push('/wallet')} style={{
+            display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none',
+            cursor: 'pointer', color: '#64748B', fontSize: 13, fontWeight: 500, padding: 0, marginBottom: 0,
+            fontFamily: 'inherit',
+          }}>
+            <ArrowLeft size={15} /> Back to Wallet
           </button>
 
           {!isConnected && (
@@ -155,6 +224,8 @@ export default function SwapPage() {
                   editable
                   onTokenChange={setTokenIn}
                   onAmountChange={setAmountIn}
+                  balance={balanceIn}
+                  balanceLoading={balanceInLoading}
                 />
 
                 <div style={{ display: 'flex', justifyContent: 'center' }}>
@@ -165,10 +236,10 @@ export default function SwapPage() {
                       cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                       boxShadow: '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.15s',
                     }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#F0FDFA'; }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#EEF2FF'; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#fff'; }}
                   >
-                    <ArrowDown size={16} color="#14B8A6" />
+                    <ArrowDown size={16} color="#4F46E5" />
                   </button>
                 </div>
 
@@ -180,6 +251,8 @@ export default function SwapPage() {
                   editable={false}
                   onTokenChange={setTokenOut}
                   loading={quoting}
+                  balance={balanceOut}
+                  balanceLoading={balanceOutLoading}
                 />
               </div>
 
@@ -190,9 +263,33 @@ export default function SwapPage() {
               )}
 
               {quote && !quoting && (
-                <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 10, lineHeight: 1.5 }}>
-                  Rate refreshes live via LI.FI. Minimum received: {fromRawAmount(quote.estimate.toAmountMin, tokenOut?.decimals ?? 6)} {tokenOut?.symbol}.
-                </p>
+                <div style={{
+                  background: '#F8FAFC', border: '1px solid #F1F5F9', borderRadius: 14,
+                  padding: '12px 16px', marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8,
+                }}>
+                  {priceLabel && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 12, color: '#94A3B8' }}>Price</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>{priceLabel}</span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, color: '#94A3B8' }}>Minimum received</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
+                      {fromRawAmount(quote.estimate.toAmountMin, effTokenOut?.decimals ?? 6)} {effTokenOut?.symbol}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, color: '#94A3B8' }}>Fees</span>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>{feesLabel}</span>
+                  </div>
+                  {timeLabel && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 12, color: '#94A3B8' }}>Estimated time</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>{timeLabel}</span>
+                    </div>
+                  )}
+                </div>
               )}
 
               {swapping && swapStep && <StepProgress currentStep={swapStep} />}

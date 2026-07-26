@@ -30,6 +30,7 @@ import {
   REGISTRY_UPDATE_CID_ABI,
 } from '@/lib/contracts/agentAbis';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS, ERC20_ABI } from '@/lib/contracts/abis';
+import { findDuplicateWallets } from '@/lib/validation';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
@@ -64,17 +65,17 @@ function CardShell({
 }
 
 function ActionButtons({
-  onConfirm, onDecline, busy, confirmLabel = 'Confirm',
-}: { onConfirm: () => void; onDecline: () => void; busy: boolean; confirmLabel?: string }) {
+  onConfirm, onDecline, busy, confirmLabel = 'Confirm', confirmDisabled = false,
+}: { onConfirm: () => void; onDecline: () => void; busy: boolean; confirmLabel?: string; confirmDisabled?: boolean }) {
   return (
     <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
       <button
         onClick={onConfirm}
-        disabled={busy}
+        disabled={busy || confirmDisabled}
         style={{
           flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
-          background: busy ? '#E2E8F0' : '#14B8A6', color: '#fff',
-          fontSize: 13, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer',
+          background: (busy || confirmDisabled) ? '#E2E8F0' : '#14B8A6', color: '#fff',
+          fontSize: 13, fontWeight: 700, cursor: (busy || confirmDisabled) ? 'not-allowed' : 'pointer',
           fontFamily: 'inherit', display: 'flex', alignItems: 'center',
           justifyContent: 'center', gap: 6,
         }}
@@ -225,9 +226,9 @@ export function UnlistedPaymentCard({
         }).catch(() => {});
       }
 
-      // ── Record + invoice (executedBy: 'ai_agent' — proposed by the agent,
+      // ── Record + receipt (executedBy: 'ai_agent' — proposed by the agent,
       //    confirmed and signed by the human) ──────────────────────────────
-      const invoiceEmail = payrollSetup?.email ?? null;
+      const receiptEmail = payrollSetup?.email ?? null;
       await saveTxRecord({
         id: hash, hash, ref,
         type: 'batchPay', status: 'success',
@@ -238,15 +239,15 @@ export function UnlistedPaymentCard({
         // Only 'pending' if we're actually about to attempt a send below —
         // otherwise this stayed 'pending' forever with nothing left to
         // ever move it to 'sent'/'failed'.
-        invoiceEmailStatus: invoiceEmail ? 'pending' : null,
+        receiptEmailStatus: receiptEmail ? 'pending' : null,
         executedBy: 'ai_agent',
       }, walletAddress);
 
-      if (invoiceEmail) {
-        fetch(`${API_BASE}/invoice/send`, {
+      if (receiptEmail) {
+        fetch(`${API_BASE}/payroll-receipt/send`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            txHash: hash, walletAddress, recipientEmail: invoiceEmail,
+            txHash: hash, walletAddress, recipientEmail: receiptEmail,
             recipientCount: 1, amount, token,
             remark: 'AI Agent — unlisted address payment',
             ref, timestamp: Date.now(), executedBy: 'ai_agent',
@@ -256,7 +257,7 @@ export function UnlistedPaymentCard({
             id: hash, hash, ref, type: 'batchPay', status: 'success',
             amount, token, remark: 'AI Agent — unlisted address payment',
             recipientCount: 1, timestamp: Date.now(),
-            invoiceEmailStatus: res.ok ? 'sent' : 'failed',
+            receiptEmailStatus: res.ok ? 'sent' : 'failed',
             executedBy: 'ai_agent',
           }, walletAddress);
         }).catch(() => {});
@@ -823,38 +824,255 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
     </CardShell>
   );
 }
-// No wallet signature needed — this is a deep link into the existing, already-
-// audited dashboard execution flow. The agent proposes the group, the human
-// reviews employee list and amounts on the dashboard, then signs there.
+
+// ── Payroll run confirmation card ───────────────────────────────────────────────
+// Full in-chat execution — mirrors UnlistedPaymentCard's approve → batchPay →
+// wait-for-receipt → save record → send receipt pattern, generalized to a
+// group of employees instead of one custom address. USDC-only, matching
+// execute_payroll_run's own scope (the fully-autonomous sibling of this
+// human-confirmed flow).
+//
+// The employee list and amounts shown here come from the client's OWN
+// `state.employees` — the same trusted, already-synced data Dashboard uses —
+// not from anything the model said. `group` is just which subset to select;
+// an LLM can propose the wrong group name, but it cannot fabricate who's in
+// it or what they're owed.
 
 export interface PayrollRunCardProps {
   group: string;
+  walletAddress: string;
+  sessionToken?: string;
+  onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
-export function PayrollRunCard({ group }: PayrollRunCardProps) {
-  const href = `/dashboard?group=${encodeURIComponent(group)}`;
+export function PayrollRunCard({ group, walletAddress, sessionToken, onResolved }: PayrollRunCardProps) {
+  const { state, saveTxRecord } = useApp();
+  const { employees, payrollClone, payrollSetup } = state;
+  const { loginMethod } = useEffectiveAddress();
+  const publicClient = usePublicClient();
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+
+  const [payState, setPayState] = useState<PayState>('idle');
+  const [error,    setError]    = useState('');
+  const [txHash,   setTxHash]   = useState('');
+  const executing = useRef(false);
+
+  const targetEmployees = group === 'All Employees'
+    ? employees
+    : employees.filter(e => (e.group ?? '') === group);
+  const totalAmount = targetEmployees.reduce((s, e) => s + (Number(e.salaryAmount) || 0), 0);
+  const dupWallets = findDuplicateWallets(targetEmployees);
+
+  const handleDecline = useCallback(() => {
+    setPayState('declined');
+    onResolved('declined');
+  }, [onResolved]);
+
+  const handleConfirm = useCallback(async () => {
+    if (executing.current) return;
+    executing.current = true;
+    if (!canWrite || !publicClient) {
+      executing.current = false;
+      setError(walletRequiredMessage(loginMethod)); setPayState('error'); return;
+    }
+    if (targetEmployees.length === 0) {
+      executing.current = false;
+      setError(`No employees found in "${group}".`); setPayState('error'); return;
+    }
+    if (dupWallets.length) {
+      executing.current = false;
+      setError('Duplicate wallet addresses in this group — resolve in the dashboard before running payroll.');
+      setPayState('error'); return;
+    }
+
+    try {
+      const tokenAddr    = CONTRACTS.USDC as `0x${string}`;
+      const contractAddr = (payrollClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
+      const addrs        = targetEmployees.map(e => e.walletAddress as `0x${string}`);
+      const amounts      = targetEmployees.map(e => BigInt(Math.round(Number(e.salaryAmount) * 1e6)));
+      const amountUnits  = amounts.reduce((a, b) => a + b, 0n);
+
+      setPayState('approving');
+      const allowance = await publicClient.readContract({
+        address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
+        args: [walletAddress as `0x${string}`, contractAddr],
+      }) as bigint;
+
+      if (allowance < amountUnits) {
+        const approveTx = await universalWrite({
+          address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
+          args: [contractAddr, amountUnits],
+        });
+        await waitForSuccessfulReceipt(publicClient, approveTx);
+      }
+
+      setPayState('paying');
+      const ref = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+      const totalHuman = (Number(amountUnits) / 1e6).toFixed(2);
+      const memoJson = JSON.stringify({
+        protocol: 'salden', type: 'batchPay', ref,
+        date: new Date().toISOString(),
+        remark: 'AI Agent — payroll run (user-confirmed)',
+        token: 'USDC', totalAmount: totalHuman,
+        recipients: targetEmployees.length, group, employer: walletAddress,
+      });
+      const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
+        .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
+
+      const batchData = encodeFunctionData({
+        abi: PAYROLL_BATCH_PAY_ABI,
+        functionName: 'batchPay',
+        args: [addrs, amounts, tokenAddr],
+      });
+
+      const hash = await universalWrite({
+        address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+        functionName: 'memo',
+        args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
+      });
+
+      setPayState('confirming');
+      await waitForSuccessfulReceipt(publicClient, hash);
+      setTxHash(hash);
+
+      if (sessionToken) {
+        fetch(`${API_BASE}/agent/spend/record`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+          body: JSON.stringify({ walletAddress, amount: Number(totalHuman), txHash: hash }),
+        }).catch(() => {});
+      }
+
+      const receiptEmail = payrollSetup?.email ?? null;
+      await saveTxRecord({
+        id: hash, hash, ref,
+        type: 'batchPay', status: 'success',
+        amount: totalHuman, token: 'USDC',
+        remark: `AI Agent — payroll run (${group})`,
+        recipientCount: targetEmployees.length,
+        timestamp: Date.now(),
+        receiptEmailStatus: receiptEmail ? 'pending' : null,
+        executedBy: 'ai_agent',
+      }, walletAddress);
+
+      if (receiptEmail) {
+        fetch(`${API_BASE}/payroll-receipt/send`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            txHash: hash, walletAddress, recipientEmail: receiptEmail,
+            recipientCount: targetEmployees.length, amount: totalHuman, token: 'USDC',
+            remark: `AI Agent — payroll run (${group})`,
+            ref, timestamp: Date.now(), executedBy: 'ai_agent',
+            employees: targetEmployees.map(e => ({
+              fullName: e.fullName, department: e.department,
+              walletAddress: e.walletAddress,
+              salaryAmount: Number(e.salaryAmount).toFixed(2),
+              group: e.group,
+            })),
+          }),
+        }).then(async res => {
+          await saveTxRecord({
+            id: hash, hash, ref, type: 'batchPay', status: 'success',
+            amount: totalHuman, token: 'USDC', remark: `AI Agent — payroll run (${group})`,
+            recipientCount: targetEmployees.length, timestamp: Date.now(),
+            receiptEmailStatus: res.ok ? 'sent' : 'failed',
+            executedBy: 'ai_agent',
+          }, walletAddress);
+        }).catch(() => {});
+      }
+
+      setPayState('done');
+      onResolved('confirmed', hash);
+    } catch (err) {
+      executing.current = false;
+      const raw = err instanceof Error ? err.message : '';
+      const msg = /reject|cancel|denied/i.test(raw)
+        ? 'Transaction cancelled.'
+        : (raw || 'Payroll run failed. Please try again.');
+      setError(msg);
+      setPayState('error');
+      onResolved('error', msg);
+    }
+  }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved]);
+
+  if (payState === 'done') {
+    return (
+      <CardShell tone="success" title="✓ PAYROLL RUN COMPLETE">
+        <div>Paid {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'} in &ldquo;{group}&rdquo;.</div>
+        <a href={txLink(txHash)} target="_blank" rel="noreferrer" style={{ color: '#059669', fontSize: 12, fontWeight: 600 }}>
+          View transaction →
+        </a>
+      </CardShell>
+    );
+  }
+
+  if (payState === 'declined') {
+    return (
+      <CardShell tone="error" title="✗ DECLINED">
+        <div>You declined this payroll run. No funds were moved.</div>
+      </CardShell>
+    );
+  }
+
+  if (payState === 'error') {
+    return (
+      <CardShell tone="error" title="✗ PAYROLL RUN FAILED">
+        <div>{error}</div>
+      </CardShell>
+    );
+  }
+
+  const busy = payState === 'approving' || payState === 'paying' || payState === 'confirming';
+  const busyLabel = {
+    approving:  'Approving token spend…',
+    paying:     'Sending transaction…',
+    confirming: 'Confirming on-chain…',
+  }[payState as 'approving' | 'paying' | 'confirming'];
+
+  const PREVIEW_ROWS = 6;
+
   return (
-    <div style={{
-      marginTop: 8, padding: '12px 16px', borderRadius: 12,
-      border: '1.5px solid #C7D2FE', background: '#EEF2FF', fontSize: 13,
-    }}>
-      <div style={{ fontWeight: 700, color: '#4338CA', marginBottom: 4 }}>
-        Payroll Run Ready — {group}
+    <CardShell tone="warn" title="⚠ PAYROLL RUN READY">
+      <div>
+        Run payroll for <strong>{group}</strong> — <strong>{targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</strong>, total <strong>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDC</strong>?
       </div>
-      <div style={{ color: '#475569', fontSize: 12, marginBottom: 10 }}>
-        I've prepared a payroll run for <strong>{group}</strong>. Review the
-        employee list and amounts on the dashboard, then sign the transaction.
+
+      {targetEmployees.length > 0 && (
+        <div style={{ marginTop: 8, border: '1px solid #FDE68A', borderRadius: 8, overflow: 'hidden' }}>
+          {targetEmployees.slice(0, PREVIEW_ROWS).map(e => (
+            <div key={e.walletAddress} style={{
+              display: 'flex', justifyContent: 'space-between', padding: '6px 10px',
+              fontSize: 12, borderBottom: '1px solid #FEF3C7', background: '#FFFBEB',
+            }}>
+              <span style={{ color: '#78350F' }}>{e.fullName}</span>
+              <span style={{ color: '#92400E', fontWeight: 600 }}>{Number(e.salaryAmount).toFixed(2)} USDC</span>
+            </div>
+          ))}
+          {targetEmployees.length > PREVIEW_ROWS && (
+            <div style={{ padding: '6px 10px', fontSize: 11, color: '#92400E', background: '#FFFBEB' }}>
+              +{targetEmployees.length - PREVIEW_ROWS} more
+            </div>
+          )}
+        </div>
+      )}
+
+      {dupWallets.length > 0 && (
+        <div style={{ color: '#DC2626', fontSize: 12, marginTop: 6 }}>
+          Duplicate wallet addresses found in this group — resolve in the dashboard before running payroll.
+        </div>
+      )}
+
+      <div style={{ color: '#92400E', fontSize: 12, marginTop: 6 }}>
+        This requires your wallet signature.
       </div>
-      <a
-        href={href}
-        style={{
-          display: 'inline-block', padding: '8px 18px', borderRadius: 8,
-          background: '#14B8A6', color: '#fff', fontSize: 13, fontWeight: 700,
-          textDecoration: 'none',
-        }}
-      >
-        Go to Dashboard →
-      </a>
-    </div>
+      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
+      <ActionButtons
+        onConfirm={handleConfirm}
+        onDecline={handleDecline}
+        busy={busy}
+        confirmLabel="Confirm & Sign"
+        confirmDisabled={targetEmployees.length === 0 || dupWallets.length > 0}
+      />
+    </CardShell>
   );
 }

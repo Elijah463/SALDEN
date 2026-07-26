@@ -55,12 +55,16 @@ export interface TxRecord {
   token: string;         // e.g. "USDC"
   remark?: string;       // memo remark e.g. "Salary Payment"
   recipientCount: number;
+  /** Set only for single-recipient sends (type: 'other', a plain wallet
+   *  transfer) — lets the UI show who was actually paid instead of just
+   *  a recipient count of "1". */
+  recipientAddress?: string;
   timestamp: number;     // unix ms
   blockNumber?: number;
-  invoiceEmailStatus?: 'sent' | 'failed' | 'pending' | null;
-  invoiceEmailSentAt?: number | null;
+  receiptEmailStatus?: 'sent' | 'failed' | 'pending' | null;
+  receiptEmailSentAt?: number | null;
   description?: string;
-  /** Who triggered this transaction — drives invoice email wording and audit trail. */
+  /** Who triggered this transaction — drives payroll receipt email wording and audit trail. */
   executedBy?: 'manual' | 'ai_agent';
 }
 
@@ -112,13 +116,13 @@ export interface AgentSchedule {
   tokenDecimals?:       number;
   /**
    * Snapshot of payrollSetup.email at schedule-creation time, used to send
-   * the invoice receipt once a scheduled payment confirms on-chain. This
+   * the payroll receipt once a scheduled payment confirms on-chain. This
    * cannot be live-fetched later — payrollSetup is only ever available
    * decrypted in the browser (see PayrollCacheEntry doc comment above), so
    * if this isn't captured now, it is permanently unavailable to the
    * server-side executor. Optional: schedules created before this field
    * existed, or by a user who never set a company email in Settings,
-   * simply won't have an invoice email sent — handled as a graceful skip
+   * simply won't have a payroll receipt email sent — handled as a graceful skip
    * wherever this is read, not an error state.
    */
   recipientEmail?: string;
@@ -195,7 +199,7 @@ export async function getTxsByWallet(walletAddress: string): Promise<TxRecord[]>
   return all.sort((a, b) => b.timestamp - a.timestamp);
 }
 
-export async function updateTxInvoiceStatus(
+export async function updateTxReceiptStatus(
   id: string,
   status: 'sent' | 'failed',
   sentAt: number
@@ -203,8 +207,8 @@ export async function updateTxInvoiceStatus(
   const database = await getDB();
   const record = await database.get('transactions', id) as TxRecord | undefined;
   if (record) {
-    record.invoiceEmailStatus = status;
-    record.invoiceEmailSentAt = sentAt;
+    record.receiptEmailStatus = status;
+    record.receiptEmailSentAt = sentAt;
     await database.put('transactions', record);
   }
 }

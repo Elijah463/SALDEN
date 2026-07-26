@@ -58,7 +58,7 @@ import { checkAndTopUpBalance, ALLOWANCE_CEILING_USDC } from '@/lib/agent/autono
 import { executeContractCall, getTxStatus } from '@/lib/circle/agent-wallet';
 import { getServerPublicClient } from '@/lib/agent/chain';
 import { ERC20_ABI, MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
-import { sendInvoiceEmail } from '@/lib/email/sendInvoiceEmail';
+import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
 import { track } from '@/lib/analytics';
 
 const SCHEDULE_EXECUTE_EVENT = 'agent/schedule.execute' as const;
@@ -395,10 +395,10 @@ export const executeScheduledPayment = inngest.createFunction(
         });
       });
 
-      // ── Invoice receipt email — skip gracefully, never fail the run ──────
-      await step.run('send-invoice-email', async () => {
+      // ── Payroll receipt email — skip gracefully, never fail the run ──────
+      await step.run('send-payroll-receipt-email', async () => {
         if (!schedule.recipientEmail) return { skipped: true, reason: 'no-recipient-email' as const };
-        return sendInvoiceEmail({
+        return sendPayrollReceiptEmail({
           recipientEmail: schedule.recipientEmail,
           walletAddress:  schedule.walletAddress,
           ref:            `SCH-${schedule.id.slice(0, 8).toUpperCase()}`,

@@ -8,7 +8,7 @@
  * this doesn't need a wallet-signature session. Call this AFTER
  * publicClient.waitForTransactionReceipt() confirms, never before.
  *
- * Fire-and-forget by design, same as the existing invoice-email pattern
+ * Fire-and-forget by design, same as the existing receipt-email pattern
  * in dashboard/page.tsx: the on-chain action already succeeded by the
  * time this is called, so a metrics-reporting failure must never surface
  * an error to the user or block their flow.

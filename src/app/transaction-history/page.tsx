@@ -3,7 +3,7 @@
  * @file app/transaction-history/page.tsx
  * - Chart starts from the very first transaction month (not a fixed 6-month window)
  * - Y-axis uses dynamic custom ticks: 0→100→500→1k→5k→10k→20k→50k→100k…
- * - Receipt cards with ref (alphanumeric), type, status badge, invoice status
+ * - Receipt cards with ref (alphanumeric), type, status badge, receipt status
  * - useEffectiveAddress for Circle social login compatibility
  */
 
@@ -16,7 +16,7 @@ import {
 import {
   ExternalLink, RefreshCw,
   TrendingUp, Users, DollarSign, Loader2,
-  CheckCircle2, AlertCircle, Clock, Copy, XCircle,
+  CheckCircle2, AlertCircle, Clock, Copy, XCircle, Search,
 } from 'lucide-react';
 import { AppLayout }           from '@/components/layout/AppLayout';
 import { Button }              from '@/components/shared/Button';
@@ -24,6 +24,7 @@ import { useApp }              from '@/context/AppContext';
 import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
 import { txLink }              from '@/lib/contracts/config';
+import { truncAddr }           from '@/lib/validation';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -54,27 +55,30 @@ function fmtTick(v: number): string {
   return String(v);
 }
 
-// ── Status & Invoice helpers ───────────────────────────────────────────────────
+// ── Method label ───────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: 'success' | 'failed' }) {
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      padding: '2px 9px', borderRadius: 99, fontSize: 11, fontWeight: 700,
-      background: status === 'success' ? '#ECFDF5' : '#FEF2F2',
-      color: status === 'success' ? '#059669' : '#DC2626',
-    }}>
-      {status === 'success' ? <CheckCircle2 size={10} /> : <XCircle size={10} />}
-      {status === 'success' ? 'Successful' : 'Failed'}
-    </span>
-  );
+function methodLabel(type: TxRecord['type']): string {
+  switch (type) {
+    case 'batchPay': return 'BatchPay';
+    case 'other':    return 'Transfer';
+    case 'deploy':   return 'Contract Deployment';
+    case 'addAgent': return 'Add Agent';
+    case 'approve':  return 'Approval';
+    default:         return type;
+  }
 }
 
-function InvoiceStatus({ status, onRetry, retrying }: {
-  status?: TxRecord['invoiceEmailStatus'];
+// ── Status & Receipt helpers ───────────────────────────────────────────────────
+
+function ReceiptStatus({ status, onRetry, retrying, notSupported }: {
+  status?: TxRecord['receiptEmailStatus'];
   onRetry?: () => void;
   retrying?: boolean;
+  notSupported?: boolean;
 }) {
+  if (notSupported) {
+    return <span style={{ fontSize: 13, color: '#94A3B8' }}>Not supported</span>;
+  }
   if (!status) return null;
 
   if (status === 'failed') {
@@ -95,8 +99,8 @@ function InvoiceStatus({ status, onRetry, retrying }: {
   }
 
   const map = {
-    sent:    { icon: <CheckCircle2 size={12} />, color: '#059669', label: 'Invoice sent'  },
-    pending: { icon: <Clock        size={12} />, color: '#D97706', label: 'Sending…'      },
+    sent:    { icon: <CheckCircle2 size={12} />, color: '#059669', label: 'Sent'    },
+    pending: { icon: <Clock        size={12} />, color: '#D97706', label: 'Sending…' },
   } as const;
   const s = map[status as keyof typeof map];
   if (!s) return null;
@@ -121,6 +125,15 @@ function StatCard({ label, value, icon, color = '#4F46E5' }: { label: string; va
 
 // ── Receipt card ───────────────────────────────────────────────────────────────
 
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 9 }}>
+      <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function ReceiptCard({ tx, onResend, resending, hasEmail }: {
   tx: TxRecord;
   onResend:   (tx: TxRecord) => void;
@@ -129,6 +142,8 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
 }) {
   const [copied, setCopied] = useState(false);
   const ref = tx.ref ?? ('SLD-' + tx.hash.slice(2, 8).toUpperCase());
+  const status = tx.status ?? 'success';
+  const isSingleSend = tx.type === 'other';
 
   return (
     <div style={{
@@ -137,8 +152,8 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
     }}>
       <div style={{ padding: '18px 20px' }}>
 
-        {/* Reference + date */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        {/* Reference + date — unchanged */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <span style={{ fontSize: 12, fontWeight: 800, color: '#4F46E5', letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace" }}>
             {ref}
           </span>
@@ -147,43 +162,58 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
           </span>
         </div>
 
-        {/* Amount */}
-        <div style={{ fontSize: 28, fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em', marginBottom: 6 }}>
-          {tx.amount} <span style={{ fontSize: 14, fontWeight: 600, color: '#94A3B8' }}>{tx.token}</span>
-        </div>
-
-        {/* Recipients */}
-        <div style={{ fontSize: 13, color: '#64748B', marginBottom: 12 }}>
-          Paid to <strong style={{ color: '#0F172A' }}>{tx.recipientCount}</strong> recipient{tx.recipientCount !== 1 ? 's' : ''}
-        </div>
-
-        {/* Badges row */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
-          <StatusBadge status={tx.status ?? 'success'} />
-          <span style={{ padding: '2px 9px', borderRadius: 99, background: '#EEF2FF', color: '#4F46E5', fontSize: 11, fontWeight: 700 }}>
-            {tx.type}
+        {/* Status — checkmark in front, plain green/red text, no pill/glow */}
+        <DetailRow label="Status">
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 700,
+            color: status === 'success' ? '#059669' : '#DC2626',
+          }}>
+            {status === 'success' ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+            {status === 'success' ? 'Successful' : 'Failed'}
           </span>
-          {tx.remark && (
-            <span style={{ padding: '2px 9px', borderRadius: 99, background: '#F1F5F9', color: '#64748B', fontSize: 11, fontWeight: 600 }}>
-              {tx.remark}
-            </span>
-          )}
-          {tx.executedBy === 'ai_agent' && (
-            <span style={{ padding: '2px 9px', borderRadius: 99, background: '#EEF2FF', color: '#4F46E5', fontSize: 11, fontWeight: 700 }}>
-              AI Agent
-            </span>
-          )}
-        </div>
+        </DetailRow>
 
-        {/* Invoice status */}
-        {tx.invoiceEmailStatus && (
-          <div style={{ marginBottom: 12 }}>
-            <InvoiceStatus status={tx.invoiceEmailStatus} onRetry={hasEmail ? () => onResend(tx) : undefined} retrying={resending === tx.id} />
-          </div>
+        {/* Amount */}
+        <DetailRow label="Amount">
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
+            {tx.amount} {tx.token}
+          </span>
+        </DetailRow>
+
+        {/* Recipients — single sends show who was paid, not just "1" */}
+        <DetailRow label="Recipients">
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', fontFamily: isSingleSend && tx.recipientAddress ? "'JetBrains Mono', monospace" : undefined }}>
+            {isSingleSend && tx.recipientAddress ? truncAddr(tx.recipientAddress, 6, 4) : tx.recipientCount}
+          </span>
+        </DetailRow>
+
+        {/* Method — no glow */}
+        <DetailRow label="Method">
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>
+            {methodLabel(tx.type)}
+          </span>
+        </DetailRow>
+
+        {/* Memo — only shown when there's actually a remark to show */}
+        {tx.remark && (
+          <DetailRow label="Memo">
+            <span style={{ fontSize: 13, color: '#0F172A' }}>{tx.remark}</span>
+          </DetailRow>
         )}
 
-        {/* Tx hash */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: '#F8F9FA', borderRadius: 9 }}>
+        {/* Payroll Receipt — "Not supported" for anything that isn't a batch
+            payroll run (receipts only apply there), no glow otherwise */}
+        <DetailRow label="Payroll Receipt">
+          <ReceiptStatus
+            status={tx.receiptEmailStatus}
+            onRetry={hasEmail ? () => onResend(tx) : undefined}
+            retrying={resending === tx.id}
+            notSupported={!tx.receiptEmailStatus && tx.type !== 'batchPay'}
+          />
+        </DetailRow>
+
+        {/* Tx hash — link icon now ash/grey instead of brand indigo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: '#F8F9FA', borderRadius: 9, marginTop: 10 }}>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#475569', flex: 1 }}>
             {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
           </span>
@@ -191,7 +221,7 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: copied ? '#14B8A6' : '#94A3B8', padding: 0 }}>
             <Copy size={13} />
           </button>
-          <a href={txLink(tx.hash)} target="_blank" rel="noreferrer" style={{ color: '#4F46E5', display: 'flex' }}>
+          <a href={txLink(tx.hash)} target="_blank" rel="noreferrer" style={{ color: '#94A3B8', display: 'flex' }}>
             <ExternalLink size={13} />
           </a>
         </div>
@@ -211,6 +241,7 @@ export default function TransactionHistoryPage() {
   const [txs,      setTxs]      = useState<TxRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [resending, setResending] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const loadTxs = useCallback(async () => {
     if (!address) { setLoading(false); return; }
@@ -224,7 +255,18 @@ export default function TransactionHistoryPage() {
 
   useEffect(() => { loadTxs(); }, [loadTxs]);
 
-  // ── Chart: from very first transaction month → now ────────────────────────
+  // Search by reference code or memo/remark tag
+  const filteredTxs = (() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return txs;
+    return txs.filter(tx => {
+      const ref = (tx.ref ?? ('SLD-' + tx.hash.slice(2, 8).toUpperCase())).toLowerCase();
+      const remark = (tx.remark ?? '').toLowerCase();
+      return ref.includes(q) || remark.includes(q);
+    });
+  })();
+
+  // ── Chart: spans actual transaction activity only (first → latest tx) ─────
   const { chartData, maxVolume } = (() => {
     if (!txs.length) return { chartData: [], maxVolume: 0 };
 
@@ -234,13 +276,21 @@ export default function TransactionHistoryPage() {
       buckets[key] = (buckets[key] ?? 0) + parseFloat(tx.amount.replace(/,/g, '') || '0');
     });
 
-    // Build a continuous month range from first tx month to now
+    // Build a continuous month range spanning actual activity only — from
+    // the first transaction's month to the LATEST transaction's month.
+    // BUG FIX: this used to extend all the way to today's date regardless
+    // of when the last transaction happened, so as real time passed with
+    // no new activity, an ever-growing flat run of empty trailing months
+    // got appended, squeezing all the real data toward one end of the
+    // chart. Bounding to the latest transaction keeps the chart showing
+    // only genuine progress.
     const oldest  = Math.min(...txs.map(t => t.timestamp));
+    const latest  = Math.max(...txs.map(t => t.timestamp));
     const start   = startOfMonth(new Date(oldest));
-    const now     = new Date();
+    const end     = startOfMonth(new Date(latest));
     const months: string[] = [];
     const cursor  = new Date(start);
-    while (cursor <= now) {
+    while (cursor <= end) {
       months.push(format(cursor, 'MMM yy'));
       cursor.setMonth(cursor.getMonth() + 1);
     }
@@ -255,21 +305,21 @@ export default function TransactionHistoryPage() {
   const totalVolume     = txs.reduce((s, t) => s + parseFloat(t.amount.replace(/,/g, '') || '0'), 0);
   const totalRecipients = txs.reduce((s, t) => s + t.recipientCount, 0);
 
-  async function handleResendInvoice(tx: TxRecord) {
-    const invoiceEmail = payrollSetup?.email ?? null;
-    if (!invoiceEmail) {
+  async function handleResendReceipt(tx: TxRecord) {
+    const receiptEmail = payrollSetup?.email ?? null;
+    if (!receiptEmail) {
       // No company email on file — nothing we can resend to
       return;
     }
 
     setResending(tx.id);
     try {
-      const res = await fetch('/api/invoice/send', {
+      const res = await fetch('/api/payroll-receipt/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           txHash:         tx.hash,
           walletAddress:  address,
-          recipientEmail: invoiceEmail,
+          recipientEmail: receiptEmail,
           recipientCount: tx.recipientCount,
           amount:         tx.amount,
           token:          tx.token,
@@ -280,11 +330,11 @@ export default function TransactionHistoryPage() {
         }),
       });
       const newStatus = res.ok ? 'sent' : 'failed';
-      await saveTxRecord({ ...tx, invoiceEmailStatus: newStatus }, address!);
-      setTxs(prev => prev.map(t => t.id === tx.id ? { ...t, invoiceEmailStatus: newStatus } : t));
+      await saveTxRecord({ ...tx, receiptEmailStatus: newStatus }, address!);
+      setTxs(prev => prev.map(t => t.id === tx.id ? { ...t, receiptEmailStatus: newStatus } : t));
     } catch {
-      await saveTxRecord({ ...tx, invoiceEmailStatus: 'failed' }, address!).catch(() => {});
-      setTxs(prev => prev.map(t => t.id === tx.id ? { ...t, invoiceEmailStatus: 'failed' } : t));
+      await saveTxRecord({ ...tx, receiptEmailStatus: 'failed' }, address!).catch(() => {});
+      setTxs(prev => prev.map(t => t.id === tx.id ? { ...t, receiptEmailStatus: 'failed' } : t));
     }
     finally { setResending(null); }
   }
@@ -328,16 +378,17 @@ export default function TransactionHistoryPage() {
                 Payroll Volume (USDC)
               </h3>
               <ResponsiveContainer width="100%" height={190}>
-                <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: 0 }}>
+                <AreaChart data={chartData} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
                   <defs>
                     <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="#4F46E5" stopOpacity={0.15} />
+                      <stop offset="5%"  stopColor="#4F46E5" stopOpacity={0.18} />
                       <stop offset="95%" stopColor="#4F46E5" stopOpacity={0}    />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94A3B8' }} axisLine={false} tickLine={false}
-                    interval={Math.max(0, Math.floor(chartData.length / 6) - 1)} />
+                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 500 }}
+                    axisLine={{ stroke: '#E2E8F0' }} tickLine={false}
+                    tickMargin={10} interval="preserveStartEnd" padding={{ left: 8, right: 8 }} />
                   <YAxis
                     tick={{ fontSize: 11, fill: '#94A3B8' }} axisLine={false} tickLine={false}
                     ticks={dynamicTicks}
@@ -347,8 +398,13 @@ export default function TransactionHistoryPage() {
                     contentStyle={{ borderRadius: 10, border: '1px solid #E2E8F0', fontSize: 13 }}
                     formatter={(v: number) => [`${v.toLocaleString()} USDC`, 'Volume']}
                   />
-                  <Area type="monotone" dataKey="volume" stroke="#4F46E5" strokeWidth={2}
-                    fill="url(#volGrad)" dot={false} activeDot={{ r: 4, fill: '#4F46E5' }} />
+                  {/* "natural" gives a smooth, flowing curve through the real
+                      data points (rather than blocky/linear segments) —
+                      this only changes how points are visually connected,
+                      never the underlying values. */}
+                  <Area type="natural" dataKey="volume" stroke="#4F46E5" strokeWidth={2.5}
+                    fill="url(#volGrad)" dot={{ r: 3, fill: '#4F46E5', strokeWidth: 0 }}
+                    activeDot={{ r: 5, fill: '#4F46E5', stroke: '#fff', strokeWidth: 2 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -356,16 +412,40 @@ export default function TransactionHistoryPage() {
             {/* Receipt cards */}
             <div>
               <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 14 }}>
-                All Transactions ({txs.length})
+                All Transactions ({filteredTxs.length})
               </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-                {txs.map(tx => (
-                  <ReceiptCard key={tx.id} tx={tx}
-                    onResend={handleResendInvoice}
-                    resending={resending}
-                    hasEmail={!!payrollSetup?.email} />
-                ))}
+
+              <div style={{ position: 'relative', marginBottom: 16 }}>
+                <Search size={15} color="#94A3B8" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Search by reference code or memo…"
+                  style={{
+                    width: '100%', padding: '10px 14px 10px 38px', borderRadius: 10,
+                    border: '1px solid #E2E8F0', fontSize: 13, color: '#0F172A',
+                    fontFamily: 'inherit', outline: 'none',
+                  }}
+                  onFocus={e => (e.target.style.borderColor = '#4F46E5')}
+                  onBlur={e => (e.target.style.borderColor = '#E2E8F0')}
+                />
               </div>
+
+              {filteredTxs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '32px 0', color: '#94A3B8', fontSize: 13 }}>
+                  No transactions match &ldquo;{searchQuery}&rdquo;.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
+                  {filteredTxs.map(tx => (
+                    <ReceiptCard key={tx.id} tx={tx}
+                      onResend={handleResendReceipt}
+                      resending={resending}
+                      hasEmail={!!payrollSetup?.email} />
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}

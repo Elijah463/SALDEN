@@ -119,14 +119,20 @@ function DateTimePicker({
         <div style={{ fontSize: 12, color: '#64748B', fontWeight: 600, marginBottom: 6 }}>Time (UTC)</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
           <input
-            type="number" min={0} max={23} value={hour}
-            onChange={e => setHour(Math.min(23, Math.max(0, Number(e.target.value) || 0)))}
+            type="number" min={0} max={23}
+            value={hour === 0 ? '' : hour}
+            placeholder="0"
+            onChange={e => setHour(e.target.value === '' ? 0 : Math.min(23, Math.max(0, Number(e.target.value) || 0)))}
+            onFocus={e => e.target.select()}
             style={{ width: '50%', padding: '8px 10px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 14, textAlign: 'center' }}
             aria-label="Hour (UTC)"
           />
           <input
-            type="number" min={0} max={59} value={minute}
-            onChange={e => setMinute(Math.min(59, Math.max(0, Number(e.target.value) || 0)))}
+            type="number" min={0} max={59}
+            value={minute === 0 ? '' : minute}
+            placeholder="0"
+            onChange={e => setMinute(e.target.value === '' ? 0 : Math.min(59, Math.max(0, Number(e.target.value) || 0)))}
+            onFocus={e => e.target.select()}
             style={{ width: '50%', padding: '8px 10px', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 14, textAlign: 'center' }}
             aria-label="Minute (UTC)"
           />

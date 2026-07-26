@@ -1,15 +1,15 @@
 /**
- * @file lib/email/sendInvoiceEmail.ts
+ * @file lib/email/sendPayrollReceiptEmail.ts
  * SERVER-SIDE ONLY — never import in client components.
  *
  * Sends the payroll receipt email via Resend, attaching the PDF generated
  * by generateReceiptPdf.ts.
  *
- * From address is fixed at contact@salden.xyz for ALL invoice emails,
- * regardless of whether the payment was triggered manually by the employer
- * or autonomously by the Salden AI Payroll Agent. The email body text
- * differs based on `executedBy` so the employer always knows who actually
- * carried out the payment.
+ * From address is fixed at contact@salden.xyz for ALL payroll receipt
+ * emails, regardless of whether the payment was triggered manually by the
+ * employer or autonomously by the Salden AI Payroll Agent. The email body
+ * text differs based on `executedBy` so the employer always knows who
+ * actually carried out the payment.
  */
 
 import { Resend } from 'resend';
@@ -25,12 +25,12 @@ function getResendClient(): Resend {
   return new Resend(apiKey);
 }
 
-export interface InvoiceEmailInput extends ReceiptPdfInput {
+export interface PayrollReceiptEmailInput extends ReceiptPdfInput {
   recipientEmail: string;
   walletAddress:  string;   // employer wallet — shown in the email body
 }
 
-export interface InvoiceEmailResult {
+export interface PayrollReceiptEmailResult {
   status:  'sent' | 'failed';
   message: string;
 }
@@ -50,18 +50,19 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function buildEmailHtml(input: InvoiceEmailInput): string {
+function buildEmailHtml(input: PayrollReceiptEmailInput): string {
   const summary = buildSummaryLine(input.executedBy);
   const fmtDate = new Date(input.timestamp).toLocaleDateString('en-US', {
     year: 'numeric', month: 'long', day: 'numeric',
   });
 
-  // /api/invoice/send accepts these fields straight from the request body —
-  // ref, remark, token, and walletAddress are NOT guaranteed to be safe,
-  // trusted, or even correctly-shaped strings by the time they get here, so
-  // every one of them must be HTML-escaped before interpolation. Without
-  // this, a crafted `remark` could inject markup/script into an email that
-  // actually lands in a real inbox (Resend renders the html field as-is).
+  // /api/payroll-receipt/send accepts these fields straight from the
+  // request body — ref, remark, token, and walletAddress are NOT
+  // guaranteed to be safe, trusted, or even correctly-shaped strings by
+  // the time they get here, so every one of them must be HTML-escaped
+  // before interpolation. Without this, a crafted `remark` could inject
+  // markup/script into an email that actually lands in a real inbox
+  // (Resend renders the html field as-is).
   const ref        = escapeHtml(input.ref);
   const token       = escapeHtml(input.token);
   const remark      = input.remark ? escapeHtml(input.remark) : '';
@@ -73,7 +74,7 @@ function buildEmailHtml(input: InvoiceEmailInput): string {
   return `
   <div style="font-family: 'DM Sans', Arial, sans-serif; max-width: 540px; margin: 0 auto; color: #0F172A;">
     <div style="padding: 24px 0; border-bottom: 2px solid #4F46E5; display: flex; align-items: center; gap: 10px;">
-      <img src="${LOGO_URL}" alt="Salden" height="28" style="height: 28px; width: auto; display: inline-block; vertical-align: middle;" />
+      <img src="${LOGO_URL}" alt="Salden" height="56" style="height: 56px; width: auto; display: inline-block; vertical-align: middle;" />
       <span style="font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.02em; vertical-align: middle;">SALDEN</span>
     </div>
     <div style="padding: 24px 0;">
@@ -103,7 +104,7 @@ function buildEmailHtml(input: InvoiceEmailInput): string {
   </div>`;
 }
 
-export async function sendInvoiceEmail(input: InvoiceEmailInput): Promise<InvoiceEmailResult> {
+export async function sendPayrollReceiptEmail(input: PayrollReceiptEmailInput): Promise<PayrollReceiptEmailResult> {
   try {
     const resend = getResendClient();
     const pdfBuffer = generateReceiptPdf(input);
@@ -122,11 +123,11 @@ export async function sendInvoiceEmail(input: InvoiceEmailInput): Promise<Invoic
     });
 
     if (error) {
-      return { status: 'failed', message: error?.message ?? 'Invoice could not be sent. Please try again.' };
+      return { status: 'failed', message: error?.message ?? 'Payroll receipt could not be sent. Please try again.' };
     }
 
-    return { status: 'sent', message: 'Invoice email sent.' };
+    return { status: 'sent', message: 'Payroll receipt email sent.' };
   } catch {
-    return { status: 'failed', message: 'Invoice could not be sent. Please try again.' };
+    return { status: 'failed', message: 'Payroll receipt could not be sent. Please try again.' };
   }
 }

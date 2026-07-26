@@ -272,7 +272,15 @@ export const MULTI_TOKEN_FACTORY_ABI = [
     ],
     "name": "NewPayrollCreated",
     "type": "event"
-  }
+  },
+  // Custom errors — without these, viem can't decode a revert's 4-byte
+  // selector into a readable message, so any of these show as a generic
+  // "execution reverted for an unknown reason" instead of the real cause.
+  { "inputs": [], "name": "ZeroAddress", "type": "error" },
+  { "inputs": [], "name": "AlreadyDeployed", "type": "error" },
+  { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "provided", "type": "uint256" }, { "internalType": "uint256", "name": "max", "type": "uint256" }], "name": "FeeTooHigh", "type": "error" },
+  { "inputs": [], "name": "ETHNotAccepted", "type": "error" }
 ] as const;
 
 // ─── SaldenRegistryFactory ABI ────────────────────────────────────────────────

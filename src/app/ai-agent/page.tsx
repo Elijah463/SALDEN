@@ -328,6 +328,64 @@ export default function AIAgentPage() {
 
   const bothDone = step1Status === 'done' && step2Status === 'done';
 
+  // ── On-chain grant verification ──────────────────────────────────────────
+  // BUG FIX: `status === 'active'` (from useAgentStatus) only means the
+  // Circle developer-controlled agent WALLET has been provisioned — it says
+  // nothing about whether the two addAgent() on-chain grants below were
+  // ever actually completed. Previously, the setup wizard only ever
+  // rendered when `activateResult` was populated, which only happens
+  // inside THIS session's own activate() call. On any later visit —
+  // reload, different tab, coming back tomorrow — status is already
+  // 'active' (the wallet exists), so the auto-activate effect above never
+  // re-fires, activateResult stays null, and the wizard is skipped
+  // entirely: straight to the chat interface, with an agent wallet that
+  // may still have zero permissions on either contract. That's exactly
+  // what "the agent activated but I never saw a permission step" was: a
+  // session interrupted after the wallet was created but before both
+  // signatures were completed leaves it in that state permanently.
+  //
+  // Fix: once status is 'active', verify the grants directly on-chain
+  // (isAgent() on both clones — the ABIs already existed for this, just
+  // unused) and resume the wizard, pre-marking whichever grant is already
+  // in place as done, if either is actually missing.
+  const [grantsChecked, setGrantsChecked] = useState(false);
+  useEffect(() => {
+    if (status !== 'active' || !agentInfo?.agentWallet || !effectiveClone || !effectiveRegistry || !publicClient) return;
+    if (activateResult || grantsChecked) return; // already have a result for this session, or already checked
+
+    let cancelled = false;
+    const agentAddr = agentInfo.agentWallet as `0x${string}`;
+
+    Promise.all([
+      publicClient.readContract({
+        address: effectiveClone as `0x${string}`, abi: PAYROLL_IS_AGENT_ABI,
+        functionName: 'isAgent', args: [agentAddr],
+      }).catch(() => false) as Promise<boolean>,
+      publicClient.readContract({
+        address: effectiveRegistry as `0x${string}`, abi: REGISTRY_IS_AGENT_ABI,
+        functionName: 'isAgent', args: [agentAddr],
+      }).catch(() => false) as Promise<boolean>,
+    ]).then(([payrollGranted, registryGranted]) => {
+      if (cancelled) return;
+      setGrantsChecked(true);
+      if (payrollGranted && registryGranted) return; // truly fully set up — render chat as normal
+
+      // Resume the wizard, pre-marking whichever grant already exists so
+      // the user only has to sign what's actually still missing.
+      setStep1Status(payrollGranted ? 'done' : 'pending');
+      setStep2Status(registryGranted ? 'done' : 'pending');
+      setActivateResult({
+        agentInfo,
+        grantRoleInstructions: {
+          payrollClone: effectiveClone, registryClone: effectiveRegistry,
+          agentWallet: agentInfo.agentWallet, message: '',
+        },
+      });
+    });
+
+    return () => { cancelled = true; };
+  }, [status, agentInfo, effectiveClone, effectiveRegistry, publicClient, activateResult, grantsChecked]);
+
   useEffect(() => {
     if (bothDone) {
       const t = setTimeout(refresh, 1500);
@@ -387,7 +445,7 @@ export default function AIAgentPage() {
               'Real on-chain balance & compliance checks',
               'Structured function-calling AI (not just chat)',
               'IPFS employee database with on-chain CID anchoring',
-              'Payments invoice sent to you automatically',
+              'Payment receipts sent to you automatically',
             ].map((f, i) => (
               <div key={i} style={{
                 display: 'flex', alignItems: 'flex-start', gap: 10,

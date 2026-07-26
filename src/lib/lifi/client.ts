@@ -57,10 +57,17 @@ export interface LifiQuote {
 
 /** Fetches a real, executable LI.FI quote — a same-chain swap here (Arc
  *  Testnet to itself), but the same endpoint handles cross-chain too.
- *  Returns null if LI.FI can't find a viable route (e.g. no liquidity for
- *  a given pair) — callers should show that as "no route available", not
- *  a generic error. */
-export async function getSwapQuote(params: LifiQuoteParams): Promise<LifiQuote | null> {
+ *
+ *  Returns { quote: null, reason } on any failure — including the ACTUAL
+ *  upstream reason where available (LI.FI's own error message/status),
+ *  not just a blanket "no route." This matters because "no route" and
+ *  "your request was malformed / this token isn't in LI.FI's registry for
+ *  this chain" look identical to a user unless the real reason is
+ *  captured — silently collapsing both into the same message makes a
+ *  config problem (e.g. an unlisted/misconfigured token) indistinguishable
+ *  from genuine no-liquidity, which is exactly the ambiguity that made the
+ *  cirBTC routing issue hard to diagnose. */
+export async function getSwapQuote(params: LifiQuoteParams): Promise<{ quote: LifiQuote | null; reason?: string }> {
   try {
     const url = new URL(`${LIFI_API_BASE}/quote`);
     url.searchParams.set('fromChain', String(params.chainId));
@@ -72,12 +79,23 @@ export async function getSwapQuote(params: LifiQuoteParams): Promise<LifiQuote |
     if (params.slippage !== undefined) url.searchParams.set('slippage', String(params.slippage));
 
     const res = await fetch(url.toString(), { headers: authHeaders() });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Surface LI.FI's own error body when present — this is what
+      // distinguishes "no liquidity for this pair" from "LI.FI doesn't
+      // recognize this token address on this chain" (a config problem,
+      // not a routing problem).
+      const body = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+      const reason = body?.message || body?.error
+        || `LI.FI returned ${res.status}${res.status === 404 ? ' — no route between these tokens' : ''}.`;
+      return { quote: null, reason };
+    }
     const data = await res.json() as LifiQuote;
-    if (!data.transactionRequest?.to || !data.transactionRequest?.data) return null;
-    return data;
-  } catch {
-    return null;
+    if (!data.transactionRequest?.to || !data.transactionRequest?.data) {
+      return { quote: null, reason: 'LI.FI returned a quote with no executable transaction.' };
+    }
+    return { quote: data };
+  } catch (err) {
+    return { quote: null, reason: err instanceof Error ? err.message : 'Network error reaching LI.FI.' };
   }
 }
 
