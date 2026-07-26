@@ -41,6 +41,8 @@ import { txLink, CONTRACTS }     from '@/lib/contracts/config';
 import {
   PAYROLL_ADD_AGENT_ABI,
   REGISTRY_ADD_AGENT_ABI,
+  PAYROLL_IS_AGENT_ABI,
+  REGISTRY_IS_AGENT_ABI,
 } from '@/lib/contracts/agentAbis';
 import { REGISTRY_FACTORY_ABI }  from '@/lib/contracts/abis';
 import { useCloneAccess }        from '@/lib/useCloneAccess';
