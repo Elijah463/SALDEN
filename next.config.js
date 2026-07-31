@@ -8,6 +8,15 @@ const nextConfig = {
       { protocol: 'https', hostname: 'gateway.pinata.cloud' },
     ],
   },
+  async redirects() {
+    return [
+      {
+        source: '/',
+        destination: '/dashboard',
+        permanent: false,
+      },
+    ];
+  },
   webpack: (config, { isServer, webpack }) => {
     // Required for wagmi/viem and WalletConnect
     config.externals.push('pino-pretty', 'lokijs', 'encoding');
