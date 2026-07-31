@@ -10,9 +10,9 @@
 
 ## What is Salden?
 
-Salden is a decentralised payroll platform that replaces traditional payroll infrastructure with smart contracts. Employers can pay any number of employees in USDC or any ERC-20 token in a single onchain transaction. Employee records are encrypted end-to-end and stored on IPFS. An AI Payroll Agent handles recurring payroll, compliance screening, and scheduling autonomously, without ever requiring manual intervention.
+Salden is a decentralised payroll platform that replaces traditional payroll infrastructure with programmable stablecoin infrastructure, enabling businesses and individuals to automate borderless payroll through smart contracts and USDC. Employers can pay any number of employees in USDC or any other stablecoins like EURC in a single onchain transaction. Employee records are encrypted end-to-end and stored on IPFS. An AI Payroll Agent smartly handles recurring payroll, compliance screening, and scheduling autonomously, without ever requiring manual intervention.
 
-Salden is built for the future of work remote teams, borderless payments, and organisations that demand transparency and auditability at every step.
+Salden leverages Circle’s programmable stablecoin technology to allow seemless borderless payments for organisations that demand transparency and auditability at every step.
 
 ---
 

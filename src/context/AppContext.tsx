@@ -163,12 +163,14 @@ interface AppContextValue {
   addToast:     (message: string, type?: Toast['type'], duration?: number) => void;
   removeToast:  (id: string) => void;
   syncData:     (opts: {
-    employees?:   Employee[];
+    employees?:    Employee[];
+    payrollSetup?: PayrollSetup;
+    groups?:       string[];
     walletAddress: string;
     /** Pass walletClient.signMessage to enable authenticated sync */
-    signMessage?: (msg: string) => Promise<string>;
+    signMessage?:  (msg: string) => Promise<string>;
     /** Previous IPFS CID — server unpins it after successful upload */
-    previousCid?: string;
+    previousCid?:  string;
   }) => Promise<{ cid?: string }>;
   /** Loads + decrypts previously-synced data from IPFS (via a known CID,
    *  normally read from SaldenRegistry.getCID()) and hydrates app state. */
