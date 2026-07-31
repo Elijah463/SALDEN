@@ -46,6 +46,7 @@ import { useUniversalWrite }   from '@/lib/circle/useUniversalWrite';
 import { txLink, arcTestnet }  from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { TOKENS, toRawAmount, fromRawAmount, type TokenMeta } from '@/lib/swap/tokens';
+import { saveWalletActivity } from '@/lib/db/indexeddb';
 import { useSwapQuote }        from '@/lib/swap/useSwapQuote';
 import { useTokenDecimals, withResolvedDecimals } from '@/lib/swap/useTokenDecimals';
 import { TokenBox, StepProgress } from '@/components/wallet/SwapUI';
@@ -59,7 +60,7 @@ export default function SwapPage() {
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(TOKENS[0]);
-  const [tokenOut,  setTokenOut]  = useState<TokenMeta | null>(TOKENS[1]);
+  const [tokenOut,  setTokenOut]  = useState<TokenMeta | null>(null);
   const [amountIn,  setAmountIn]  = useState('');
   const [swapping,  setSwapping]  = useState(false);
   const [swapStep,  setSwapStep]  = useState<SwapStep>('');
@@ -165,6 +166,17 @@ export default function SwapPage() {
 
       setLastReceivedAmount(amountOut);
       setSuccessTx(txHash);
+
+      // Local-only wallet activity record (Swap/Bridge/Deposit history) —
+      // deliberately never synced anywhere, matching product intent that
+      // this activity type doesn't need to follow the user across devices.
+      if (address && effTokenIn && effTokenOut) {
+        void saveWalletActivity({
+          id: txHash, hash: txHash, type: 'swap', walletAddress: address, timestamp: Date.now(),
+          fromToken: effTokenIn.symbol, fromAmount: amountIn,
+          toToken: effTokenOut.symbol, toAmount: amountOut,
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Swap failed';
       setError(/reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : msg);
@@ -174,7 +186,8 @@ export default function SwapPage() {
     }
   }, [effTokenIn, effTokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, universalWrite, sendTransaction]);
 
-  const canSwap = !!effTokenIn && !!effTokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite;
+  const insufficientBalance = !!amountIn && !!balanceIn && parseFloat(amountIn) > parseFloat(balanceIn.replace(/,/g, ''));
+  const canSwap = !!effTokenIn && !!effTokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite && !insufficientBalance;
 
   // ── Quote panel figures — all derived straight from the live LI.FI quote ──
   let priceLabel: string | null = null;
@@ -256,7 +269,11 @@ export default function SwapPage() {
                 />
               </div>
 
-              {quoteError && !quoting && (
+              {insufficientBalance ? (
+                <p style={{ fontSize: 12, color: '#DC2626', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5, fontWeight: 600 }}>
+                  <AlertTriangle size={12} /> Insufficient balance
+                </p>
+              ) : quoteError && !quoting && (
                 <p style={{ fontSize: 12, color: '#D97706', marginTop: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <AlertTriangle size={12} /> {quoteError}
                 </p>

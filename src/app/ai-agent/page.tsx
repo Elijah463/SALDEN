@@ -29,7 +29,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, ExternalLink, Copy } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Copy, Loader2 } from 'lucide-react';
 import { useWalletClient, usePublicClient } from 'wagmi';
 import { AgentLayout }           from '@/components/agent/AgentLayout';
 import ChatInterface             from '@/components/agent/ChatInterface';
@@ -578,7 +578,16 @@ export default function AIAgentPage() {
   }
 
   // ── Setup wizard (agent wallet provisioned, on-chain grants still needed) ──
-  if (activateResult && status !== 'active' && !bothDone) {
+  // BUG FIX: this used to also require `status !== 'active'` — but the
+  // on-chain grant verification effect above only ever sets activateResult
+  // once status IS 'active' (that's its own trigger condition). Keeping
+  // both meant the two conditions could never be true at the same time,
+  // so the resumed wizard (for an existing agent wallet missing one or
+  // both on-chain grants) could never actually render — it fell straight
+  // through to the chat interface every time, which is exactly what was
+  // reported. `!bothDone` alone is sufficient to avoid rendering this once
+  // both grants are confirmed done.
+  if (activateResult && !bothDone) {
     const ai    = activateResult.agentInfo;
     const grant = activateResult.grantRoleInstructions;
 
@@ -752,6 +761,30 @@ export default function AIAgentPage() {
           )}
         </div>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </AgentLayout>
+    );
+  }
+
+  // ── Verifying on-chain permissions ────────────────────────────────────────
+  // BUG FIX: without this explicit gate, there was a real window — between
+  // `status` becoming 'active' and the on-chain verification effect above
+  // resolving (two async readContract calls) — where NOTHING blocked
+  // rendering from falling straight through to ChatInterface below. Status
+  // being 'active' alone was previously treated as "safe to fall through
+  // to chat" by omission, since no other condition covered this specific
+  // gap. This is exactly the kind of window that could let a user reach
+  // the chat interface before permissions were confirmed granted (or
+  // confirmed missing, in which case the wizard should show instead) —
+  // never acceptable for a feature that moves real funds. This must be
+  // the last check before the ChatInterface return: it only clears once
+  // grantsChecked is true AND there's no pending wizard to show.
+  if (status === 'active' && !grantsChecked && !activateResult) {
+    return (
+      <AgentLayout title="AI Agent">
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 12 }}>
+          <Loader2 size={28} color="#4F46E5" style={{ animation: 'spin 0.8s linear infinite' }} />
+          <p style={{ fontSize: 14, color: '#64748B' }}>Verifying agent permissions…</p>
+        </div>
       </AgentLayout>
     );
   }

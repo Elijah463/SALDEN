@@ -4,7 +4,7 @@
  * Deposit options: From Other Wallet (QR + address), With Cards (soon), Via Bank Transfer (soon).
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Copy, CheckCircle2, CreditCard, Building2, Wallet } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -12,8 +12,31 @@ import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { copyToClipboard } from '@/lib/clipboard';
 
 function QRCode({ address }: { address: string }) {
-  // Simple SVG QR placeholder — in production integrate qrcode.react
+  // Real, scannable QR code (previously a hand-drawn decorative SVG that
+  // wasn't actually encoding the address at all — scanning it with any
+  // real QR reader would return nothing usable). Generated client-side via
+  // the `qrcode` package (pure JS, no native deps, MIT licensed, the
+  // standard choice for this — github.com/soldair/node-qrcode).
   const size = 200;
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError(false);
+    setDataUrl(null);
+    import('qrcode')
+      .then(QRCodeLib => QRCodeLib.toDataURL(address, {
+        width: (size - 32) * 2, // 2x for crisp rendering on high-DPI screens
+        margin: 1,
+        color: { dark: '#0F172A', light: '#FFFFFF' },
+        errorCorrectionLevel: 'M',
+      }))
+      .then(url => { if (!cancelled) setDataUrl(url); })
+      .catch(() => { if (!cancelled) setError(true); });
+    return () => { cancelled = true; };
+  }, [address]);
+
   return (
     <div style={{
       width: size, height: size, margin: '0 auto',
@@ -21,27 +44,16 @@ function QRCode({ address }: { address: string }) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexDirection: 'column', gap: 8, padding: 16,
     }}>
-      <svg width={size - 32} height={size - 32} viewBox="0 0 160 160">
-        {/* Top-left finder */}
-        <rect x="10" y="10" width="40" height="40" rx="4" fill="none" stroke="#4F46E5" strokeWidth="4"/>
-        <rect x="18" y="18" width="24" height="24" rx="2" fill="#4F46E5"/>
-        {/* Top-right finder */}
-        <rect x="110" y="10" width="40" height="40" rx="4" fill="none" stroke="#4F46E5" strokeWidth="4"/>
-        <rect x="118" y="18" width="24" height="24" rx="2" fill="#4F46E5"/>
-        {/* Bottom-left finder */}
-        <rect x="10" y="110" width="40" height="40" rx="4" fill="none" stroke="#4F46E5" strokeWidth="4"/>
-        <rect x="18" y="118" width="24" height="24" rx="2" fill="#4F46E5"/>
-        {/* Data dots (visual only) */}
-        {Array.from({ length: 64 }).map((_, i) => {
-          const seed = (parseInt(address.slice(2 + (i % 40), 4 + (i % 40)), 16) + i) % 3;
-          if (seed === 0) return null;
-          const col = (i % 8) * 10 + 60;
-          const row = Math.floor(i / 8) * 10 + 10;
-          if (col > 100 && row < 60) return null;
-          if (col < 60 && row > 100) return null;
-          return <rect key={i} x={col} y={row} width="8" height="8" rx="1.5" fill="#4F46E5" />;
-        })}
-      </svg>
+      {error ? (
+        <p style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center' }}>
+          Couldn&apos;t generate QR code — use the address below instead.
+        </p>
+      ) : dataUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={dataUrl} alt={`QR code for ${address}`} width={size - 32} height={size - 32} />
+      ) : (
+        <div style={{ width: size - 32, height: size - 32, background: '#F8FAFC', borderRadius: 8 }} />
+      )}
     </div>
   );
 }

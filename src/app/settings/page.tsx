@@ -112,9 +112,21 @@ export default function SettingsPage() {
   // page for every non-external-wallet login.
   const { address }      = useEffectiveAddress();
   const publicClient     = usePublicClient();
-  const { state, dispatch, addToast, syncData } = useApp();
+  const { state, dispatch, addToast, syncData, hydrateFromCache } = useApp();
   const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups, employees } = state;
   usePayrollSync({ registryClone, address, publicClient });
+
+  // BUG FIX: this page is the primary place users check/edit their company
+  // name and receipt email, so it should show whatever is already saved as
+  // fast and reliably as possible — straight from the local cache, not
+  // gated behind usePayrollSync's full flow (which needs registryClone AND
+  // publicClient ready before its own "instant local cache" step even
+  // starts). Runs as soon as the wallet address is known, independent of
+  // everything else.
+  useEffect(() => {
+    if (address) void hydrateFromCache(address);
+  }, [address, hydrateFromCache]);
+
   // Used for sync/anchor (profile + groups) below and by the shared
   // cached-sign hook — branches to a Circle SIGN_MESSAGE/PIN challenge for
   // social login, wagmi for an external wallet.
@@ -152,8 +164,8 @@ export default function SettingsPage() {
   const signMsg = canWrite ? sign : undefined;
 
   /** Sync current state to IPFS, then anchor the resulting CID Onchain. */
-  async function syncAndAnchor() {
-    const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+  async function syncAndAnchor(freshPayrollSetup?: PayrollSetup) {
+    const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg, payrollSetup: freshPayrollSetup });
     await anchorCid(cid);
   }
 
@@ -273,7 +285,7 @@ export default function SettingsPage() {
       };
       dispatch({ type: 'SET_PAYROLL_DATA', payload: { payrollSetup: updated } });
       dispatch({ type: 'SET_COMPANY_NAME', payload: updated.companyName });
-      await syncAndAnchor();
+      await syncAndAnchor(updated);
       setProfileSaveVersion(v => v + 1);
       addToast('Profile saved.', 'success');
     } catch { addToast('Failed to save profile.', 'error'); }
@@ -292,7 +304,7 @@ export default function SettingsPage() {
     setGroupError('');
     setGroupSaving(true);
     try {
-      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg, groups: next });
       await anchorCid(cid);
       addToast(`Group "${g}" created.`, 'success');
     } catch { addToast('Saved locally — sync failed.', 'warning'); }
@@ -304,7 +316,7 @@ export default function SettingsPage() {
     dispatch({ type: 'SET_GROUPS', payload: next });
     setGroupSaving(true);
     try {
-      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg });
+      const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg, groups: next });
       await anchorCid(cid);
       addToast(`Group "${g}" removed.`, 'success');
     } catch { addToast('Saved locally — sync failed.', 'warning'); }

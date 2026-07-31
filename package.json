@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "next":    "14.2.29",
+    "qrcode":  "^1.5.3",
     "react":   "18.3.1",
     "react-dom": "18.3.1",
 
@@ -23,7 +24,7 @@
     "@circle-fin/adapter-viem-v2":  "1.0.1",
     "@circle-fin/w3s-pw-web-sdk":   "1.1.11",
 
-    "@google/generative-ai": "0.21.0",
+    "@google/genai": "^2.13.0",
 
     "inngest": "4.5.1",
 
@@ -42,6 +43,7 @@
   },
   "devDependencies": {
     "@types/node":       "22.7.5",
+    "@types/qrcode":     "^1.5.5",
     "@types/react":      "18.3.11",
     "@types/react-dom":  "18.3.1",
     "@types/papaparse":  "5.3.14",

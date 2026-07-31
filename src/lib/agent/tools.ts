@@ -32,8 +32,15 @@ let _toolDeclarations: any[] | null = null;
 
 export async function getToolDeclarations() {
   if (_toolDeclarations) return _toolDeclarations;
-  const { SchemaType } = await import('@google/generative-ai');
-  const T = SchemaType as SchemaTypeEnum;
+  // Migrated from @google/generative-ai's SchemaType to @google/genai's Type
+  // — the old SDK is fully end-of-life (GitHub repo archived Dec 2025,
+  // support ended Aug 31 2025) and was never built or tested against
+  // Gemini 3.x models at all. Enum member names (OBJECT, STRING, ARRAY,
+  // NUMBER, BOOLEAN) are unchanged between the two, so only this import
+  // and the `T` alias assignment need to change — every other reference
+  // to T.OBJECT/T.STRING/etc. below stays exactly as it was.
+  const { Type } = await import('@google/genai');
+  const T = Type as SchemaTypeEnum;
 
   // Assign to variable FIRST, then cache, then return.
   // The previous version returned the array inline which made the cache

@@ -397,7 +397,7 @@ function EmployeeModal({
         <div style={{ display: 'flex', borderBottom: '1px solid #E2E8F0', marginBottom: 20 }}>
           {(['single', 'bulk'] as const).map(t => (
             <button key={t} onClick={() => { setTab(t); setErrors([]); setFileError(''); }}
-              style={{ flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: tab === t ? '#14B8A6' : '#64748B', borderBottom: tab === t ? '2px solid #14B8A6' : '2px solid transparent', fontFamily: 'inherit' }}>
+              style={{ flex: 1, padding: '10px 0', fontSize: 13, fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', color: tab === t ? '#4F46E5' : '#64748B', borderBottom: tab === t ? '2px solid #4F46E5' : '2px solid transparent', fontFamily: 'inherit' }}>
               {t === 'single' ? 'Single Entry' : 'Bulk Import (CSV / JSON)'}
             </button>
           ))}

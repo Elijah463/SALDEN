@@ -16,7 +16,6 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
-import { ComplianceIllustration } from '@/components/shared/Illustrations';
 import { CONTRACTS, arcTestnet, addressLink } from '@/lib/contracts/config';
 import { ENTERPRISE_PAYROLL_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { isValidEthAddress, truncAddr } from '@/lib/validation';
@@ -94,13 +93,13 @@ export default function CompliancePage() {
 
     // Initialise all checks as loading
     const initial: ComplianceCheck[] = [
-      { id: 'wallet',     label: 'Wallet Connected',           detail: '',  status: 'loading' },
-      { id: 'contract',   label: 'Payroll Contract Health',    detail: '',  status: 'loading' },
-      { id: 'registry',   label: 'Registry Sync',              detail: '',  status: 'loading' },
-      { id: 'ofac',       label: 'OFAC / Sanctions Screen',    detail: '',  status: 'loading' },
-      { id: 'addresses',  label: 'Employee Address Validity',  detail: '',  status: 'loading' },
-      { id: 'duplicates', label: 'Duplicate Wallet Detection', detail: '',  status: 'loading' },
-      { id: 'balances',   label: 'Payroll Contract Balance',   detail: '',  status: 'loading' },
+      { id: 'wallet',     label: 'Wallet Connected',                       detail: '',  status: 'loading' },
+      { id: 'ofac',       label: 'Global Sanctions Compliance Screening',  detail: '',  status: 'loading' },
+      { id: 'contract',   label: 'Payroll Contract Health',                detail: '',  status: 'loading' },
+      { id: 'registry',   label: 'Registry Sync',                         detail: '',  status: 'loading' },
+      { id: 'addresses',  label: 'Employee Address Validity',             detail: '',  status: 'loading' },
+      { id: 'duplicates', label: 'Duplicate Wallet Detection',            detail: '',  status: 'loading' },
+      { id: 'balances',   label: 'Payroll Contract Balance',              detail: '',  status: 'loading' },
     ];
     setChecks(initial);
 
@@ -299,15 +298,12 @@ export default function CompliancePage() {
           </div>
         </div>
 
-        {/* Score + illustration row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 20 }}>
-
-          {/* Score card */}
-          <div style={{
-            background: '#fff', border: '1px solid #E2E8F0',
-            borderRadius: 16, padding: '28px 28px',
-            display: 'flex', alignItems: 'center', gap: 28,
-          }}>
+        {/* Score card */}
+        <div style={{
+          background: '#fff', border: '1px solid #E2E8F0',
+          borderRadius: 16, padding: '28px 28px',
+          display: 'flex', alignItems: 'center', gap: 28,
+        }}>
             {/* Circular score */}
             <div style={{ position: 'relative', width: 100, height: 100, flexShrink: 0 }}>
               <svg width="100" height="100" viewBox="0 0 100 100">
@@ -360,16 +356,6 @@ export default function CompliancePage() {
               </div>
             </div>
           </div>
-
-          {/* Illustration */}
-          <div style={{
-            background: '#fff', border: '1px solid #E2E8F0',
-            borderRadius: 16, padding: 20,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <ComplianceIllustration width={220} height={175} />
-          </div>
-        </div>
 
         {/* Checks list */}
         <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, overflow: 'hidden' }}>

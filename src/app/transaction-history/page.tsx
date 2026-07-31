@@ -15,8 +15,8 @@ import {
 } from 'recharts';
 import {
   ExternalLink, RefreshCw,
-  TrendingUp, Users, DollarSign, Loader2,
-  CheckCircle2, AlertCircle, Clock, Copy, XCircle, Search,
+  TrendingUp, DollarSign, Loader2,
+  CheckCircle2, AlertCircle, Clock, Copy, XCircle, Search, Wallet, Lock,
 } from 'lucide-react';
 import { AppLayout }           from '@/components/layout/AppLayout';
 import { Button }              from '@/components/shared/Button';
@@ -111,9 +111,9 @@ function ReceiptStatus({ status, onRetry, retrying, notSupported }: {
   );
 }
 
-function StatCard({ label, value, icon, color = '#4F46E5' }: { label: string; value: string; icon: React.ReactNode; color?: string }) {
-  return (
-    <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 14, padding: '18px 20px' }}>
+function StatCard({ label, value, icon, color = '#4F46E5', href }: { label: string; value: string; icon: React.ReactNode; color?: string; href?: string }) {
+  const content = (
+    <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 14, padding: '18px 20px', cursor: href ? 'pointer' : 'default' }}>
       <div style={{ width: 36, height: 36, borderRadius: 9, background: color + '18', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10 }}>
         {icon}
       </div>
@@ -121,6 +121,7 @@ function StatCard({ label, value, icon, color = '#4F46E5' }: { label: string; va
       <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{label}</div>
     </div>
   );
+  return href ? <a href={href} style={{ textDecoration: 'none' }}>{content}</a> : content;
 }
 
 // ── Receipt card ───────────────────────────────────────────────────────────────
@@ -235,9 +236,23 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
 export default function TransactionHistoryPage() {
   const { address } = useEffectiveAddress();
   const publicClient = usePublicClient();
-  const { state, saveTxRecord } = useApp();
+  const { state, saveTxRecord, hydrateFromCache } = useApp();
   const { payrollSetup, registryClone } = state;
   usePayrollSync({ registryClone, address, publicClient });
+
+  // BUG FIX: hasEmail (below, gates the "Resend" button on each receipt)
+  // used to depend entirely on usePayrollSync's full flow finishing —
+  // which needs registryClone AND publicClient ready before it even starts
+  // its own "instant local cache" step. On a first visit straight to this
+  // page (not through Settings or Dashboard first), that could leave
+  // hasEmail false — and the Resend button disabled — for a real email
+  // that was already sitting in the local cache the whole time. This
+  // reads that same cache directly, as soon as the wallet address is
+  // known, with no other dependency.
+  useEffect(() => {
+    if (address) void hydrateFromCache(address);
+  }, [address, hydrateFromCache]);
+
   const [txs,      setTxs]      = useState<TxRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [resending, setResending] = useState<string | null>(null);
@@ -303,7 +318,6 @@ export default function TransactionHistoryPage() {
   const dynamicTicks = getDynamicTicks(maxVolume);
 
   const totalVolume     = txs.reduce((s, t) => s + parseFloat(t.amount.replace(/,/g, '') || '0'), 0);
-  const totalRecipients = txs.reduce((s, t) => s + t.recipientCount, 0);
 
   async function handleResendReceipt(tx: TxRecord) {
     const receiptEmail = payrollSetup?.email ?? null;
@@ -369,7 +383,8 @@ export default function TransactionHistoryPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14 }}>
               <StatCard label="Total Volume" value={`${totalVolume.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`} icon={<DollarSign size={18} color="#4F46E5" />} />
               <StatCard label="Transactions" value={txs.length.toString()} icon={<TrendingUp size={18} color="#14B8A6" />} color="#14B8A6" />
-              <StatCard label="Recipients Paid" value={totalRecipients.toString()} icon={<Users size={18} color="#059669" />} color="#059669" />
+              <StatCard label="Wallet Activity" value="Swaps · Bridges · Deposits" icon={<Wallet size={18} color="#059669" />} color="#059669" href="/transaction-history/wallet-activity" />
+              <StatCard label="Private Transactions" value="Coming soon" icon={<Lock size={18} color="#94A3B8" />} color="#94A3B8" href="/transaction-history/private-transactions" />
             </div>
 
             {/* Area chart — dynamic range from first tx */}

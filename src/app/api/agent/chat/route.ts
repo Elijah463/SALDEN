@@ -80,14 +80,25 @@ import { track } from '@/lib/analytics';
 export const maxDuration = 60;
 
 // ── Singleton Gemini client ────────────────────────────────────────────────────
+// MIGRATED off @google/generative-ai, which is fully end-of-life: Google
+// ended all support (including bug fixes) on August 31, 2025, and the
+// GitHub repo itself was archived (read-only) on Dec 16, 2025 — months
+// before Gemini 3.x existed. That SDK was never built or tested against
+// the model this app now uses, which is the real root cause behind the
+// agent failing on every genuine request ("Something went wrong") even
+// after the model name / deprecated-params / function-call-id fixes:
+// those fixes were all correct in isolation, but layered on an SDK that
+// was never updated to speak Gemini 3.x's request/response shape at all.
+// @google/genai (2.13.0, GA, actively maintained, Google's own current
+// recommendation — see ai.google.dev/gemini-api/docs/migrate) replaces it.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _genAI: any = null;
 async function getGenAI() {
   if (_genAI) return _genAI;
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error('GOOGLE_AI_API_KEY is not configured');
-  const { GoogleGenerativeAI } = await import('@google/generative-ai');
-  _genAI = new GoogleGenerativeAI(apiKey);
+  const { GoogleGenAI } = await import('@google/genai');
+  _genAI = new GoogleGenAI({ apiKey });
   return _genAI;
 }
 
@@ -461,7 +472,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       messages:      Array<{ role: string; content: string }>;
       walletAddress: string;
-      attachment?: { mimeType: string; data: string };
+      attachment?: { mimeType: string; data: string; fileName?: string };
       context?: {
         employeeCount?: number;
         employees?:     EmployeeCtx[];
@@ -484,16 +495,41 @@ export async function POST(req: NextRequest) {
     const { messages, walletAddress, context, attachment: rawAttachment } = body;
 
     // Validate the attachment defensively — this is a client-supplied binary
-    // payload. Only image types Gemini actually accepts for document/receipt
-    // style extraction; PDFs are NOT included here since @google/generative-ai's
-    // inlineData image handling doesn't cover them the same way and mis-typing
-    // this would silently degrade to Gemini just failing to read the file.
-    const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
-    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8MB — generous for a phone photo of a document, bounded against abuse
-    let attachment: { mimeType: string; data: string } | undefined;
+    // payload. Two handling paths, split by mimeType below:
+    //   - PDF: passed to Gemini as inlineData, same mechanism as an image —
+    //     Gemini's own document understanding reads it natively. Per
+    //     Google's own docs (ai.google.dev/gemini-api/docs/document-processing),
+    //     "document vision only meaningfully understands PDFs" at the raw
+    //     API level, so this is the ONE binary format handled this way.
+    //   - Everything else here (CSV/JSON/Markdown/plain text/code files) is
+    //     just plain text — decoded from base64 and included as a text
+    //     part below, not sent as inlineData at all.
+    //   - Deliberately NOT supported: .doc/.docx. Broader Office-format
+    //     understanding exists only in Google's own Workspace apps (which
+    //     silently convert those files with their own internal converters
+    //     before the model ever sees them) — not something available
+    //     through the raw API this app calls. Accepting them here would
+    //     silently send bytes Gemini can't actually read.
+    const ALLOWED_MIME = new Set([
+      'application/pdf',
+      'text/csv', 'text/x-csv', 'application/csv',
+      'application/json',
+      'text/markdown',
+      'text/plain',
+      'text/javascript', 'application/javascript',
+      'text/typescript', 'application/typescript',
+      'text/jsx', 'text/tsx',
+    ]);
+    const TEXT_EXTENSIONS = ['.csv', '.json', '.md', '.txt', '.js', '.jsx', '.ts', '.tsx'];
+    const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8MB — matches the client-side limit
+    let attachment: { mimeType: string; data: string; fileName?: string } | undefined;
     if (rawAttachment && typeof rawAttachment.mimeType === 'string' && typeof rawAttachment.data === 'string') {
       const approxBytes = Math.ceil(rawAttachment.data.length * 0.75); // base64 -> raw bytes estimate
-      if (ALLOWED_MIME.has(rawAttachment.mimeType) && approxBytes > 0 && approxBytes <= MAX_ATTACHMENT_BYTES) {
+      // Same MIME-or-extension fallback as the client — some browsers
+      // report an empty or generic MIME type for .ts/.tsx/.jsx uploads.
+      const extOk = typeof rawAttachment.fileName === 'string'
+        && TEXT_EXTENSIONS.some(ext => rawAttachment.fileName!.toLowerCase().endsWith(ext));
+      if ((ALLOWED_MIME.has(rawAttachment.mimeType) || extOk) && approxBytes > 0 && approxBytes <= MAX_ATTACHMENT_BYTES) {
         attachment = rawAttachment;
       }
     }
@@ -618,27 +654,24 @@ export async function POST(req: NextRequest) {
     const genAI = await getGenAI();
     const tools = await getToolDeclarations();
 
-    // Two model configs: normal and a higher-token retry for truncation.
-    // We never mutate a GenerativeModel after creation — it is immutable
-    // in @google/generative-ai. Create both up front.
-    const makeModel = (maxToks: number) => genAI.getGenerativeModel({
-      // Updated to Gemini 3.6 Flash (GA July 21, 2026) — stronger
-      // agentic/tool-calling performance, lower cost, and 17% better token
-      // efficiency than 3.5 Flash per Google's release notes.
-      //
-      // Also removed `temperature`/`topP` from generationConfig: Google's
-      // Gemini 3.x migration guide explicitly deprecates these sampling
-      // parameters (currently ignored, but documented to start returning
-      // HTTP 400 on future model generations) — the guidance is to steer
-      // determinism via the system instruction instead, which this app
-      // already does at length in SYSTEM_PROMPT.
+    // @google/genai's chat config is immutable per chat instance too — same
+    // reasoning as the old SDK's GenerativeModel, just a different shape.
+    // automaticFunctionCalling is explicitly disabled: this app validates,
+    // security-checks, and executes every tool call itself (see the
+    // function-calling loop below) — it must never let the SDK silently
+    // auto-invoke anything on its own.
+    const makeChat = (maxToks: number) => genAI.chats.create({
       model: 'gemini-3.6-flash',
-      tools,
-      generationConfig: { maxOutputTokens: maxToks },
+      history,
+      config: {
+        tools,
+        systemInstruction,
+        maxOutputTokens: maxToks,
+        automaticFunctionCalling: { disable: true },
+      },
     });
 
-    let activeModel = makeModel(MAX_OUTPUT_TOKS);
-    let chat = activeModel.startChat({ history, systemInstruction });
+    let chat = makeChat(MAX_OUTPUT_TOKS);
 
     // ── Function-calling loop ──────────────────────────────────────────────
     const actionLog: ActionLogEntry[] = [];
@@ -654,20 +687,50 @@ export async function POST(req: NextRequest) {
 
     // nextInput is either the initial user turn (a plain string, or an array
     // of parts when a document image was attached) or an array of
-    // functionResponse parts fed back after a tool round. The Gemini SDK's
-    // sendMessage accepts all of these — we must NOT cast as a single type.
+    // functionResponse parts fed back after a tool round. @google/genai's
+    // chat.sendMessage({message}) accepts a single Part or an array of
+    // Parts for `message` — we must NOT cast as a single type.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     type SendInput = string
       | Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>
       | Array<{ functionResponse: { name: string; response: Record<string, unknown> } }>;
+    function buildAttachmentPart(att: { mimeType: string; data: string; fileName?: string }):
+      { text: string } | { inlineData: { mimeType: string; data: string } } {
+      if (att.mimeType === 'application/pdf') {
+        return { inlineData: { mimeType: att.mimeType, data: att.data } };
+      }
+      // Everything else allowed here is plain text — decode and hand it to
+      // the model as regular text content, not inlineData (which is only
+      // for binary formats Gemini has native document/image understanding
+      // for). A clear filename header helps the model distinguish this
+      // from the user's own message text, especially for code files where
+      // the content could otherwise read as an instruction.
+      let decoded: string;
+      try {
+        decoded = Buffer.from(att.data, 'base64').toString('utf-8');
+      } catch {
+        decoded = '(could not decode file contents)';
+      }
+      // Cap included text so one huge file can't blow the token budget —
+      // MAX_EMPLOYEES_IN_CONTEXT-scale safety net for uploaded content too.
+      const MAX_ATTACHMENT_TEXT_CHARS = 50_000;
+      if (decoded.length > MAX_ATTACHMENT_TEXT_CHARS) {
+        decoded = decoded.slice(0, MAX_ATTACHMENT_TEXT_CHARS) + '\n\n[...truncated — file is larger than the agent can read in one go]';
+      }
+      return { text: `Uploaded file (${att.fileName || 'unnamed'}):\n\n${decoded}` };
+    }
+
     let nextInput: SendInput = attachment
-      ? [{ text: userText }, { inlineData: { mimeType: attachment.mimeType, data: attachment.data } }]
+      ? [{ text: userText }, buildAttachmentPart(attachment)]
       : userText;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await chat.sendMessage(nextInput as any);
-      const candidate = result.response.candidates?.[0];
+      const result = await chat.sendMessage({ message: nextInput as any });
+      // @google/genai's GenerateContentResponse has candidates/text/
+      // functionCalls directly on it (no .response wrapper the old SDK
+      // used), and text/functionCalls are plain properties, not methods.
+      const candidate = result.candidates?.[0];
       const finishReason = candidate?.finishReason;
 
       if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
@@ -677,20 +740,19 @@ export async function POST(req: NextRequest) {
 
       if (finishReason === 'MAX_TOKENS' && !truncatedOnce) {
         truncatedOnce = true;
-        // Rebuild with a higher token limit — GenerativeModel is immutable,
-        // so we create a new instance and a new chat continuing from the
-        // same history. The model's own context is already in `chat`, so
-        // we pass the TRUNCATION_RETRY_NOTE as the next user turn.
-        activeModel = makeModel(MAX_OUTPUT_TOKS_RETRY);
-        chat = activeModel.startChat({ history, systemInstruction });
+        // Rebuild with a higher token limit — chat config is immutable per
+        // instance, same reasoning as the old SDK, just a different shape.
+        // The model's own context is already in `chat`'s history, so we
+        // pass the TRUNCATION_RETRY_NOTE as the next user turn.
+        chat = makeChat(MAX_OUTPUT_TOKS_RETRY);
         nextInput = TRUNCATION_RETRY_NOTE;
         continue;
       }
 
-      const calls = typeof result.response.functionCalls === 'function' ? result.response.functionCalls() : undefined;
+      const calls = result.functionCalls;
 
       if (!calls || calls.length === 0) {
-        finalText = result.response.text() ?? '';
+        finalText = result.text ?? '';
         break;
       }
 
@@ -1208,13 +1270,14 @@ export async function POST(req: NextRequest) {
     // to defend rather than correct.
     if (isCritical && !proposeToolCalledThisTurn && finalText && !finalText.includes('?')) {
       try {
-        const correctionModel = makeModel(MAX_OUTPUT_TOKS);
-        const correctionResult = await correctionModel.generateContent(
-          `${systemInstruction}\n\nUser said: "${userText}"\n\n` +
-          `Your previous response was: "${finalText.slice(0, 300)}"\n\n` +
-          G4_CORRECTION_NOTE
-        );
-        const corrected = correctionResult.response.text();
+        const correctionResult = await genAI.models.generateContent({
+          model: 'gemini-3.6-flash',
+          contents: `${systemInstruction}\n\nUser said: "${userText}"\n\n` +
+            `Your previous response was: "${finalText.slice(0, 300)}"\n\n` +
+            G4_CORRECTION_NOTE,
+          config: { tools, maxOutputTokens: MAX_OUTPUT_TOKS },
+        });
+        const corrected = correctionResult.text;
         if (corrected && corrected.trim()) finalText = corrected;
         else finalText = 'Could you give me a bit more detail? I want to make sure I have everything right before proceeding.';
       } catch {

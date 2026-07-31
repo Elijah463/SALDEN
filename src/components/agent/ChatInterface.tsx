@@ -23,6 +23,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { FileText } from 'lucide-react';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useApp }    from '@/context/AppContext';
 import ChatMessage   from '@/components/agent/ChatMessage';
@@ -266,7 +267,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   const [isLoading,  setIsLoading]  = useState(false);
   const [error,      setError]      = useState<string | null>(null);
   const [dailyCount, setDailyCount] = useState(0);
-  const [pendingAttachment, setPendingAttachment] = useState<{ mimeType: string; data: string; previewUrl: string } | null>(null);
+  const [pendingAttachment, setPendingAttachment] = useState<{ mimeType: string; data: string; fileName: string; previewUrl: string | null } | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
   const endRef      = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -316,13 +317,51 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     clearAttachment();
   }
 
-  const ALLOWED_ATTACHMENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+  // PDF: Gemini's own document understanding reads this natively via
+  // inlineData — same mechanism as images, just a different MIME type.
+  // Everything else here is plain text (code files, CSV, JSON, Markdown)
+  // — no special "document understanding" needed, it's just extracted as
+  // text and included in the prompt like any other text.
+  //
+  // Deliberately NOT included: .doc/.docx. Per Google's own Gemini API
+  // docs (ai.google.dev/gemini-api/docs/document-processing): "document
+  // vision only meaningfully understands PDFs." Broader Office-format
+  // support (DOCX, XLSX, PPTX) exists in Google's own Workspace apps,
+  // which silently convert those files with Google's internal Docs/Sheets
+  // converters before the model ever sees them — that conversion isn't
+  // part of the raw Gemini API this app calls, so passing a .docx file's
+  // raw bytes here would not be reliably understood. Rather than accept
+  // it and silently produce garbage, it's excluded until there's a real,
+  // tested conversion step to pair with it.
+  const ALLOWED_ATTACHMENT_TYPES = [
+    'application/pdf',
+    'text/csv', 'text/plain', 'text/markdown',
+    'application/json',
+    'text/javascript', 'application/javascript',
+    'text/typescript', 'application/typescript',
+    'text/jsx', 'text/tsx',
+    'text/x-csv', 'application/csv', // some browsers/OSes report CSV under these instead of text/csv
+  ];
+  // Extensions the OS file picker should filter to — belt-and-suspenders
+  // alongside the MIME check above, since some browsers report an empty
+  // or generic `file.type` for less common extensions (.ts/.tsx/.jsx in
+  // particular are inconsistently recognized).
+  const ALLOWED_ATTACHMENT_EXTENSIONS = ['.pdf', '.csv', '.js', '.jsx', '.ts', '.tsx', '.txt', '.json', '.md'];
   const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // matches the server's own limit — reject early with a clear message instead of a vague server error
 
   function clearAttachment() {
-    setPendingAttachment(prev => { if (prev) URL.revokeObjectURL(prev.previewUrl); return null; });
+    setPendingAttachment(prev => { if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl); return null; });
     setAttachError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function isAllowedAttachment(file: File): boolean {
+    if (ALLOWED_ATTACHMENT_TYPES.includes(file.type)) return true;
+    // Fall back to extension when the browser didn't report a useful MIME
+    // type at all (common for .ts/.tsx/.jsx, which have no standardized
+    // MIME type and are frequently reported as '' or 'application/octet-stream').
+    const lower = file.name.toLowerCase();
+    return ALLOWED_ATTACHMENT_EXTENSIONS.some(ext => lower.endsWith(ext));
   }
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -330,12 +369,12 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     if (!file) return;
     setAttachError(null);
 
-    if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
-      setAttachError('Only JPEG, PNG, or WebP images are supported.');
+    if (!isAllowedAttachment(file)) {
+      setAttachError('Only PDF, CSV, JSON, Markdown, plain text, or code files (.js/.jsx/.ts/.tsx) are supported.');
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      setAttachError('Image is too large (max 8MB).');
+      setAttachError('File is too large (max 8MB).');
       return;
     }
 
@@ -343,13 +382,25 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     reader.onload = () => {
       const result = reader.result as string;
       const base64 = result.split(',')[1] ?? '';
-      setPendingAttachment(prev => { if (prev) URL.revokeObjectURL(prev.previewUrl); return { mimeType: file.type, data: base64, previewUrl: URL.createObjectURL(file) }; });
+      // None of the allowed types here (PDF, CSV, code, text, JSON, MD) are
+      // things a browser <img> tag can actually render as a visual preview
+      // — that only applies to raster images, which are deliberately not
+      // in the allowed list anymore. Every attachment shows as a file chip.
+      setPendingAttachment(prev => {
+        if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
+        return {
+          mimeType: file.type || 'text/plain', // fall back for browsers that report '' for .ts/.tsx/.jsx
+          data: base64,
+          fileName: file.name,
+          previewUrl: null,
+        };
+      });
     };
     reader.onerror = () => setAttachError('Could not read that file — please try again.');
     reader.readAsDataURL(file);
   }
 
-  const send = useCallback(async (text: string, silent = false, attachment?: { mimeType: string; data: string }) => {
+  const send = useCallback(async (text: string, silent = false, attachment?: { mimeType: string; data: string; fileName?: string }) => {
     // Silent sends (confirmation events from card callbacks) must never be
     // dropped by the isLoading guard — the AI needs to know what happened.
     if ((!text.trim() && !attachment) || (isLoading && !silent)) return;
@@ -366,7 +417,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
     if (messages.length >= MAX_CONV_MSGS && !silent) setMessages([]);
 
-    const effectiveText = text.trim() || (attachment ? 'Please extract the employee data from this document.' : '');
+    const effectiveText = text.trim() || (attachment ? `Please extract the relevant data from this file${attachment.fileName ? ` (${attachment.fileName})` : ''}.` : '');
 
     const userMsg: Message = {
       id: crypto.randomUUID(), role: 'user',
@@ -791,7 +842,20 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
       {pendingAttachment && (
         <div style={{ margin: '0 16px 8px', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src={pendingAttachment.previewUrl} alt="Attached document preview" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid #E2E8F0' }} />
+          {pendingAttachment.previewUrl ? (
+            <img src={pendingAttachment.previewUrl} alt="Attached file preview" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 8, border: '1px solid #E2E8F0' }} />
+          ) : (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+              borderRadius: 8, border: '1px solid #E2E8F0', background: '#F8FAFC',
+              maxWidth: 220, overflow: 'hidden',
+            }}>
+              <FileText size={16} color="#4F46E5" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pendingAttachment.fileName}
+              </span>
+            </div>
+          )}
           <button onClick={clearAttachment} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', fontSize: 12, marginLeft: 'auto' }}>Remove</button>
         </div>
       )}
@@ -801,17 +865,16 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         <input
           ref={fileInputRef}
           type="file"
-          // A MIME-only accept list (the old value here) is what makes many
-          // mobile browsers skip the general file picker and deep-link
-          // straight into the Photos/gallery app, since they read it as
-          // "this is a photo picker." Including file extensions alongside
-          // the MIME types is the standard mitigation — it reads as a
-          // generic "pick a file" request, so the OS shows its normal file
-          // browser (which still offers Photos as one of several sources,
-          // rather than forcing it). The real type/size gate is still
-          // handleFileSelect's own check against ALLOWED_ATTACHMENT_TYPES
-          // below, so this is safe to broaden.
-          accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+          // No image MIME types here anymore at all — the previous gallery-
+          // jump issue was specifically caused by an image-only accept list
+          // making mobile browsers treat this as a photo picker. With only
+          // document/code/data types now, there's nothing for the OS to
+          // read as "this wants a photo," so it should show the normal
+          // file browser instead. Both MIME types and extensions are
+          // listed for the same reason as before: some extensions
+          // (.ts/.tsx/.jsx especially) don't have a standardized MIME type
+          // and are inconsistently reported by different browsers/OSes.
+          accept="application/pdf,.pdf,text/csv,.csv,application/json,.json,text/markdown,.md,text/plain,.txt,.js,.jsx,.ts,.tsx"
           onChange={handleFileSelect}
           style={{ display: 'none' }}
         />
@@ -841,7 +904,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           style={{ flex: 1, resize: 'none', border: '1px solid #E2E8F0', borderRadius: 12, padding: '11px 16px', fontSize: 14, fontFamily: 'inherit', color: '#0F172A', outline: 'none', background: isBlocked ? '#F8F9FA' : '#F8FAFC', lineHeight: 1.5, maxHeight: 200, transition: 'border-color 0.15s, background 0.15s' }}
         />
         <button
-          onClick={() => { const att = pendingAttachment ? { mimeType: pendingAttachment.mimeType, data: pendingAttachment.data } : undefined; send(input, false, att); clearAttachment(); }}
+          onClick={() => { const att = pendingAttachment ? { mimeType: pendingAttachment.mimeType, data: pendingAttachment.data, fileName: pendingAttachment.fileName } : undefined; send(input, false, att); clearAttachment(); }}
           disabled={isLoading || (!input.trim() && !pendingAttachment) || isBlocked}
           style={{ width: 40, height: 40, borderRadius: 10, background: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? '#E2E8F0' : '#14B8A6', border: 'none', cursor: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >

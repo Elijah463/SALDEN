@@ -337,6 +337,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const syncData = useCallback(async (opts: {
     employees?:    Employee[];
+    // BUG FIX: without this, a caller that dispatches a payrollSetup
+    // update and then immediately calls syncData (same synchronous tick,
+    // no render in between — exactly what handleSaveProfile in
+    // settings/page.tsx does) would have this function read
+    // stateRef.current.payrollSetup, which is still the PREVIOUS value:
+    // stateRef.current is only updated during a render pass (see
+    // `stateRef.current = state` above), and dispatch() doesn't force one
+    // synchronously. The result was a real, consistently-reproducible bug
+    // — every profile save silently persisted the company name/email from
+    // BEFORE the save, not the one just typed, which is exactly why it
+    // looked "forgotten" on refresh (the correct new value was never
+    // actually the one written to IPFS/cache in the first place). Same
+    // fix pattern the `employees` param above already used — just never
+    // extended to payrollSetup.
+    payrollSetup?: PayrollSetup;
+    groups?:       string[];
     walletAddress: string;
     signMessage?:  (msg: string) => Promise<string>;
     previousCid?:  string;
@@ -348,9 +364,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const employees  = opts.employees ?? s.employees;
       const rawPayload = {
-        setup:         s.payrollSetup,
+        setup:         opts.payrollSetup ?? s.payrollSetup,
         employees,
-        groups:        s.groups,
+        groups:        opts.groups ?? s.groups,
         tokenRegistry: s.tokenRegistry,  // token names persist to IPFS
       };
 

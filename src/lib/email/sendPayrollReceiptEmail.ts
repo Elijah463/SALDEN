@@ -73,10 +73,22 @@ function buildEmailHtml(input: PayrollReceiptEmailInput): string {
 
   return `
   <div style="font-family: 'DM Sans', Arial, sans-serif; max-width: 540px; margin: 0 auto; color: #0F172A;">
-    <div style="padding: 24px 0; border-bottom: 2px solid #4F46E5; display: flex; align-items: center; gap: 10px;">
-      <img src="${LOGO_URL}" alt="Salden" height="56" style="height: 56px; width: auto; display: inline-block; vertical-align: middle;" />
-      <span style="font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.02em; vertical-align: middle;">SALDEN</span>
-    </div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width: 100%; border-collapse: collapse;">
+      <tr>
+        <td style="padding: 24px 0; border-bottom: 2px solid #4F46E5;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="vertical-align: middle; padding-right: 10px;">
+                <img src="${LOGO_URL}" alt="Salden" height="56" style="height: 56px; width: auto; display: block;" />
+              </td>
+              <td style="vertical-align: middle;">
+                <span style="font-size: 20px; font-weight: 800; color: #4F46E5; letter-spacing: 0.02em;">SALDEN</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
     <div style="padding: 24px 0;">
       <h2 style="font-size: 18px; font-weight: 700; color: #0F172A; margin: 0 0 12px;">Payroll Receipt — ${ref}</h2>
       <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px;">${summary}</p>

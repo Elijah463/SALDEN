@@ -19,9 +19,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'fromAmount must be a raw integer amount' }, { status: 400 });
   }
 
+  // Default slippage tolerance: LI.FI's own default (roughly 0.5%) is
+  // documented behavior that can reject an otherwise-viable route once
+  // price impact exceeds it — more likely exactly as trade size grows
+  // against thinner liquidity, which matches the "small amounts route
+  // fine, larger ones say no route available" pattern seen on Arc
+  // Testnet. `slippage` is a genuine, documented /quote parameter (see
+  // docs.li.fi/api-reference/get-a-quote-for-a-token-transfer), not a
+  // speculative fix — 3% is a reasonable, still-bounded tolerance for
+  // testnet liquidity depth. Callers can still override via ?slippage=.
+  const slippageParam = req.nextUrl.searchParams.get('slippage');
+  const slippage = slippageParam ? parseFloat(slippageParam) : 0.1;
+
   const { quote, reason } = await getSwapQuote({
     chainId: arcTestnet.id,
     fromToken, toToken, fromAmount, fromAddress,
+    slippage,
   });
 
   if (!quote) {

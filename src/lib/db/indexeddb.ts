@@ -42,7 +42,34 @@ export interface PayrollCacheEntry {
 }
 
 const DB_NAME    = 'salden-db';
-const DB_VERSION = 4;             // bumped: adds payrollCache + deviceKey stores
+const DB_VERSION = 5;             // bumped: adds walletActivity store
+
+/**
+ * Swap / Bridge / incoming-Deposit activity — deliberately LOCAL-ONLY,
+ * unlike TxRecord (which is payroll-specific and this app treats as the
+ * "real" transaction history). This does not sync anywhere (no IPFS, no
+ * KV, no cross-device sync) — per explicit product decision, it's fine if
+ * a different device/browser doesn't show the same activity.
+ */
+export interface WalletActivityRecord {
+  id: string;              // txHash (deposits: `${txHash}-${logIndex}` in case multiple tokens move in one tx)
+  hash: string;
+  type: 'swap' | 'bridge' | 'deposit';
+  walletAddress: string;   // owner — indexed, so this scales fine per-wallet
+  timestamp: number;
+  // swap
+  fromToken?:  string;
+  fromAmount?: string;
+  toToken?:    string;
+  toAmount?:   string;
+  // bridge
+  fromChain?: string;      // display name, e.g. "Ethereum Sepolia"
+  toChain?:   string;      // display name, e.g. "Arc"
+  token?:     string;
+  amount?:    string;
+  // deposit (received from another wallet)
+  fromAddress?: string;
+}
 
 export interface TxRecord {
   id: string;            // txHash
@@ -171,6 +198,12 @@ async function getDB(): Promise<IDBPDatabase> {
       // v4 — device-local key used to encrypt payrollCache entries at rest.
       if (!database.objectStoreNames.contains('deviceKey')) {
         database.createObjectStore('deviceKey', { keyPath: 'id' });
+      }
+      // v5 — Swap/Bridge/Deposit activity, local-only (see WalletActivityRecord).
+      if (!database.objectStoreNames.contains('walletActivity')) {
+        const activityStore = database.createObjectStore('walletActivity', { keyPath: 'id' });
+        activityStore.createIndex('by-wallet', 'walletAddress');
+        activityStore.createIndex('by-timestamp', 'timestamp');
       }
     },
   }).then(instance => {
@@ -346,4 +379,30 @@ export async function getOrCreateDeviceKey(): Promise<CryptoKey> {
   })();
 
   return _deviceKeyPromise;
+}
+
+// ── Wallet activity (Swap/Bridge/Deposit) — local-only ───────────────────────
+
+export async function saveWalletActivity(record: WalletActivityRecord): Promise<void> {
+  try {
+    const database = await getDB();
+    // Normalized consistently with the read side below (getWalletActivity
+    // queries the by-wallet index with .toLowerCase() too) — without this,
+    // a record saved with checksummed casing would silently never be
+    // found by the lowercase-keyed query.
+    await database.put('walletActivity', { ...record, walletAddress: record.walletAddress.toLowerCase() });
+  } catch (err) {
+    console.error('[IndexedDB] saveWalletActivity error:', err);
+  }
+}
+
+export async function getWalletActivity(walletAddress: string): Promise<WalletActivityRecord[]> {
+  try {
+    const database = await getDB();
+    const all = await database.getAllFromIndex('walletActivity', 'by-wallet', walletAddress.toLowerCase());
+    return all.sort((a, b) => b.timestamp - a.timestamp);
+  } catch (err) {
+    console.error('[IndexedDB] getWalletActivity error:', err);
+    return [];
+  }
 }

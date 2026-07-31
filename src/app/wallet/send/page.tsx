@@ -206,8 +206,12 @@ export default function SendPage() {
     <NetworkGuard>
       <AppLayout title="Send">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <button onClick={() => router.back()} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
-            <ArrowLeft size={16} /> Back
+          <button onClick={() => router.push('/wallet')} style={{
+            display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none',
+            cursor: 'pointer', color: '#64748B', fontSize: 13, fontWeight: 500, padding: 0,
+            fontFamily: 'inherit',
+          }}>
+            <ArrowLeft size={15} /> Back to Wallet
           </button>
 
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24 }}>

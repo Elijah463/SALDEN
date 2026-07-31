@@ -136,8 +136,25 @@ export async function upsertSchedules(schedules: AgentSchedule[]): Promise<void>
 }
 
 export async function removeSchedule(id: string): Promise<void> {
-  const existing = _schedules.get(id);
+  // Same bug/fix as markScheduleRun above: _schedules.get(id) only checks
+  // this instance's in-memory map, which is very likely empty for the
+  // schedule being cancelled (this runs from a user-triggered API call,
+  // which — like a cron invocation — may land on a different serverless
+  // instance than the one that created/last touched this schedule). Search
+  // KV the same way if it's not found locally, so cancelling a schedule
+  // actually removes it durably instead of silently no-op'ing while it
+  // stays active in KV.
+  let existing = _schedules.get(id);
   _schedules.delete(id);
+
+  if (!existing && kvAvailable()) {
+    const wallets = await readIndex();
+    for (const wallet of wallets) {
+      const blob = await readWalletBlob(wallet);
+      const found = blob.find(s => s.id === id);
+      if (found) { existing = found; break; }
+    }
+  }
 
   if (!kvAvailable() || !existing) return;
 
@@ -178,7 +195,36 @@ export async function markScheduleRun(
   id: string,
   result: { status: 'success' | 'failed'; txHash?: string; nextRunAt?: number },
 ): Promise<void> {
-  const existing = _schedules.get(id);
+  // BUG FIX: this used to only ever look at the in-memory `_schedules`
+  // Map (`_schedules.get(id)`) and silently return if not found there.
+  // On Vercel, a cron-triggered invocation runs on whatever serverless
+  // instance happens to be available — almost certainly NOT the same one
+  // that originally created/synced the schedule, so its in-memory Map is
+  // empty for this schedule even though the schedule genuinely exists in
+  // KV. The result: the payment executes correctly on-chain, but the
+  // status update after it is silently dropped, leaving the schedule
+  // stuck showing "Active" forever — even though it already ran. On the
+  // NEXT cron tick it looks "due" again, gets re-attempted, and is only
+  // saved from actually double-paying by Circle's own idempotency-key
+  // deduplication (same idempotencyKeyBase every retry, since nextRunAt
+  // was never advanced) — not by anything in this store. Every other
+  // read in this file (getDueSchedules, getSchedulesForWallet) already
+  // correctly merges KV with memory; this was the one place that didn't.
+  let existing = _schedules.get(id);
+
+  if (!existing && kvAvailable()) {
+    // Not in this instance's memory — the schedule's wallet is unknown
+    // here, so check the index and search each wallet's blob for it.
+    // Schedule counts per wallet are small (this is a payroll scheduling
+    // feature, not a high-volume queue), so this is cheap in practice.
+    const wallets = await readIndex();
+    for (const wallet of wallets) {
+      const blob = await readWalletBlob(wallet);
+      const found = blob.find(s => s.id === id);
+      if (found) { existing = found; break; }
+    }
+  }
+
   if (!existing) return;
 
   existing.lastRunAt = Date.now();

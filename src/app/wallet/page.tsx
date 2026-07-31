@@ -120,9 +120,9 @@ function ActionCard({ icon, label, href }: { icon: React.ReactNode; label: strin
 
 // ── Token row ─────────────────────────────────────────────────────────────────
 
-function TokenRow({ symbol, name, icon, balance, loading }: {
+function TokenRow({ symbol, name, icon, balance, loading, usdValue }: {
   symbol: string; name: string; icon: React.ReactNode;
-  balance: string; loading?: boolean;
+  balance: string; loading?: boolean; usdValue?: string | null;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', padding: '14px 0',
@@ -135,11 +135,16 @@ function TokenRow({ symbol, name, icon, balance, loading }: {
         <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{symbol}</div>
         <div style={{ fontSize: 12, color: '#94A3B8' }}>{name}</div>
       </div>
-      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700, color: '#0F172A' }}>
-        {loading
-          ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} />
-          : balance
-        }
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 15, fontWeight: 700, color: '#0F172A' }}>
+          {loading
+            ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} />
+            : balance
+          }
+        </div>
+        {!loading && usdValue && (
+          <div style={{ fontSize: 12, color: '#94A3B8' }}>≈${usdValue}</div>
+        )}
       </div>
     </div>
   );
@@ -311,16 +316,25 @@ export default function WalletPage() {
           <div style={{ background: '#fff', border: '1px solid #E2E8F0',
             borderRadius: 16, padding: '20px 20px 8px' }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Tokens</h3>
-            {TOKENS.map(token => (
-              <TokenRow
-                key={token.symbol}
-                symbol={token.symbol}
-                name={token.name}
-                icon={token.icon}
-                loading={token.fromNative ? false : (loadingErc20 && !erc20Balances[token.symbol])}
-                balance={token.fromNative ? usdcDisplay : (erc20Balances[token.symbol] ?? '0.00')}
-              />
-            ))}
+            {TOKENS.map(token => {
+              const balanceStr = token.fromNative ? usdcDisplay : (erc20Balances[token.symbol] ?? '0.00');
+              const balanceNum = Number(balanceStr.replace(/,/g, '')) || 0;
+              const price = tokenPrices[token.symbol] ?? (token.symbol === 'USDC' ? 1 : undefined);
+              const usdValue = price !== undefined
+                ? (balanceNum * price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : null;
+              return (
+                <TokenRow
+                  key={token.symbol}
+                  symbol={token.symbol}
+                  name={token.name}
+                  icon={token.icon}
+                  loading={token.fromNative ? false : (loadingErc20 && !erc20Balances[token.symbol])}
+                  balance={balanceStr}
+                  usdValue={usdValue}
+                />
+              );
+            })}
           </div>
 
         </div>

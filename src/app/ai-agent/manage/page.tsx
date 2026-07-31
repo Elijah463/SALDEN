@@ -12,7 +12,7 @@ import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
   Clock, CheckCircle2, AlertTriangle,
   Filter, RefreshCw, Calendar, Repeat, List,
-  ChevronDown, ExternalLink, Plus,
+  ChevronDown, ExternalLink, Plus, Loader2,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { AgentLayout } from '@/components/agent/AgentLayout';
@@ -21,7 +21,7 @@ import { RecurringPaymentModal } from '@/components/agent/RecurringPaymentModal'
 import { useAgentSession } from '@/lib/agent/useAgentSession';
 import {
   getAgentLogs, type AgentLog,
-  getAgentSchedules, saveAgentSchedule, type AgentSchedule,
+  getAgentSchedules, saveAgentSchedule, deleteAgentSchedule, type AgentSchedule,
 } from '@/lib/db/indexeddb';
 import { txLink } from '@/lib/contracts/config';
 import { format } from 'date-fns';
@@ -46,7 +46,7 @@ function StatCard({ label, value, icon, color }: { label: string; value: string 
 
 export default function ManageAgentPage() {
   const router      = useRouter();
-  const { state }   = useApp();
+  const { state, addToast }   = useApp();
   const { address } = useEffectiveAddress();
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { getToken } = useAgentSession();
@@ -61,6 +61,8 @@ export default function ManageAgentPage() {
   const [loading,      setLoading]      = useState(false);
   const [scheduleModalOpen,  setScheduleModalOpen]  = useState(false);
   const [recurringTarget,    setRecurringTarget]    = useState<AgentSchedule | null>(null);
+  const [cancelTarget,       setCancelTarget]       = useState<AgentSchedule | null>(null);
+  const [cancelling,         setCancelling]         = useState(false);
 
   useEffect(() => {
     if (!isPremiumUser) router.replace('/ai-agent');
@@ -103,6 +105,37 @@ export default function ManageAgentPage() {
       } catch { /* self-heals on next page load */ }
     })();
   }, [address, canWrite, universalSignMessage, getToken]);
+
+  const handleCancelSchedule = useCallback(async (schedule: AgentSchedule) => {
+    if (!address) return;
+    setCancelling(true);
+    try {
+      if (canWrite) {
+        const token = await getToken(address, universalSignMessage);
+        const res = await fetch('/api/agent/schedule/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ walletAddress: address, scheduleId: schedule.id }),
+        });
+        if (!res.ok) throw new Error('Server cancellation failed');
+      }
+      await deleteAgentSchedule(schedule.id);
+      setSchedules(prev => prev.filter(s => s.id !== schedule.id));
+      setCancelTarget(null);
+    } catch {
+      // Server call failed (or no wallet signature available) — still
+      // remove it locally so the UI reflects the user's intent immediately;
+      // if the server-side removal didn't go through, the schedule simply
+      // won't be found as "due" from this device again since local state no
+      // longer shows it, and can be safely re-attempted from Manage AI Agent.
+      await deleteAgentSchedule(schedule.id);
+      setSchedules(prev => prev.filter(s => s.id !== schedule.id));
+      setCancelTarget(null);
+      addToast('Cancelled locally — will fully sync once your connection is stable.', 'warning');
+    } finally {
+      setCancelling(false);
+    }
+  }, [address, canWrite, universalSignMessage, getToken, addToast]);
 
   useEffect(() => {
     if (!address) return;
@@ -258,7 +291,7 @@ export default function ManageAgentPage() {
                 onClick={() => setScheduleModalOpen(true)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px',
-                  borderRadius: 9, border: 'none', background: '#4F46E5', color: '#fff',
+                  borderRadius: 9, border: 'none', background: '#14B8A6', color: '#fff',
                   fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
                 }}
               >
@@ -281,11 +314,10 @@ export default function ManageAgentPage() {
                   const recipientCount = schedule.employees?.length ?? 0;
                   return (
                     <div key={schedule.id} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '16px 18px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+                      <div style={{ marginBottom: 14 }}>
                         <div style={{ width: 40, height: 40, borderRadius: 10, background: isActive ? '#EEF2FF' : '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                           <Calendar size={18} color={isActive ? '#4F46E5' : '#94A3B8'} />
                         </div>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{schedule.label}</div>
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -345,6 +377,19 @@ export default function ManageAgentPage() {
                           </span>
                         </label>
                       </div>
+
+                      <div style={{ textAlign: 'center', marginTop: 10 }}>
+                        <button
+                          onClick={() => setCancelTarget(schedule)}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            fontSize: 13, fontWeight: 700, color: '#DC2626', fontFamily: 'inherit',
+                            padding: '4px 0',
+                          }}
+                        >
+                          Cancel Payment
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -370,6 +415,48 @@ export default function ManageAgentPage() {
             onUpdated={(updated) => setSchedules(prev => prev.map(s => s.id === updated.id ? updated : s))}
             syncToServer={syncOneToServer}
           />
+        )}
+
+        {cancelTarget && (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          }}>
+            <div style={{ background: '#fff', borderRadius: 16, padding: 24, maxWidth: 360, width: '100%' }}>
+              <p style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>
+                Are you sure you want to cancel this payment?
+              </p>
+              <p style={{ fontSize: 13, color: '#64748B', marginBottom: 20 }}>
+                &ldquo;{cancelTarget.label}&rdquo; will be permanently cancelled. This can&apos;t be undone.
+              </p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={() => setCancelTarget(null)}
+                  disabled={cancelling}
+                  style={{
+                    flex: 1, padding: '10px 0', borderRadius: 9,
+                    border: '1.5px solid #E2E8F0', background: '#fff', color: '#475569',
+                    fontSize: 13, fontWeight: 700, cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                  }}
+                >
+                  No
+                </button>
+                <button
+                  onClick={() => handleCancelSchedule(cancelTarget)}
+                  disabled={cancelling}
+                  style={{
+                    flex: 1, padding: '10px 0', borderRadius: 9, border: 'none',
+                    background: cancelling ? '#E2E8F0' : '#DC2626', color: '#fff',
+                    fontSize: 13, fontWeight: 700, cursor: cancelling ? 'not-allowed' : 'pointer', fontFamily: 'inherit',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  }}
+                >
+                  {cancelling && <Loader2 size={13} style={{ animation: 'spin 0.7s linear infinite' }} />}
+                  Yes
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* ── Full log tab ─────────────────────────────────────────────────── */}

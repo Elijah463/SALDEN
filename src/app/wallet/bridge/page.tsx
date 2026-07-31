@@ -52,6 +52,7 @@ import { useCircleAdapter }    from '@/lib/circle/useCircleAdapter';
 import { getAppKit }           from '@/lib/circle/appKit';
 import { txLink, arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
+import { saveWalletActivity }  from '@/lib/db/indexeddb';
 
 // ── Supported chains ─────────────────────────────────────────────────────────
 
@@ -84,7 +85,7 @@ const BRIDGE_CHAINS: BridgeChainConfig[] = [
   { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet },
   { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum-sepolia.png',  usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia },
   { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',              usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia },
-  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.png',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia },
+  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.jpeg',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia },
   { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg',        usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji },
   { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',            usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia },
 ];
@@ -439,6 +440,15 @@ export default function BridgePage() {
         to: {
           chain:            toKey,
           recipientAddress: address,    // USDC minted directly to user's address
+          // BUG FIX ("Invalid parameters: to: Invalid input"): forwarder-only
+          // mode — recipientAddress with no destination adapter — requires
+          // this flag explicitly set per Circle's own Arc docs
+          // (docs.arc.network/app-kit/tutorials/bridge/use-forwarding-service).
+          // Without it, this object matches neither of the SDK's two valid
+          // `to` shapes ({adapter, chain} or {recipientAddress, chain,
+          // useForwarder: true}), so its own schema validation rejected it
+          // before ever attempting to bridge anything.
+          useForwarder:     true,
         } as Parameters<typeof kit.bridge>[0]['to'],
         amount,
       });
@@ -468,6 +478,16 @@ export default function BridgePage() {
         .txHash ?? (result as { transactionHash?: string }).transactionHash ?? '';
       setSuccessTx(txHash);
 
+      // Local-only wallet activity record — see swap page for the same
+      // pattern/rationale (never synced anywhere, by product decision).
+      if (address && txHash) {
+        void saveWalletActivity({
+          id: txHash, hash: txHash, type: 'bridge', walletAddress: address, timestamp: Date.now(),
+          fromChain: fromChain.name, toChain: toChain.name,
+          token: 'USDC', amount,
+        });
+      }
+
       // Refresh balance after a successful bridge
       if (address) fetchUsdcBalance(fromChain, address as `0x${string}`).then(setBalance);
 
@@ -488,7 +508,8 @@ export default function BridgePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amount, adapter, isAdapterReady, address, fromKey, toKey, fromChain]);
 
-  const canBridge = !!amount && parseFloat(amount) > 0 && isAdapterReady && !bridging;
+  const insufficientBalance = !!amount && balance !== null && parseFloat(amount) > parseFloat(formatUnits6(balance));
+  const canBridge = !!amount && parseFloat(amount) > 0 && isAdapterReady && !bridging && !insufficientBalance;
   const usdValue = usdPrice && amount ? (parseFloat(amount) * usdPrice) : null;
 
   // ── Fee / time estimate (kit.estimateBridge) ─────────────────────────────
@@ -508,7 +529,7 @@ export default function BridgePage() {
         const kit = await getAppKit();
         const est = await (kit as unknown as { estimateBridge: (p: unknown) => Promise<unknown> }).estimateBridge({
           from: { adapter, chain: fromKey } as unknown,
-          to:   { chain: toKey, recipientAddress: address } as unknown,
+          to:   { chain: toKey, recipientAddress: address, useForwarder: true } as unknown,
           amount,
         });
         if (cancelled) return;
@@ -558,7 +579,7 @@ export default function BridgePage() {
             }}>
               <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0, marginTop: 1 }} />
               <p style={{ fontSize: 13, color: '#92400E', margin: 0, lineHeight: 1.6 }}>
-                Bridging currently requires an external wallet (like Rabby or MetaMask) please connect one to continue.
+                Bridging currently requires an external wallet (like Rabby or MetaMask) — connect one to continue.
               </p>
             </div>
           )}
@@ -680,7 +701,11 @@ export default function BridgePage() {
             </div>
           )}
 
-          {error && (
+          {insufficientBalance ? (
+            <p style={{ fontSize: 13, color: '#DC2626', marginTop: 14, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+              <AlertTriangle size={13} /> Insufficient balance
+            </p>
+          ) : error && (
             <p style={{ fontSize: 13, color: '#DC2626', marginTop: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
               <AlertTriangle size={13} /> {error}
             </p>
@@ -691,7 +716,7 @@ export default function BridgePage() {
             disabled={!canBridge}
             style={{
               width: '100%', marginTop: 18, padding: '13px 0', borderRadius: 12, border: 'none',
-              background: canBridge ? '#4F46E5' : '#E2E8F0',
+              background: canBridge ? '#14B8A6' : '#E2E8F0',
               color: canBridge ? '#fff' : '#94A3B8',
               fontSize: 15, fontWeight: 700, cursor: canBridge ? 'pointer' : 'not-allowed',
               fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
