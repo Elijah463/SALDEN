@@ -60,6 +60,11 @@ interface AgentEvent {
   /** Circle's own transaction id for a pending agent_executed_* event —
    *  same purpose as ActionLogEntry.pendingTxId above. */
   transactionId?: string;
+  /** Set by the server (see tools.ts's propose_* schemas and chat/route.ts)
+   *  when the model judged the instruction fully explicit — the matching
+   *  card skips its manual review click and goes straight to the wallet
+   *  signature prompt. Undefined/false shows the normal review card. */
+  autoConfirm?: boolean;
 }
 
 interface Message {
