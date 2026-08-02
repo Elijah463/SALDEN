@@ -74,6 +74,25 @@ export function useAgentStatus(): AgentStatusResult {
   const refresh = useCallback(() => setTick(t => t + 1), []);
 
   // ── Check status on mount + address change ────────────────────────────────
+  //
+  // BUG FIX: `refresh()` is passed to ChatInterface as `onDataChanged` and
+  // fires after every successful agent action (a payment, an employee
+  // change, a payroll run resolving) — completely normal, frequent
+  // activity in an ongoing conversation. That used to bump `tick`, which
+  // re-ran this whole effect, which called `setStatus('loading')`
+  // synchronously before the re-check even started. Since
+  // app/ai-agent/page.tsx only renders <ChatInterface> when
+  // status === 'active', that flash of 'loading' tore the entire chat
+  // interface down and rebuilt it moments later — the exact "chat shows
+  // a loading icon and then refreshes" behaviour reported, happening
+  // essentially every time an action completed successfully.
+  //
+  // Fix: only the very first check (tick === 0, i.e. mount or a genuine
+  // address change) is allowed to show 'loading'. Anything triggered by
+  // refresh() is a silent background revalidation — it still re-verifies
+  // against the server, but never flashes a loading state, and only
+  // calls setStatus/setAgentInfo when the result actually changes, so an
+  // unrelated re-render isn't triggered on every single refresh() call.
   useEffect(() => {
     // Wait for localStorage to be read before making auth decisions
     if (!mounted) return;
@@ -84,9 +103,12 @@ export function useAgentStatus(): AgentStatusResult {
       return;
     }
 
+    const isInitialCheck = tick === 0;
     let cancelled = false;
-    setStatus('loading');
-    setError(null);
+    if (isInitialCheck) {
+      setStatus('loading');
+      setError(null);
+    }
 
     // Read stored walletId — lets backend verify without server state
     let storedWalletId: string | null = null;
@@ -110,14 +132,21 @@ export function useAgentStatus(): AgentStatusResult {
         if (cancelled) return;
         if (data.active && data.agentWallet && data.walletId) {
           setStatus('active');
-          setAgentInfo({ agentWallet: data.agentWallet, walletId: data.walletId });
-        } else {
+          setAgentInfo(prev => (prev?.agentWallet === data.agentWallet && prev?.walletId === data.walletId)
+            ? prev
+            : { agentWallet: data.agentWallet as string, walletId: data.walletId as string });
+        } else if (isInitialCheck) {
+          // A silent revalidation deliberately does NOT downgrade an
+          // already-active status to 'none' on its own — that's exactly
+          // the kind of surprise disruption mid-conversation this fix is
+          // for. If the agent has genuinely been deactivated, the next
+          // real page load (a true isInitialCheck) will catch it.
           setStatus('none');
           setAgentInfo(null);
         }
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (cancelled || !isInitialCheck) return;
         setStatus('error');
         setError(err instanceof Error ? err.message : 'Failed to check agent status.');
       });

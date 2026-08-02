@@ -152,26 +152,44 @@ export default function AIAgentPage() {
   // factory lookup — landing (or refreshing) directly on /ai-agent left it
   // null, which meant employee data could never be restored here either.
   // Cheap read, no wallet signature required.
+  //
+  // A failed attempt used to just give up silently for the rest of the
+  // session — fine for a genuine "no registry yet", but a plain transient
+  // RPC hiccup (more likely on exactly this scenario, a fresh page load)
+  // meant registryClone could stay null all session even though the
+  // account is completely fine. Retries a few times before accepting that.
   useEffect(() => {
     if (registryClone || !address || !publicClient) return;
     let cancelled = false;
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1200;
     (async () => {
-      try {
-        const existing = await publicClient.readContract({
-          address:      CONTRACTS.REGISTRY_FACTORY,
-          abi:          REGISTRY_FACTORY_ABI,
-          functionName: 'getRegistry',
-          args:         [address as `0x${string}`],
-        }) as `0x${string}`;
-        if (cancelled) return;
-        const ZERO = '0x0000000000000000000000000000000000000000';
-        if (existing && existing.toLowerCase() !== ZERO) {
-          dispatch({ type: 'SET_REGISTRY', payload: existing });
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const existing = await publicClient.readContract({
+            address:      CONTRACTS.REGISTRY_FACTORY,
+            abi:          REGISTRY_FACTORY_ABI,
+            functionName: 'getRegistry',
+            args:         [address as `0x${string}`],
+          }) as `0x${string}`;
+          if (cancelled) return;
+          const ZERO = '0x0000000000000000000000000000000000000000';
+          if (existing && existing.toLowerCase() !== ZERO) {
+            dispatch({ type: 'SET_REGISTRY', payload: existing });
+          }
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            continue;
+          }
+          // Still non-fatal here after retries — the chat/employee-context
+          // features degrade gracefully without a registryClone; the
+          // activation flow below has its own error handling for
+          // premium/clone checks.
+          console.warn('[ai-agent] getRegistry check failed after retries:', err);
         }
-      } catch {
-        /* Non-fatal here — the chat/employee-context features degrade
-           gracefully without a registryClone; the activation flow below
-           has its own error handling for premium/clone checks. */
       }
     })();
     return () => { cancelled = true; };
@@ -358,19 +376,61 @@ export default function AIAgentPage() {
     let cancelled = false;
     const agentAddr = agentInfo.agentWallet as `0x${string}`;
 
-    Promise.all([
-      publicClient.readContract({
-        address: effectiveClone as `0x${string}`, abi: PAYROLL_IS_AGENT_ABI,
-        functionName: 'isAgent', args: [agentAddr],
-      }).catch(() => false) as Promise<boolean>,
-      publicClient.readContract({
-        address: effectiveRegistry as `0x${string}`, abi: REGISTRY_IS_AGENT_ABI,
-        functionName: 'isAgent', args: [agentAddr],
-      }).catch(() => false) as Promise<boolean>,
-    ]).then(([payrollGranted, registryGranted]) => {
+    (async () => {
+      // Server-side cache first — once both grants have ever been
+      // confirmed for this wallet (on ANY browser/device), skip the
+      // on-chain re-check and the wizard entirely. This is what makes
+      // "granted once, never asked again — not even on a new browser"
+      // actually true, rather than just true on the same device that
+      // happened to have a working localStorage entry.
+      try {
+        const cacheRes = await fetch(`/api/agent/permission-status?wallet=${address}`);
+        if (cacheRes.ok) {
+          const { granted } = await cacheRes.json() as { granted?: boolean };
+          if (granted && !cancelled) { setGrantsChecked(true); return; }
+        }
+      } catch { /* fall through to a real on-chain check */ }
+
+      // BUG FIX: this used to be `.catch(() => false)` on both reads —
+      // any transient RPC failure (more likely than usual on exactly
+      // this scenario, coming back to a page after being away) was
+      // silently treated as "not granted", re-showing the whole wizard
+      // even when the grants had genuinely succeeded on-chain — this was
+      // the actual cause of "I confirmed the txns succeeded on-chain but
+      // it asks me to grant permissions again". Retries a few times
+      // before accepting a read as a real "not granted" rather than an
+      // RPC hiccup.
+      const readIsAgent = async (contractAddr: `0x${string}`, abi: readonly unknown[]): Promise<boolean> => {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            return await publicClient.readContract({
+              address: contractAddr, abi, functionName: 'isAgent', args: [agentAddr],
+            }) as boolean;
+          } catch (err) {
+            if (attempt === 3) {
+              console.warn('[ai-agent] isAgent() check failed after retries:', err);
+              return false;
+            }
+            await new Promise(r => setTimeout(r, 1200));
+          }
+        }
+        return false;
+      };
+
+      const [payrollGranted, registryGranted] = await Promise.all([
+        readIsAgent(effectiveClone as `0x${string}`, PAYROLL_IS_AGENT_ABI),
+        readIsAgent(effectiveRegistry as `0x${string}`, REGISTRY_IS_AGENT_ABI),
+      ]);
+
       if (cancelled) return;
       setGrantsChecked(true);
-      if (payrollGranted && registryGranted) return; // truly fully set up — render chat as normal
+      if (payrollGranted && registryGranted) {
+        void fetch('/api/agent/permission-status', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: address }),
+        }).catch(() => {});
+        return; // truly fully set up — render chat as normal
+      }
 
       // Resume the wizard, pre-marking whichever grant already exists so
       // the user only has to sign what's actually still missing.
@@ -383,17 +443,23 @@ export default function AIAgentPage() {
           agentWallet: agentInfo.agentWallet, message: '',
         },
       });
-    });
+    })();
 
     return () => { cancelled = true; };
-  }, [status, agentInfo, effectiveClone, effectiveRegistry, publicClient, activateResult, grantsChecked]);
+  }, [status, agentInfo, effectiveClone, effectiveRegistry, publicClient, activateResult, grantsChecked, address]);
 
   useEffect(() => {
     if (bothDone) {
+      if (address) {
+        void fetch('/api/agent/permission-status', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ walletAddress: address }),
+        }).catch(() => {});
+      }
       const t = setTimeout(refresh, 1500);
       return () => clearTimeout(t);
     }
-  }, [bothDone, refresh]);
+  }, [bothDone, refresh, address]);
 
   // ── No wallet ─────────────────────────────────────────────────────────────
   if (!address) {
@@ -816,6 +882,29 @@ export default function AIAgentPage() {
               }}
             >
               {payrollSync.status === 'loading' ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+        )}
+        {payrollSync.needsUnlock && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
+            padding: '8px 14px', fontSize: 12, flexShrink: 0,
+          }}>
+            <span style={{ color: '#3730A3', fontWeight: 600 }}>
+              Your payroll data is ready to restore on this device — one signature needed.
+            </span>
+            <button
+              onClick={() => { void payrollSync.unlockAndLoad(); }}
+              disabled={(payrollSync.status as string) === 'loading'}
+              style={{
+                padding: '5px 12px', borderRadius: 7, background: '#14B8A6', color: '#fff',
+                fontSize: 12, fontWeight: 700, border: 'none',
+                cursor: (payrollSync.status as string) === 'loading' ? 'default' : 'pointer',
+                opacity: (payrollSync.status as string) === 'loading' ? 0.6 : 1, fontFamily: 'inherit',
+              }}
+            >
+              {(payrollSync.status as string) === 'loading' ? 'Restoring…' : 'Unlock my data'}
             </button>
           </div>
         )}

@@ -62,7 +62,7 @@ export function TokenSelector({
       >
         {value
           ? <><TokenIcon token={value} size={20} /> {value.symbol}</>
-          : <span style={{ color: '#14B8A6' }}>Select token</span>}
+          : <span style={{ color: '#94A3B8' }}>Select token</span>}
         <ChevronDown size={13} color="#94A3B8" style={{ marginLeft: 'auto' }} />
       </button>
 

@@ -45,7 +45,27 @@ export const ENTERPRISE_PAYROLL_ABI = [
     ],
     "name": "BatchPaid",
     "type": "event"
-  }
+  },
+  // Custom errors — verified 1:1 against SaldenEnterprisePayroll.sol's own
+  // `error` declarations. Without these, viem has no way to decode a
+  // revert's 4-byte selector, so batchPay()/withdraw() failures on the
+  // free-tier shared contract show as "execution reverted for an unknown
+  // reason" instead of the real cause (this is the same class of bug
+  // fixed on the premium factory — see MULTI_TOKEN_FACTORY_ABI below).
+  { "inputs": [], "name": "ZeroAddress", "type": "error" },
+  { "inputs": [], "name": "ZeroAmount", "type": "error" },
+  { "inputs": [], "name": "ArrayLengthMismatch", "type": "error" },
+  { "inputs": [], "name": "EmptyArray", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "provided", "type": "uint256" }, { "internalType": "uint256", "name": "max", "type": "uint256" }], "name": "BatchTooLarge", "type": "error" },
+  { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
+  { "inputs": [], "name": "ETHNotAccepted", "type": "error" },
+  // Bubbled up from Solady's SafeTransferLib, which SaldenEnterprisePayroll
+  // uses internally for its USDC transfers — selectors are global (keyed
+  // by the error's signature, not which contract "owns" it), so these
+  // need to be here too or a transfer failure inside batchPay/withdraw
+  // still can't be decoded even though the errors above are present.
+  { "inputs": [], "name": "TransferFailed", "type": "error" },
+  { "inputs": [], "name": "TransferFromFailed", "type": "error" }
 ] as const;
 
 // ─── SaldenMultiTokenPayroll ABI (premium clone) ──────────────────────────────
@@ -216,7 +236,29 @@ export const MULTI_TOKEN_PAYROLL_ABI = [
     ],
     "name": "TokenAdded",
     "type": "event"
-  }
+  },
+  // Custom errors — this ABI previously had NONE, meaning every revert from
+  // batchPay/addAgent/removeAgent/addSupportedToken/withdraw/emergencyWithdraw
+  // on the premium clone (including every one the AI agent's tool calls hit —
+  // see lib/agent/toolExecutors.ts) showed as "execution reverted for an
+  // unknown reason" instead of the real cause. Verified 1:1 against
+  // SaldenMultiTokenPayrollFactory.sol's SaldenMultiTokenPayroll contract
+  // section (the clone implementation), plus Solady's SafeTransferLib
+  // errors it uses internally (global selectors, not contract-scoped).
+  { "inputs": [], "name": "ZeroAddress", "type": "error" },
+  { "inputs": [], "name": "ZeroAmount", "type": "error" },
+  { "inputs": [], "name": "ArrayLengthMismatch", "type": "error" },
+  { "inputs": [], "name": "EmptyArray", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "provided", "type": "uint256" }, { "internalType": "uint256", "name": "max", "type": "uint256" }], "name": "BatchTooLarge", "type": "error" },
+  { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
+  { "inputs": [], "name": "ETHNotAccepted", "type": "error" },
+  { "inputs": [], "name": "NotAuthorised", "type": "error" },
+  { "inputs": [], "name": "AlreadyAgent", "type": "error" },
+  { "inputs": [], "name": "NotCurrentlyAgent", "type": "error" },
+  { "inputs": [], "name": "TokenAlreadySupported", "type": "error" },
+  { "inputs": [], "name": "TokenNotSupported", "type": "error" },
+  { "inputs": [], "name": "TransferFailed", "type": "error" },
+  { "inputs": [], "name": "TransferFromFailed", "type": "error" }
 ] as const;
 
 // ─── SaldenMultiTokenPayrollFactory ABI ───────────────────────────────────────
@@ -280,7 +322,21 @@ export const MULTI_TOKEN_FACTORY_ABI = [
   { "inputs": [], "name": "AlreadyDeployed", "type": "error" },
   { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
   { "inputs": [{ "internalType": "uint256", "name": "provided", "type": "uint256" }, { "internalType": "uint256", "name": "max", "type": "uint256" }], "name": "FeeTooHigh", "type": "error" },
-  { "inputs": [], "name": "ETHNotAccepted", "type": "error" }
+  { "inputs": [], "name": "ETHNotAccepted", "type": "error" },
+  // These three were the actual missing piece behind the reported
+  // "execution reverted for an unknown reason" on deployPayroll():
+  // `deployPayroll()` collects the USDC fee via Solady's
+  // `SafeTransferLib.safeTransferFrom` (reverts `TransferFromFailed()` on
+  // insufficient balance/allowance — verified against Solady's
+  // SafeTransferLib.sol source) and deploys the clone via
+  // `LibClone.clone()` (reverts `DeploymentFailed()` — verified against
+  // Solady's LibClone.sol). Neither was in this ABI, so even though
+  // `AlreadyDeployed` above WAS already defined, viem had no way to tell
+  // "you already have a clone" apart from "you don't have enough USDC" —
+  // both looked identically like an undecodable revert.
+  { "inputs": [], "name": "TransferFromFailed", "type": "error" },
+  { "inputs": [], "name": "ApproveFailed", "type": "error" },
+  { "inputs": [], "name": "DeploymentFailed", "type": "error" }
 ] as const;
 
 // ─── SaldenRegistryFactory ABI ────────────────────────────────────────────────
@@ -307,7 +363,17 @@ export const REGISTRY_FACTORY_ABI = [
     ],
     "name": "RegistryCreated",
     "type": "event"
-  }
+  },
+  // Custom errors — this ABI had NONE, so createRegistry() failures (same
+  // "already have one" / "deployment failed" class of bug as the payroll
+  // factory above) were equally undecodable. `RegistryAlreadyExists`
+  // verified against SaldenRegistryFactory.sol directly; `FailedDeployment`
+  // is OpenZeppelin v5.1+'s shared Clones/Create2 failure error (this
+  // factory uses OZ's `Clones.clone()`, not Solady's LibClone — confirmed
+  // via the import in SaldenRegistryFactory.sol — so it needs OZ's error
+  // name, not Solady's `DeploymentFailed`).
+  { "inputs": [{ "internalType": "address", "name": "registry", "type": "address" }], "name": "RegistryAlreadyExists", "type": "error" },
+  { "inputs": [], "name": "FailedDeployment", "type": "error" }
 ] as const;
 
 // ─── SaldenRegistry (clone) ABI ───────────────────────────────────────────────
@@ -374,7 +440,20 @@ export const REGISTRY_ABI = [
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
-  }
+  },
+  // Custom errors — verified 1:1 against SaldenRegistry.sol. Same class
+  // of bug as MULTI_TOKEN_PAYROLL_ABI above: this had none, so any
+  // revert from setCID/addAgent/removeAgent/proposeAdminTransfer/
+  // acceptAdminTransfer showed as an undecodable "unknown reason".
+  { "inputs": [], "name": "Unauthorized", "type": "error" },
+  { "inputs": [], "name": "InvalidCID", "type": "error" },
+  { "inputs": [], "name": "CIDAlreadySet", "type": "error" },
+  { "inputs": [], "name": "AdminCannotBeAgent", "type": "error" },
+  { "inputs": [], "name": "AlreadyAgent", "type": "error" },
+  { "inputs": [], "name": "NotCurrentlyAgent", "type": "error" },
+  { "inputs": [], "name": "NotPendingAdmin", "type": "error" },
+  { "inputs": [], "name": "NoPendingTransfer", "type": "error" },
+  { "inputs": [], "name": "InvalidAdminProposal", "type": "error" }
 ] as const;
 
 // ─── ERC-20 ABI (for USDC allowance approval) ────────────────────────────────

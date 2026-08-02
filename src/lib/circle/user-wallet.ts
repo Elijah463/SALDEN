@@ -95,34 +95,33 @@ export async function getUserSession(userId: string): Promise<CircleSession> {
 // Returns the challengeId that the Circle Web SDK on the client must execute
 // to prompt the user to set their PIN / recovery method.
 //
-// Arc isn't (yet) one of Circle's individually-named Wallets API chains, so
-// it's created through their generic "Other EVM blockchains" path — see
-// https://developers.circle.com/w3s/supported-blockchains-and-currencies
-// and https://developers.circle.com/wallets/sign-tx-evm. Two hard
-// requirements from that doc, both of which this used to get wrong:
+// Arc Testnet IS one of Circle's individually-named Wallets API chains —
+// chain code `ARC-TESTNET`, with full EOA + SCA + MSCA support and every
+// Wallets API endpoint available (it is not listed under "Blockchain-
+// specific limitations"). Verified directly against
+// https://developers.circle.com/w3s/supported-blockchains-and-currencies.
+// This used to say the opposite (that Arc fell under the generic "Other
+// EVM blockchains" fallback) — that was wrong; that fallback is real and
+// IS EOA-only with no contract execution support, but Arc was never
+// actually in it.
 //
-//  1. Chain code must be 'EVM-TESTNET', not 'EVM' — 'EVM' is the MAINNET
-//     variant. Passing it while authenticated with a sandbox
-//     (TEST_API_KEY:-prefixed) CIRCLE_API_KEY is exactly what produced
-//     "TEST_API key cannot be used with blockchain mainnets": we were
-//     telling Circle we wanted a mainnet wallet.
-//  2. accountType must be 'EOA' — Circle's docs state plainly that
-//     generic "Other EVM blockchains" support ONLY EOA, not SCA
-//     (Smart-Contract Account). SCA requires their Gas Station, which
-//     isn't available on this generic path regardless of network. This
-//     is a real product-level change from the original SCA intent, not
-//     just a naming fix: new social-login users get a plain EOA wallet,
-//     which means it needs to hold native gas (USDC, since Arc uses USDC
-//     as gas) before it can send its own transactions — there's no
-//     built-in gas sponsorship on this path. Worth confirming the
-//     faucet/funding flow covers brand-new wallets, separately from this
-//     fix.
+// Two things that follow from using the correct chain code:
+//  1. accountType stays 'EOA' for now — SCA is available for Arc, but
+//     turning it on means configuring Circle's Gas Station (sponsorship
+//     policy, funded sponsor wallet) in the Circle Console, which is a
+//     dashboard-side change this codebase can't make or verify. Worth
+//     doing later — it would remove the "brand-new wallet needs USDC
+//     before its first tx" problem entirely — but out of scope here.
+//  2. Because Arc is properly classified, /user/transactions/contractExecution
+//     now works for these wallets — see createContractExecutionChallenge()
+//     below and lib/circle/useUniversalWrite.ts, which uses it directly
+//     instead of the old sign-then-broadcast-ourselves fallback.
 export async function initializeUserWallet(userToken: string): Promise<string> {
   const json = await circlePost(
     '/user/initialize',
     {
       idempotencyKey: crypto.randomUUID(),
-      blockchains:    ['EVM-TESTNET'],
+      blockchains:    ['ARC-TESTNET'],
       accountType:    'EOA',
     },
     userToken
@@ -163,6 +162,13 @@ export async function getUserFirstWallet(
 
 // ── 6. Create a contract-execution CHALLENGE for a user-controlled wallet ─────
 //
+// THE primary write path for social-login (Circle UCW) users — see
+// lib/circle/useUniversalWrite.ts. Now that wallets are created under the
+// correct `ARC-TESTNET` chain code (see initializeUserWallet() above),
+// Circle's own /user/transactions/contractExecution handles simulation,
+// gas estimation, signing and broadcasting — this codebase no longer
+// builds/estimates/signs the raw transaction itself for these users.
+//
 // Unlike executeContractCall() in agent-wallet.ts (developer-controlled —
 // Salden's own agent wallet, which Salden's server can authorise on its
 // own), a USER-controlled wallet can only be authorised by that user's own
@@ -173,6 +179,13 @@ export async function getUserFirstWallet(
 // transaction. Same idempotency-key and entity-secret-ciphertext
 // requirements as every other "critical" Circle endpoint — see
 // entitySecret.ts.
+//
+// `callData` is used here (not `abiFunctionSignature`/`abiParameters`)
+// whenever the caller already has ABI-encoded calldata (which
+// useUniversalWrite.ts always does, via viem's encodeFunctionData) —
+// Circle's docs list these as mutually exclusive and equally valid, and
+// reusing our own already-reliable calldata encoding avoids a second,
+// redundant place that could get a function signature string wrong.
 export interface ContractExecutionChallengeParams {
   userToken:              string;
   walletId:               string;
@@ -265,17 +278,17 @@ export async function createMessageSigningChallenge(
   return challengeId;
 }
 
-// ── 9. Create a transaction-SIGNING (not execution) challenge ─────────────────
+// ── 9. SUPERSEDED — Create a transaction-SIGNING (not execution) challenge ────
 //
-// Circle's own docs are explicit: for "Other EVM blockchains" (the
-// category Arc falls under — see lib/contracts/abis.ts's ERC20_ABI
-// header for the fuller writeup), user-controlled wallets do NOT support
-// /user/transactions/contractExecution at all ("Contract execution,
-// accelerate, and cancel are not supported"). What IS documented as
-// supported for EVM/EVM-TESTNET specifically is /user/sign/transaction —
-// sign only, the caller broadcasts it themselves. That's what this does;
-// see useUniversalWrite.ts for the broadcast step (a plain
-// publicClient.sendRawTransaction(), same as any other raw signed tx).
+// This was the write path while wallets were (incorrectly) created under
+// the generic "Other EVM blockchains" classification, which really does
+// disallow /user/transactions/contractExecution for user-controlled
+// wallets — sign-only was the correct workaround for that classification.
+// Now that initializeUserWallet() uses the real `ARC-TESTNET` chain code,
+// contractExecution is fully supported and createContractExecutionChallenge()
+// above is the live path (see useUniversalWrite.ts). Left in place, unused,
+// as a reference/fallback rather than deleted — same convention as
+// write-challenge/route.ts below it.
 export interface TransactionSigningChallengeParams {
   userToken:      string;
   walletId:       string;

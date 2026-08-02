@@ -58,27 +58,42 @@ export function useCloneAccess(): void {
     // for when payrollSetup's cached/synced value is missing.
     if (payrollClone || !address || !publicClient) return;
     let cancelled = false;
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1200;
 
     (async () => {
-      try {
-        const existing = await publicClient.readContract({
-          address:      CONTRACTS.MULTI_TOKEN_FACTORY,
-          abi:          MULTI_TOKEN_FACTORY_ABI,
-          functionName: 'payrollOf',
-          args:         [address as `0x${string}`],
-        }) as `0x${string}`;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const existing = await publicClient.readContract({
+            address:      CONTRACTS.MULTI_TOKEN_FACTORY,
+            abi:          MULTI_TOKEN_FACTORY_ABI,
+            functionName: 'payrollOf',
+            args:         [address as `0x${string}`],
+          }) as `0x${string}`;
 
-        if (cancelled) return;
-        if (existing && existing.toLowerCase() !== ZERO_ADDRESS) {
-          dispatch({ type: 'SET_PAYROLL_CLONE', payload: existing });
+          if (cancelled) return;
+          if (existing && existing.toLowerCase() !== ZERO_ADDRESS) {
+            dispatch({ type: 'SET_PAYROLL_CLONE', payload: existing });
+          }
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            continue;
+          }
+          // Still non-fatal after retries — every page that calls this
+          // already handles a missing clone gracefully (free-tier /
+          // upgrade-to-premium paths), so an exhausted lookup here just
+          // means staying in that same state rather than silently
+          // recovering. Matches the registryClone self-healing effect's
+          // error handling right next to where this hook is called —
+          // same retry treatment, for the same reason: a transient RPC
+          // hiccup is more likely on exactly the fresh-page-load moment
+          // this fallback exists for, so it's worth a few attempts before
+          // giving up rather than treating one failure as final.
+          console.warn('[useCloneAccess] payrollOf check failed after retries:', err);
         }
-      } catch {
-        /* Non-fatal — every page that calls this already handles a
-           missing clone gracefully (free-tier / upgrade-to-premium
-           paths), so a failed lookup here just means staying in that
-           same state rather than silently recovering. Matches the
-           registryClone self-healing effect's error handling right next
-           to where this hook is called. */
       }
     })();
 

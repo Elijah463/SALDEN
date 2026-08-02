@@ -40,6 +40,11 @@ interface ActionLogEntry {
   status:    'SUCCESS' | 'FAILED' | 'QUEUED';
   detail?:   string;
   timestamp: string;
+  /** Circle's own transaction id, present only when status is 'QUEUED' —
+   *  lets the polling effect below check /api/agent/tx-status and update
+   *  this exact entry once the transaction actually resolves, instead of
+   *  it staying "QUEUED" forever even after it's confirmed on-chain. */
+  pendingTxId?: string;
 }
 
 interface AgentEvent {
@@ -52,6 +57,9 @@ interface AgentEvent {
   txHash?: string; pending?: boolean; recipients?: number; totalAmount?: string;
   currentAddress?: string; newAddress?: string;
   employeesJson?: string; skippedCount?: number;
+  /** Circle's own transaction id for a pending agent_executed_* event —
+   *  same purpose as ActionLogEntry.pendingTxId above. */
+  transactionId?: string;
 }
 
 interface Message {
@@ -64,6 +72,19 @@ interface Message {
   eventsResolved?: boolean[];  // tracks which event cards have been actioned, by index
   truncated?: boolean;
   proposedAt: number;          // for card expiry
+  /** Only set on assistant messages. The raw Gemini response parts for
+   *  this turn — never rendered, only round-tripped back to the server on
+   *  the next request so it can rebuild history with the thought
+   *  signature Gemini 3.x requires. See app/api/agent/chat/route.ts's
+   *  buildHistory() for the full explanation. Without this, tool calling
+   *  works once per conversation and then breaks. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rawParts?: any[];
+  /** Only set on user messages that included a file — metadata only (name
+   *  + type), not the file content itself, purely so the chat log shows
+   *  what was actually sent instead of the attachment vanishing the
+   *  moment the message is sent. */
+  attachment?: { fileName: string; mimeType: string };
 }
 
 interface ChatInterfaceProps {
@@ -100,7 +121,7 @@ const SUGGESTED = [
   { label: 'Show all employees',   text: 'Show me all active employees'                    },
   { label: 'Check balance',        text: "What's the employer wallet USDC balance?"        },
   { label: 'Compliance check',     text: 'Run a compliance check on all employee wallets'  },
-  { label: 'Last 5 runs',          text: 'Show me the last 5 payroll runs'                 },
+  { label: 'Add an employee',      text: 'I want to add a new employee'                    },
   { label: 'Top up wallet',        text: 'Request testnet USDC for my employer wallet'     },
 ];
 
@@ -125,26 +146,20 @@ function incrementDailyCount(): number {
 function ActionLogCard({ entries }: { entries: ActionLogEntry[] }) {
   if (entries.length === 0) return null;
   return (
-    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {entries.map((log, i) => {
         const tone = log.status === 'SUCCESS' ? 'success' : log.status === 'FAILED' ? 'error' : 'warn';
         const palette = {
-          success: { border: '#6EE7B7', bg: '#F0FDF4', color: '#059669', label: '✓ SUCCESS' },
-          error:   { border: '#FCA5A5', bg: '#FEF2F2', color: '#DC2626', label: '✗ FAILED' },
-          warn:    { border: '#FDE68A', bg: '#FFFBEB', color: '#92400E', label: '⏳ QUEUED' },
+          success: { color: '#059669', label: '✓ Success' },
+          error:   { color: '#DC2626', label: '✗ Failed' },
+          warn:    { color: '#92400E', label: '⏳ Queued' },
         }[tone];
         return (
-          <div key={i} style={{
-            padding: '8px 12px', borderRadius: 9,
-            border: `1.5px solid ${palette.border}`, background: palette.bg, fontSize: 12,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-              <span style={{ fontWeight: 800, fontSize: 10, letterSpacing: '0.05em', color: palette.color }}>{palette.label}</span>
-              <span style={{ color: '#94A3B8' }}>·</span>
-              <span style={{ color: '#94A3B8' }}>{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
-            <div style={{ color: '#475569' }}>{log.action}</div>
-            {log.detail && <div style={{ color: '#64748B', marginTop: 1 }}>{log.detail}</div>}
+          <div key={i} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+            <span style={{ fontWeight: 700, color: palette.color }}>{palette.label}</span>
+            <span style={{ color: '#94A3B8' }}> · {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — </span>
+            <span style={{ color: '#475569' }}>{log.action}</span>
+            {log.detail && <span style={{ color: '#64748B' }}> — {log.detail}</span>}
           </div>
         );
       })}
@@ -159,7 +174,7 @@ interface FaucetResult {
   address: string; balance?: string; balanceBefore?: string; balanceAfter?: string; message?: string;
 }
 
-function FaucetResultCard({ address, walletAddress, token, agentAddress }: { address: string; walletAddress: string; token?: string; agentAddress?: string }) {
+function FaucetResultCard({ address, walletAddress, token, agentAddress, onResolved }: { address: string; walletAddress: string; token?: string; agentAddress?: string; onResolved?: (outcome: 'confirmed' | 'error', detail?: string) => void }) {
   const [result, setResult]   = useState<FaucetResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -180,13 +195,28 @@ function FaucetResultCard({ address, walletAddress, token, agentAddress }: { add
           throw new Error(body.error ?? 'Faucet request failed. Please try again.');
         }
         const data = await res.json() as FaucetResult;
-        if (!cancelled) { setResult(data); setLoading(false); }
+        if (!cancelled) {
+          setResult(data); setLoading(false);
+          // BUG FIX: this used to resolve entirely on its own, with no way
+          // to tell the parent — so the action-log line server-rendered as
+          // "⏳ QUEUED · Faucet request for 0x..." stayed QUEUED forever,
+          // even once this card clearly showed Funded/Error right below
+          // it. Same underlying bug class as the payment/payroll-run
+          // "stuck in Queue" fix, just resolved via a direct callback here
+          // since this component already knows its real outcome
+          // synchronously, rather than needing to poll anything.
+          onResolved?.(data.status === 'funded' || data.status === 'pending' ? 'confirmed' : 'error', data.message);
+        }
       } catch (err: unknown) {
-        if (!cancelled) { setError(err instanceof Error ? err.message : 'Faucet request failed'); setLoading(false); }
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : 'Faucet request failed';
+          setError(msg); setLoading(false);
+          onResolved?.('error', msg);
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [address, walletAddress, token, agentAddress]);
+  }, [address, walletAddress, token, agentAddress, onResolved]);
 
   const shortAddr = `${address.slice(0, 8)}…${address.slice(-6)}`;
 
@@ -307,6 +337,72 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     saveSession(walletAddress, currentSessionIdRef.current, messages);
   }, [messages, walletAddress]);
 
+  // ── Resolve any still-pending autonomous-execution transactions ───────────
+  // This is THE fix for "the transaction succeeded on-chain but the chat
+  // stayed stuck on QUEUED forever": lib/agent/autonomousExecution.ts only
+  // polls for confirmation for a few seconds before the chat response has
+  // to go out — a transaction that hadn't confirmed by then comes back
+  // marked QUEUED/pending with nothing ever checking it again afterward,
+  // even once it confirms moments later. This scans for any unresolved
+  // pendingTxId/transactionId still in the conversation and keeps checking
+  // /api/agent/tx-status until each one resolves, then updates that exact
+  // action-log line and event card in place — no page refresh needed.
+  //
+  // Deliberately reuses sessionTokenRef.current (already obtained by the
+  // request that produced the pending transaction) rather than calling
+  // getToken() itself — this must never trigger a fresh sign-message
+  // prompt from a background poll the user didn't initiate. If there's no
+  // cached token yet (e.g. messages were just reloaded from a saved
+  // session on page load, before any new message has been sent), it
+  // simply waits for one rather than interrupting the user.
+  useEffect(() => {
+    const pendingIds = new Set<string>();
+    for (const m of messages) {
+      m.actionLog?.forEach(l => { if (l.status === 'QUEUED' && l.pendingTxId) pendingIds.add(l.pendingTxId); });
+      m.events?.forEach(e => { if (e.pending && e.transactionId) pendingIds.add(e.transactionId); });
+    }
+    if (pendingIds.size === 0 || !walletAddress) return;
+
+    let cancelled = false;
+
+    const pollOnce = async () => {
+      const token = sessionTokenRef.current;
+      if (!token) return; // no signed session yet — wait for the next interval rather than prompting
+
+      for (const txId of pendingIds) {
+        try {
+          const res = await fetch(
+            `${API_BASE}/agent/tx-status?id=${encodeURIComponent(txId)}&wallet=${encodeURIComponent(walletAddress)}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          if (!res.ok) continue;
+          const data = await res.json() as { state?: string; txHash?: string };
+          if (data.state !== 'CONFIRMED' && data.state !== 'FAILED') continue;
+          if (cancelled) return;
+
+          const resolvedStatus: ActionLogEntry['status'] = data.state === 'CONFIRMED' ? 'SUCCESS' : 'FAILED';
+          setMessages(prev => prev.map(m => ({
+            ...m,
+            actionLog: m.actionLog?.map(l => l.pendingTxId === txId
+              ? {
+                  ...l, status: resolvedStatus, pendingTxId: undefined,
+                  detail: resolvedStatus === 'FAILED' ? 'Transaction reverted on-chain — no funds moved.' : l.detail,
+                }
+              : l),
+            events: m.events?.map(e => e.transactionId === txId
+              ? { ...e, pending: false, txHash: data.txHash ?? e.txHash }
+              : e),
+          })));
+          if (resolvedStatus === 'SUCCESS') onDataChanged?.();
+        } catch { /* network blip — retry on the next interval */ }
+      }
+    };
+
+    pollOnce();
+    const interval = setInterval(pollOnce, 5000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [messages, walletAddress, onDataChanged]);
+
   function resetConversation() {
     setMessages([]);
     setError(null);
@@ -422,13 +518,14 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     const userMsg: Message = {
       id: crypto.randomUUID(), role: 'user',
       content: effectiveText, timestamp: nowTime(), proposedAt: Date.now(),
+      attachment: attachment ? { fileName: attachment.fileName || 'file', mimeType: attachment.mimeType } : undefined,
     };
     if (!silent) { setMessages(prev => [...prev, userMsg]); setInput(''); }
     setIsLoading(true);
     setError(null);
 
     const allMessages = [
-      ...messages.map(m => ({ role: m.role, content: m.content })),
+      ...messages.map(m => ({ role: m.role, content: m.content, rawParts: m.rawParts })),
       { role: 'user', content: effectiveText },
     ];
 
@@ -446,10 +543,11 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       employees:     employees.map(e => ({
         fullName: e.fullName, walletAddress: e.walletAddress,
         department: e.department, group: e.group,
-        // Needed for execute_payroll_run to compute per-employee amounts
-        // server-side. Not previously sent since no server-side tool used
-        // to need it (propose_payroll_run only ever deep-linked to the
-        // dashboard, where the real salary data already lives client-side).
+        // Needed for execute_payroll_run and the in-chat PayrollRunCard to
+        // compute per-employee amounts. Every payroll action — proposed or
+        // autonomous — is handled entirely within the chat interface; the
+        // agent never redirects the user out to the dashboard to finish
+        // something itself.
         salaryAmount: e.salaryAmount,
       })),
       agentActive:   agentActive ?? false,
@@ -494,6 +592,8 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       const data = await res.json() as {
         response?: string; actionLog?: ActionLogEntry[]; events?: AgentEvent[];
         truncated?: boolean; rateLimited?: boolean; cached?: boolean;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rawParts?: any[];
       };
 
       const assistantMsg: Message = {
@@ -505,6 +605,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         eventsResolved: data.events ? data.events.map(() => false) : undefined,
         truncated: data.truncated,
         proposedAt: Date.now(),
+        rawParts: data.rawParts,
       };
       setMessages(prev => [...prev, assistantMsg]);
 
@@ -541,8 +642,15 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     }));
   }, []);
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input); }
+  // Enter used to send (Shift+Enter for a newline) — on a phone's virtual
+  // keyboard, the Enter/Go key has no reliable way to combine with Shift,
+  // so every Enter press sent whatever had been typed so far mid-thought.
+  // Enter now always just inserts a newline; the Send button is the only
+  // way to send, on every device.
+  const onKeyDown = (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Intentionally a no-op — let the textarea's default Enter behaviour
+    // (insert a newline) happen. Kept as a named handler rather than
+    // removed so the intent is documented, not just silently absent.
   };
 
   const isBlocked   = dailyCount >= DAILY_BLOCK_AT;
@@ -599,8 +707,8 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         {messages.map(m => {
           const expired = Date.now() - m.proposedAt > CARD_TTL_MS;
           return (
-            <div key={m.id}>
-              <ChatMessage role={m.role} content={m.content} timestamp={m.timestamp} />
+            <div key={m.id} style={{ marginBottom: 16 }}>
+              <ChatMessage role={m.role} content={m.content} timestamp={m.timestamp} attachment={m.attachment} />
               {m.truncated && (
                 <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>
                   ⓘ This response was shortened and regenerated after hitting the length limit.
@@ -613,7 +721,23 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                 if (resolved) return null; // outcome already reported via its own card transition
 
                 if (ev.type === 'faucet_request' && ev.address) {
-                  return <FaucetResultCard key={i} address={ev.address} walletAddress={walletAddress} token={sessionTokenRef.current ?? undefined} agentAddress={agentAddress} />;
+                  return (
+                    <FaucetResultCard
+                      key={i}
+                      address={ev.address} walletAddress={walletAddress}
+                      token={sessionTokenRef.current ?? undefined} agentAddress={agentAddress}
+                      onResolved={(outcome, detail) => {
+                        setMessages(prev => prev.map(msg => msg.id !== m.id ? msg : {
+                          ...msg,
+                          actionLog: msg.actionLog?.map(log =>
+                            (log.status === 'QUEUED' && log.action.startsWith('Faucet request for'))
+                              ? { ...log, status: outcome === 'confirmed' ? 'SUCCESS' : 'FAILED', detail: outcome === 'error' ? detail : log.detail }
+                              : log
+                          ),
+                        }));
+                      }}
+                    />
+                  );
                 }
 
                 if (ev.type === 'unlisted_payment_request' && ev.address && ev.amount && ev.token) {
@@ -624,6 +748,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       address={ev.address} amount={ev.amount} token={ev.token}
                       walletAddress={walletAddress}
                       sessionToken={sessionTokenRef.current ?? undefined}
+                      autoConfirm={ev.autoConfirm}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -646,6 +771,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       address={ev.address} fullName={ev.fullName}
                       department={ev.department ?? ''} group={ev.group ?? ''} salary={ev.salary ?? '0'}
                       walletAddress={walletAddress}
+                      autoConfirm={ev.autoConfirm}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -670,6 +796,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       fullName={ev.fullName} department={ev.department} group={ev.group}
                       salary={ev.salary} newAddress={ev.newAddress}
                       walletAddress={walletAddress}
+                      autoConfirm={ev.autoConfirm}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -733,6 +860,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       employeesJson={ev.employeesJson}
                       skippedCount={ev.skippedCount}
                       walletAddress={walletAddress}
+                      autoConfirm={ev.autoConfirm}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -773,6 +901,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       group={ev.group}
                       walletAddress={walletAddress}
                       sessionToken={sessionTokenRef.current ?? undefined}
+                      autoConfirm={ev.autoConfirm}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -914,7 +1043,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         </button>
       </div>
       <div style={{ textAlign: 'center', fontSize: 10, color: '#CBD5E1', padding: '4px 0 8px', background: '#FFF' }}>
-        Enter to send · Shift+Enter for newline
+        Tap the send button to send · Enter for a new line
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

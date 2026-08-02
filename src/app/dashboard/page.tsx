@@ -538,7 +538,11 @@ export default function DashboardPage() {
   const [copied,           setCopied]           = useState(false);
 
   // ── Onboarding: does the user already have a registry clone? ──────────────
-  const [registryStatus, setRegistryStatus] = useState<'checking' | 'none' | 'exists'>('checking');
+  const [registryStatus, setRegistryStatus] = useState<'checking' | 'none' | 'exists' | 'error'>('checking');
+  // Bumped by the "Try again" button in the error state below to
+  // re-trigger the registry-check effect on demand, in addition to its
+  // own automatic retries.
+  const [registryCheckAttempt, setRegistryCheckAttempt] = useState(0);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   // ── Restoring previously-synced employee data from IPFS (via on-chain CID).
   // Centralised in usePayrollSync so /ai-agent gets the same instant-cache +
@@ -553,35 +557,74 @@ export default function DashboardPage() {
   });
   const dataLoadStatus = payrollSync.status;
 
+  // BUG FIX (the actual root cause of two separately-reported symptoms:
+  // employee data not restoring on a fresh browser/device, and the
+  // dashboard briefly showing "Finish Your Profile"/"Complete Employee
+  // Setup" for an account that already has one): this used to catch ANY
+  // failure from getRegistry() — including a plain transient RPC
+  // hiccup, which is more likely on exactly the scenario this broke on,
+  // a fresh browser/cold connection — and set registryStatus to 'none',
+  // the SAME state as "this wallet has genuinely never registered
+  // before". That did two things at once: (1) showed the onboarding CTA
+  // over a real, already-set-up account, and (2) left `registryClone` in
+  // state as null, which means usePayrollSync's `registryClone:
+  // registryStatus === 'exists' ? registryClone : null` also stayed
+  // null — so the whole IPFS restore pipeline never even attempted to
+  // run. It "self-corrected" whenever something else (a focus re-check,
+  // a manual refresh) happened to retry the RPC call and it succeeded
+  // that time — which looked like an unexplained one-off glitch rather
+  // than the retriable network failure it actually was.
+  //
+  // Fix: a failed check now retries a few times with a short backoff
+  // before giving up, and only ever lands on 'none' when getRegistry()
+  // actually, successfully returned the zero address — never on an
+  // error. A genuine, exhausted failure gets its own 'error' state with
+  // a visible retry action, instead of silently pretending to be "no
+  // account yet".
   useEffect(() => {
     // Wait until localStorage has been read before making auth decisions.
     // Without this guard, the hook returns isLoggedIn=false for one frame
     // during hydration, causing the registry check to reset unnecessarily.
     if (!authMounted) return;
     if (!isLoggedIn || !address || !publicClient) { setRegistryStatus('checking'); return; }
+    setRegistryStatus('checking');
     let cancelled = false;
+
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1200;
+
     (async () => {
-      try {
-        const existing = await publicClient.readContract({
-          address:      CONTRACTS.REGISTRY_FACTORY,
-          abi:          REGISTRY_FACTORY_ABI,
-          functionName: 'getRegistry',
-          args:         [address as `0x${string}`],
-        }) as `0x${string}`;
-        if (cancelled) return;
-        const ZERO = '0x0000000000000000000000000000000000000000';
-        if (existing && existing.toLowerCase() !== ZERO) {
-          dispatch({ type: 'SET_REGISTRY', payload: existing });
-          setRegistryStatus('exists');
-        } else {
-          setRegistryStatus('none');
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          const existing = await publicClient.readContract({
+            address:      CONTRACTS.REGISTRY_FACTORY,
+            abi:          REGISTRY_FACTORY_ABI,
+            functionName: 'getRegistry',
+            args:         [address as `0x${string}`],
+          }) as `0x${string}`;
+          if (cancelled) return;
+          const ZERO = '0x0000000000000000000000000000000000000000';
+          if (existing && existing.toLowerCase() !== ZERO) {
+            dispatch({ type: 'SET_REGISTRY', payload: existing });
+            setRegistryStatus('exists');
+          } else {
+            setRegistryStatus('none');
+          }
+          return; // success (either way) — don't retry
+        } catch (err) {
+          if (cancelled) return;
+          if (attempt < MAX_ATTEMPTS) {
+            console.warn(`[dashboard] getRegistry check failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying:`, err);
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            continue;
+          }
+          console.error('[dashboard] getRegistry check failed after retries:', err);
+          setRegistryStatus('error');
         }
-      } catch {
-        if (!cancelled) setRegistryStatus('none');
       }
     })();
     return () => { cancelled = true; };
-  }, [authMounted, isLoggedIn, address, publicClient, dispatch]);
+  }, [authMounted, isLoggedIn, address, publicClient, dispatch, registryCheckAttempt]);
 
   // Self-healing fallback for payrollClone — single shared implementation,
   // see lib/useCloneAccess.ts for the full writeup (previously duplicated
@@ -1044,6 +1087,12 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* needs-unlock has its own dedicated empty-state screen further
+            down (registryStatus === 'exists' && dataLoadStatus ===
+            'needs-unlock') rather than a banner here — a data-grid page
+            with genuinely nothing loaded yet reads better as one clear
+            screen than a banner sitting above another empty state. */}
+
         {/* ── Hero balance card ──────────────────────────────────────── */}
         <div style={{ background: '#4F46E5', borderRadius: 20, padding: '24px 28px', position: 'relative', overflow: 'hidden' }}>
           <div style={{ position: 'absolute', top: -40, right: -40, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
@@ -1111,6 +1160,17 @@ export default function DashboardPage() {
             <Loader2 size={24} style={{ animation: 'spin 0.7s linear infinite', color: '#4F46E5' }} />
             <p style={{ fontSize: 14, color: '#64748B', marginTop: 14 }}>Checking your account…</p>
           </div>
+        ) : registryStatus === 'error' ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Couldn&apos;t verify your account</h3>
+            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
+              This looks like a network hiccup, not a problem with your account or data — your employees and setup are still there. Please try again.
+            </p>
+            <button onClick={() => setRegistryCheckAttempt(n => n + 1)}
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Try again
+            </button>
+          </div>
         ) : registryStatus === 'none' ? (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
             <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Finish Your Profile</h3>
@@ -1127,6 +1187,17 @@ export default function DashboardPage() {
             <Loader2 size={24} style={{ animation: 'spin 0.7s linear infinite', color: '#4F46E5' }} />
             <p style={{ fontSize: 14, color: '#64748B', marginTop: 14 }}>Restoring your saved data…</p>
             <p style={{ fontSize: 12, color: '#94A3B8', marginTop: 6 }}>Check your wallet for a signature request.</p>
+          </div>
+        ) : registryStatus === 'exists' && dataLoadStatus === 'needs-unlock' ? (
+          <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
+            <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Your payroll data is ready to restore</h3>
+            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
+              This device hasn&apos;t loaded your employee data yet. One signature — proving wallet ownership, no funds involved — unlocks it.
+            </p>
+            <button onClick={() => { void payrollSync.unlockAndLoad(); }}
+              style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+              Unlock my data
+            </button>
           </div>
         ) : employees.length < 2 ? (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>

@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   SlidersHorizontal, X, Wallet, Settings2,
-  MessageSquare, PlusCircle,
+  MessageSquare, PlusCircle, ArrowLeft,
 } from 'lucide-react';
 import { AppLayout }     from '@/components/layout/AppLayout';
 import { useAgentStatus } from '@/lib/useAgentStatus';
@@ -70,9 +70,21 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
     </button>
   );
 
+  // Shown on every AI Agent sidebar page (Agent Wallet, Manage AI Agent,
+  // Chat History) except the chat itself, which is the destination, not a
+  // detour from it. Styled to match wallet/swap and wallet/bridge's own
+  // "Back to Wallet" button exactly (same size, weight, colour, gap).
+  const showBackToChat = pathname !== '/ai-agent';
+
   return (
     <>
       <AppLayout title={title} headerRight={slidersBtn}>
+        {showBackToChat && (
+          <button onClick={() => router.push('/ai-agent')}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#64748B', fontFamily: 'inherit', padding: 0, marginBottom: 16 }}>
+            <ArrowLeft size={15} /> Back to Chat
+          </button>
+        )}
         {children}
       </AppLayout>
 

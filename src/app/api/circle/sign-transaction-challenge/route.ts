@@ -1,23 +1,25 @@
 /**
  * @file app/api/circle/sign-transaction-challenge/route.ts
  *
- * POST /api/circle/sign-transaction-challenge
- * Body: { email, transaction: { to, data?, value?, gas, maxFeePerGas, maxPriorityFeePerGas, nonce, chainId } }
+ * SUPERSEDED — see /api/circle/contract-execution-challenge/route.ts,
+ * which is what lib/circle/useUniversalWrite.ts calls now.
  *
- * REPLACES the earlier /api/circle/write-challenge approach for actually
- * moving funds/calling contracts. That route called
- * /user/transactions/contractExecution, which Circle's own docs say is
- * NOT supported for user-controlled wallets on "Other EVM blockchains"
- * (the category Arc falls under) — confirmed by the exact "the specified
- * blockchain is either not supported or deprecated" error it produced.
- * Signing IS documented as supported for EVM/EVM-TESTNET, so this route
- * only creates a SIGNING challenge; the CLIENT constructs the raw
- * transaction (nonce/gas/fees, via its own publicClient) and broadcasts
- * the signed result itself — see lib/circle/useUniversalWrite.ts.
+ * This route existed because wallets were being created under the
+ * generic "Other EVM blockchains" classification, which genuinely
+ * doesn't support /user/transactions/contractExecution for
+ * user-controlled wallets — confirmed at the time by the exact "the
+ * specified blockchain is either not supported or deprecated" error it
+ * produced. That diagnosis was correct, but the underlying assumption
+ * (that Arc itself only qualifies for the generic fallback) was wrong —
+ * Arc has its own fully-supported chain code, `ARC-TESTNET`, confirmed
+ * against Circle's own supported-blockchains doc. Once
+ * lib/circle/user-wallet.ts's initializeUserWallet() was corrected to
+ * use it, contractExecution started working directly, so this
+ * sign-then-broadcast-ourselves workaround is no longer needed.
  *
- * write-challenge/route.ts is left in place (not deleted) since its
- * general shape/pattern is still a valid reference and it costs nothing
- * to leave unused; nothing calls it anymore.
+ * Left in place (not deleted) since its general shape/pattern is still a
+ * valid reference and it costs nothing to leave unused; nothing calls it
+ * anymore. Same convention as write-challenge/route.ts.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

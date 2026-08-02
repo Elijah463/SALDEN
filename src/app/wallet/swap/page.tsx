@@ -84,12 +84,22 @@ export default function SwapPage() {
 
   const fetchTokenBalance = useCallback(async (token: TokenMeta | null): Promise<string | null> => {
     if (!token || !address || !publicClient || !token.address) return null;
-    try {
-      const raw = await publicClient.readContract({
-        address: token.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [address as `0x${string}`],
-      }) as bigint;
-      return fromRawAmount(raw.toString(), token.decimals);
-    } catch { return null; }
+    // A transient RPC hiccup used to permanently show "—" until something
+    // else happened to re-trigger this effect (a manual refresh) — this
+    // retries a couple of times first, since that's the exact behavior
+    // "refresh always fixes it" describes: not a real absence of balance,
+    // just a one-shot read that occasionally needs asking again.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const raw = await publicClient.readContract({
+          address: token.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [address as `0x${string}`],
+        }) as bigint;
+        return fromRawAmount(raw.toString(), token.decimals);
+      } catch {
+        if (attempt < 3) await new Promise(r => setTimeout(r, 800));
+      }
+    }
+    return null;
   }, [address, publicClient]);
 
   useEffect(() => {

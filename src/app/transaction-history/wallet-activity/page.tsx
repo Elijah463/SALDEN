@@ -23,7 +23,7 @@ const CHAIN_LOGOS: Record<string, string> = {
   'Arc Testnet':      '/images/networks/arc.png',
   'Ethereum Sepolia':  '/images/networks/ethereum-sepolia.png',
   'Base Sepolia':      '/images/networks/base.png',
-  'Arbitrum Sepolia':  '/images/networks/arbitrum.jpeg',
+  'Arbitrum Sepolia':  '/images/networks/arbitrum.png',
   'Avalanche Fuji':    '/images/networks/avalanche.jpeg',
   'Linea Sepolia':     '/images/networks/linea.jpeg',
 };

@@ -174,7 +174,7 @@ export function generateReceiptPdf(input: ReceiptPdfInput): Buffer {
   metaRow('Token', input.token);
   if (input.remark) metaRow('Remark', input.remark);
   metaRow('Executed by', input.executedBy === 'ai_agent'
-    ? 'Salden AI Payroll Agent (autonomous)'
+    ? 'Salden AI Payroll Agent'
     : 'Employer (manual)');
 
   y += 3;

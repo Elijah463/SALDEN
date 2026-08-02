@@ -44,19 +44,33 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 function CardShell({
   tone, title, children,
 }: { tone: 'warn' | 'success' | 'error'; title: string; children: React.ReactNode }) {
-  const palette = {
-    warn:    { border: '#FED7AA', bg: '#FFFBEB', accent: '#92400E' },
-    success: { border: '#6EE7B7', bg: '#F0FDF4', accent: '#059669' },
-    error:   { border: '#FCA5A5', bg: '#FEF2F2', accent: '#DC2626' },
-  }[tone];
+  // 'warn' = still awaiting a decision — this is the actual confirmation
+  // card, and it stays a visually distinct card since the user still has
+  // an action to take. Recoloured to Salden's own indigo instead of the
+  // amber/brown it used to be.
+  //
+  // 'success'/'error' = a RESOLVED outcome — per explicit design
+  // feedback, these should read as a plain sentence in the flow of the
+  // conversation, not another bordered tile competing for attention right
+  // after the card that was just there. Text colour is unchanged (still
+  // green for success, red for error) — only the card chrome is gone.
+  if (tone !== 'warn') {
+    const color = tone === 'success' ? '#059669' : '#DC2626';
+    return (
+      <div style={{ marginTop: 8, fontSize: 13, color, lineHeight: 1.6 }}>
+        <span style={{ fontWeight: 700 }}>{title}</span>
+        <div style={{ color: '#334155', marginTop: 2 }}>{children}</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{
-      marginTop: 8, padding: '12px 16px', borderRadius: 12,
-      border: `1.5px solid ${palette.border}`, background: palette.bg,
-      fontSize: 13,
+      marginTop: 8, padding: '14px 16px', borderRadius: 12,
+      border: '1.5px solid #4338CA', background: '#4F46E5',
+      fontSize: 13, color: '#fff',
     }}>
-      <div style={{ fontWeight: 800, fontSize: 11, letterSpacing: '0.05em', color: palette.accent, marginBottom: 8 }}>
+      <div style={{ fontWeight: 800, fontSize: 11, letterSpacing: '0.05em', color: '#E0E7FF', marginBottom: 8 }}>
         {title}
       </div>
       {children}
@@ -111,13 +125,19 @@ export interface UnlistedPaymentCardProps {
    *  tracks unlisted-address payments. Without it, recordProposedSpend is
    *  silently never invoked and G-daily-limit only ever sees $0 spent today. */
   sessionToken?: string;
+  /** When true, signs and sends immediately on mount with no review UI or
+   *  button click — set by the model when the instruction was fully
+   *  explicit (see AUTOCONFIRM in the chat route's system prompt). The
+   *  wallet signature prompt itself is still the human-in-the-loop step;
+   *  this only skips the extra "are you sure" click before it. */
+  autoConfirm?: boolean;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
 type PayState = 'idle' | 'approving' | 'paying' | 'confirming' | 'done' | 'error' | 'declined';
 
 export function UnlistedPaymentCard({
-  address, amount, token, walletAddress, sessionToken, onResolved,
+  address, amount, token, walletAddress, sessionToken, autoConfirm, onResolved,
 }: UnlistedPaymentCardProps) {
   const { state, saveTxRecord } = useApp();
   const { payrollClone, tokenRegistry, payrollSetup } = state;
@@ -281,6 +301,11 @@ export function UnlistedPaymentCard({
     }
   }, [canWrite, universalWrite, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
 
+  useEffect(() => {
+    if (autoConfirm) void handleConfirm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConfirm]);
+
   if (payState === 'done') {
     return (
       <CardShell tone="success" title="✓ PAYMENT SENT">
@@ -316,15 +341,15 @@ export function UnlistedPaymentCard({
   }[payState as 'approving' | 'paying' | 'confirming'];
 
   return (
-    <CardShell tone="warn" title="⚠ ADDRESS NOT IN EMPLOYEE DATABASE">
+    <CardShell tone="warn" title={autoConfirm ? '⚠ SENDING PAYMENT…' : '⚠ ADDRESS NOT IN EMPLOYEE DATABASE'}>
       <div>
         Pay <strong>{amount} {token}</strong> to <strong>{address.slice(0, 8)}…{address.slice(-6)}</strong>?
       </div>
-      <div style={{ color: '#92400E', fontSize: 12, marginTop: 4 }}>
+      <div style={{ color: '#E0E7FF', fontSize: 12, marginTop: 4 }}>
         This requires your wallet signature. This is not an existing employee.
       </div>
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
-      <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Confirm & Sign" />
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
+      {!autoConfirm && <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Confirm & Sign" />}
     </CardShell>
   );
 }
@@ -338,13 +363,15 @@ export interface AddEmployeeCardProps {
   group:      string;
   salary:     string;
   walletAddress: string;
+  /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
+  autoConfirm?: boolean;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
 type AddState = 'idle' | 'syncing' | 'anchoring' | 'done' | 'error' | 'declined';
 
 export function AddEmployeeCard({
-  address, fullName, department, group, salary, walletAddress, onResolved,
+  address, fullName, department, group, salary, walletAddress, autoConfirm, onResolved,
 }: AddEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
@@ -434,6 +461,11 @@ export function AddEmployeeCard({
     }
   }, [canWrite, universalWrite, sign, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
+  useEffect(() => {
+    if (autoConfirm) void handleConfirm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConfirm]);
+
   if (addState === 'done') {
     return (
       <CardShell tone="success" title="✓ EMPLOYEE SAVED">
@@ -462,16 +494,16 @@ export function AddEmployeeCard({
   const busyLabel = { syncing: 'Encrypting and syncing to IPFS…', anchoring: 'Anchoring on-chain…' }[addState as 'syncing' | 'anchoring'];
 
   return (
-    <CardShell tone="warn" title="SAVE TO EMPLOYEE DATABASE?">
-      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: 2, fontSize: 12, color: '#92400E' }}>
+    <CardShell tone="warn" title={autoConfirm ? 'SAVING EMPLOYEE…' : 'SAVE TO EMPLOYEE DATABASE?'}>
+      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: 2, fontSize: 12, color: '#E0E7FF' }}>
         <span>Name</span><span style={{ fontWeight: 700 }}>{fullName}</span>
         <span>Department</span><span style={{ fontWeight: 700 }}>{department}</span>
         <span>Group</span><span style={{ fontWeight: 700 }}>{group}</span>
         <span>Salary</span><span style={{ fontWeight: 700 }}>{salary}</span>
         <span>Wallet</span><span style={{ fontWeight: 700 }}>{address.slice(0, 8)}…{address.slice(-6)}</span>
       </div>
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
-      <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Save & Sign" />
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
+      {!autoConfirm && <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Save & Sign" />}
     </CardShell>
   );
 }
@@ -595,14 +627,14 @@ export function EditEmployeeCard({
 
   return (
     <CardShell tone="warn" title={autoConfirm ? 'UPDATING EMPLOYEE…' : 'UPDATE EMPLOYEE?'}>
-      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: 2, fontSize: 12, color: '#92400E' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr', rowGap: 2, fontSize: 12, color: '#E0E7FF' }}>
         <span>Name</span><span style={{ fontWeight: 700 }}>{existing.fullName}{fullName && fullName !== existing.fullName ? ` → ${fullName}` : ''}</span>
         <span>Department</span><span style={{ fontWeight: 700 }}>{existing.department}{department && department !== existing.department ? ` → ${department}` : ''}</span>
         <span>Group</span><span style={{ fontWeight: 700 }}>{existing.group}{group && group !== existing.group ? ` → ${group}` : ''}</span>
         <span>Salary</span><span style={{ fontWeight: 700 }}>{existing.salaryAmount}{salary && Number(salary) !== existing.salaryAmount ? ` → ${salary}` : ''}</span>
         <span>Wallet</span><span style={{ fontWeight: 700 }}>{existing.walletAddress.slice(0, 8)}…{existing.walletAddress.slice(-6)}{newAddress ? ` → ${newAddress.slice(0, 8)}…${newAddress.slice(-6)}` : ''}</span>
       </div>
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
       {!autoConfirm && <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Update & Sign" />}
     </CardShell>
   );
@@ -693,10 +725,10 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
 
   return (
     <CardShell tone="warn" title="REMOVE EMPLOYEE?">
-      <div style={{ fontSize: 12, color: '#92400E' }}>
+      <div style={{ fontSize: 12, color: '#E0E7FF' }}>
         This will permanently remove <strong>{fullName}</strong> ({address.slice(0, 8)}…{address.slice(-6)}) from the employee database. This cannot be undone from here.
       </div>
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
       <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Remove & Sign" />
     </CardShell>
   );
@@ -806,7 +838,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
     <CardShell tone="warn" title={autoConfirm ? `ADDING ${drafts.length} EMPLOYEE${drafts.length === 1 ? '' : 'S'}…` : `ADD ${drafts.length} EMPLOYEE${drafts.length === 1 ? '' : 'S'}?`}>
       <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 4 }}>
         {drafts.map((d, i) => (
-          <div key={i} style={{ fontSize: 12, color: '#92400E', borderBottom: i < drafts.length - 1 ? '1px solid #FDE68A' : 'none', paddingBottom: 4 }}>
+          <div key={i} style={{ fontSize: 12, color: '#E0E7FF', borderBottom: i < drafts.length - 1 ? '1px solid rgba(255,255,255,0.15)' : 'none', paddingBottom: 4 }}>
             <strong>{d.fullName}</strong> — {d.department} / {d.group} — {d.salary} USDC/mo
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: '#B45309' }}>
               {d.walletAddress.slice(0, 10)}…{d.walletAddress.slice(-6)}
@@ -819,7 +851,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
           {skippedCount} record{skippedCount === 1 ? '' : 's'} skipped — missing a valid name, address, or salary.
         </div>
       )}
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
       {!autoConfirm && <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Add All & Sign" />}
     </CardShell>
   );
@@ -842,10 +874,12 @@ export interface PayrollRunCardProps {
   group: string;
   walletAddress: string;
   sessionToken?: string;
+  /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
+  autoConfirm?: boolean;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
-export function PayrollRunCard({ group, walletAddress, sessionToken, onResolved }: PayrollRunCardProps) {
+export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm, onResolved }: PayrollRunCardProps) {
   const { state, saveTxRecord } = useApp();
   const { employees, payrollClone, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
@@ -995,6 +1029,11 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, onResolved 
     }
   }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved]);
 
+  useEffect(() => {
+    if (autoConfirm) void handleConfirm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConfirm]);
+
   if (payState === 'done') {
     return (
       <CardShell tone="success" title="✓ PAYROLL RUN COMPLETE">
@@ -1032,24 +1071,24 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, onResolved 
   const PREVIEW_ROWS = 6;
 
   return (
-    <CardShell tone="warn" title="⚠ PAYROLL RUN READY">
+    <CardShell tone="warn" title={autoConfirm ? '⚠ RUNNING PAYROLL…' : '⚠ PAYROLL RUN READY'}>
       <div>
         Run payroll for <strong>{group}</strong> — <strong>{targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</strong>, total <strong>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDC</strong>?
       </div>
 
       {targetEmployees.length > 0 && (
-        <div style={{ marginTop: 8, border: '1px solid #FDE68A', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ marginTop: 8, border: '1px solid rgba(255,255,255,0.25)', borderRadius: 8, overflow: 'hidden' }}>
           {targetEmployees.slice(0, PREVIEW_ROWS).map(e => (
             <div key={e.walletAddress} style={{
               display: 'flex', justifyContent: 'space-between', padding: '6px 10px',
-              fontSize: 12, borderBottom: '1px solid #FEF3C7', background: '#FFFBEB',
+              fontSize: 12, borderBottom: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)',
             }}>
-              <span style={{ color: '#78350F' }}>{e.fullName}</span>
-              <span style={{ color: '#92400E', fontWeight: 600 }}>{Number(e.salaryAmount).toFixed(2)} USDC</span>
+              <span style={{ color: '#fff' }}>{e.fullName}</span>
+              <span style={{ color: '#E0E7FF', fontWeight: 600 }}>{Number(e.salaryAmount).toFixed(2)} USDC</span>
             </div>
           ))}
           {targetEmployees.length > PREVIEW_ROWS && (
-            <div style={{ padding: '6px 10px', fontSize: 11, color: '#92400E', background: '#FFFBEB' }}>
+            <div style={{ padding: '6px 10px', fontSize: 11, color: '#E0E7FF', background: 'rgba(255,255,255,0.08)' }}>
               +{targetEmployees.length - PREVIEW_ROWS} more
             </div>
           )}
@@ -1062,17 +1101,19 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, onResolved 
         </div>
       )}
 
-      <div style={{ color: '#92400E', fontSize: 12, marginTop: 6 }}>
+      <div style={{ color: '#E0E7FF', fontSize: 12, marginTop: 6 }}>
         This requires your wallet signature.
       </div>
-      {busy && <div style={{ fontSize: 12, color: '#92400E', marginTop: 6 }}>{busyLabel}</div>}
-      <ActionButtons
-        onConfirm={handleConfirm}
-        onDecline={handleDecline}
-        busy={busy}
-        confirmLabel="Confirm & Sign"
-        confirmDisabled={targetEmployees.length === 0 || dupWallets.length > 0}
-      />
+      {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
+      {!autoConfirm && (
+        <ActionButtons
+          onConfirm={handleConfirm}
+          onDecline={handleDecline}
+          busy={busy}
+          confirmLabel="Confirm & Sign"
+          confirmDisabled={targetEmployees.length === 0 || dupWallets.length > 0}
+        />
+      )}
     </CardShell>
   );
 }

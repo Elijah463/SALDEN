@@ -59,6 +59,13 @@ export interface AutonomousPayResult {
   /** true when the tx was submitted but not yet confirmed within our short
    *  poll window — not a failure, just still pending. */
   pending?:        boolean;
+  /** Circle's own transaction id — present whenever `pending` is true, so
+   *  the caller (chat/route.ts) can pass it to the client, which can keep
+   *  checking /api/agent/tx-status on its own schedule after this chat
+   *  turn's response has already been sent. Without this, a pending
+   *  result had no way to ever be revisited — see this file's header and
+   *  app/api/agent/tx-status/route.ts. */
+  transactionId?:  string;
   error?:          string;
   faucetAttempted?: boolean;
 }
@@ -212,7 +219,7 @@ export async function executeAutonomousTransfer(params: {
       });
     } catch { /* memo is purely informational — never surface its failure */ }
 
-    if (!confirmed) return { ok: true, pending: true, faucetAttempted, txHash: tx.txHash };
+    if (!confirmed) return { ok: true, pending: true, faucetAttempted, txHash: tx.txHash, transactionId: tx.id };
     if (confirmed.state === 'FAILED') return { ok: false, faucetAttempted, error: 'The payment transaction failed on-chain. No funds were moved.' };
     return { ok: true, txHash: confirmed.txHash, faucetAttempted };
   } catch (err) {
@@ -303,8 +310,11 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
     if (!confirmed) {
       // Submitted, but didn't confirm within our short budget — this is NOT
       // a failure. Report the tx id so the caller can tell the user to
-      // check status shortly (get_transaction_status once we have a hash).
-      return { ok: true, pending: true, faucetAttempted, txHash: payTx.txHash };
+      // check status shortly (get_transaction_status once we have a hash),
+      // and so the client can keep polling this specific transaction after
+      // this chat turn's response has already gone out — see
+      // app/api/agent/tx-status/route.ts.
+      return { ok: true, pending: true, faucetAttempted, txHash: payTx.txHash, transactionId: payTx.id };
     }
     if (confirmed.state === 'FAILED') {
       return { ok: false, faucetAttempted, error: 'The payment transaction failed on-chain. No funds were moved.' };

@@ -4,7 +4,23 @@
  * @notice Individual chat message with tool call indicators.
  */
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
+
+// The agent's system prompt tells it to use **bold** for emphasis (e.g.
+// "**All Employees**"), but nothing was ever parsing it — it rendered as
+// literal asterisks in the chat bubble. This is intentionally minimal:
+// just **bold**, matching the one markdown construct the prompt actually
+// asks the model to use, not a full markdown renderer.
+function renderWithBold(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    return <Fragment key={i}>{part}</Fragment>;
+  });
+}
 
 export interface ToolCallDisplay {
   name:   string;
@@ -18,6 +34,9 @@ export interface MessageProps {
   toolCalls?: ToolCallDisplay[];
   isLoading?: boolean;
   timestamp?: string;
+  /** Metadata-only (name + type) — shown as a small chip above the bubble
+   *  so a sent file doesn't just vanish from the chat log. */
+  attachment?: { fileName: string; mimeType: string };
 }
 
 const TOOL_META: Record<string, { label: string; icon: string }> = {
@@ -121,7 +140,7 @@ function TypingIndicator() {
   );
 }
 
-export default function ChatMessage({ role, content, toolCalls, isLoading, timestamp }: MessageProps) {
+export default function ChatMessage({ role, content, toolCalls, isLoading, timestamp, attachment }: MessageProps) {
   const isUser = role === "user";
 
   return (
@@ -129,7 +148,6 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
       display:       "flex",
       flexDirection: isUser ? "row-reverse" : "row",
       gap:           "10px",
-      marginBottom:  "16px",
       alignItems:    "flex-start",
     }}>
       {!isUser && (
@@ -149,6 +167,15 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
             {toolCalls.map((tc, i) => <ToolCallBadge key={i} call={tc} />)}
           </div>
         )}
+        {isUser && attachment && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 12, color: '#64748B', marginBottom: 4,
+            justifyContent: 'flex-end',
+          }}>
+            📎 {attachment.fileName}
+          </div>
+        )}
         <div style={{
           background:   isUser ? "#4F46E5" : "#FFFFFF",
           color:        isUser ? "#FFFFFF" : "#0F172A",
@@ -161,7 +188,7 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
           whiteSpace:   "pre-wrap" as const,
           wordBreak:    "break-word" as const,
         }}>
-          {isLoading ? <TypingIndicator /> : content}
+          {isLoading ? <TypingIndicator /> : renderWithBold(content)}
         </div>
         {timestamp && (
           <div style={{

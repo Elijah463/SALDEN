@@ -33,7 +33,13 @@ import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { verifyMessage, isAddress, getAddress } from 'viem';
 
 const NONCE_TTL_MS   = 5 * 60 * 1000;   // 5 minutes to sign
-const SESSION_TTL_MS = 15 * 60 * 1000;  // 15 minute session
+// 15 minutes was short enough that normal pauses in an actual conversation
+// (reading a multi-step result, typing out an edit, stepping away briefly)
+// could hit it mid-chat — exactly the "keeps saying my session expired"
+// friction reported. 30 minutes meaningfully reduces how often that
+// happens while staying a genuinely short-lived credential, not an
+// indefinite one.
+const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 minute session
 
 const _nonces = new Map<string, { nonce: string; expiresAt: number }>();
 

@@ -26,12 +26,25 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SchemaTypeEnum = any;
 
-// Cached once per process — symmetric with getGenAI() in chat/route.ts
+// Cached once per process — symmetric with getGenAI() in chat/route.ts.
+// Always the FULL, unfiltered set — mode-based filtering happens on
+// every call in getToolDeclarations() below, not here, so the expensive
+// dynamic import + declaration build only ever happens once regardless
+// of how many different employers/modes hit this in the same instance.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _toolDeclarations: any[] | null = null;
 
-export async function getToolDeclarations() {
-  if (_toolDeclarations) return _toolDeclarations;
+// Tools that act immediately from the agent's OWN wallet with no human
+// signature — see lib/agent/agentMode.ts. In 'confirm' mode these are
+// removed from what's sent to the model entirely, so the model has no
+// way to call them — not a system-prompt instruction it could ignore or
+// lose track of mid-conversation, an actual absence of the capability.
+export const AUTONOMOUS_ONLY_TOOLS = new Set([
+  'execute_payment', 'execute_payroll_run', 'execute_edit_employee', 'execute_bulk_add_employees',
+]);
+
+export async function getToolDeclarations(mode: 'confirm' | 'autonomous' = 'confirm') {
+  if (!_toolDeclarations) {
   // Migrated from @google/generative-ai's SchemaType to @google/genai's Type
   // — the old SDK is fully end-of-life (GitHub repo archived Dec 2025,
   // support ended Aug 31 2025) and was never built or tested against
@@ -90,13 +103,14 @@ export async function getToolDeclarations() {
         {
           name: 'propose_unlisted_payment',
           description:
-            'Proposes a payment to an address NOT currently in the employee database. This does NOT execute anything — it only queues a confirmation card requiring the human to click Confirm and sign with their wallet. Only call this once you have the full address, amount, and token explicitly from the user.',
+            'Proposes a payment to an address NOT currently in the employee database. This does NOT execute anything — it queues a confirmation card. Only call this once you have the full address, amount, and token explicitly from the user. Set autoConfirm based on how clear the instruction was — see the AUTOCONFIRM section of your instructions.',
           parameters: {
             type: T.OBJECT,
             properties: {
               address: { type: T.STRING, description: 'Full checksummed 0x address.' },
               amount:  { type: T.STRING, description: 'Numeric amount as a plain string, e.g. "150" or "150.5". Never calculate this yourself — use exactly what the user said.' },
               token:   { type: T.STRING, description: "Token symbol, e.g. 'USDC'." },
+              autoConfirm: { type: T.BOOLEAN, description: 'true if the recipient, amount, and token were all stated fully and unambiguously — skips the review card and goes straight to a wallet-signature prompt. false if you had to interpret, correct a typo, or guess which of several close matches the user meant — shows the full review card first.' },
             },
             required: ['address', 'amount', 'token'],
           },
@@ -104,7 +118,7 @@ export async function getToolDeclarations() {
         {
           name: 'propose_add_employee',
           description:
-            'Proposes saving a new employee to the IPFS database and updating the on-chain CID pointer via SaldenRegistry.updateCID(). This does NOT execute anything — it queues a confirmation card requiring the human to click Confirm. The agent must have been granted the Agent role via addAgent() on the Registry clone before updateCID() will succeed. Only call this after the user has explicitly agreed to save and you have all five fields.',
+            'Proposes saving a new employee to the IPFS database and updating the on-chain CID pointer via SaldenRegistry.updateCID(). This does NOT execute anything — it queues a confirmation card. The agent must have been granted the Agent role via addAgent() on the Registry clone before updateCID() will succeed. Only call this after the user has explicitly agreed to save and you have all five fields. Set autoConfirm based on how clear the instruction was — see the AUTOCONFIRM section of your instructions.',
           parameters: {
             type: T.OBJECT,
             properties: {
@@ -113,6 +127,7 @@ export async function getToolDeclarations() {
               department: { type: T.STRING, description: 'Org function, e.g. Legal, Marketing, CSO. Distinct from group.' },
               group:      { type: T.STRING, description: 'Payroll/work classification, e.g. Remote Workers, Contractors. Distinct from department.' },
               salary:     { type: T.STRING, description: 'Numeric salary amount as a plain string.' },
+              autoConfirm: { type: T.BOOLEAN, description: 'true if the user gave all five fields explicitly and clearly meant to add this person now — skips the review card and goes straight to a wallet-signature prompt. false if you had to fill in a reasonable guess, correct something unclear, or the user seemed to be exploring rather than instructing — shows the full review card first.' },
             },
             required: ['address', 'fullName', 'department', 'group', 'salary'],
           },
@@ -120,10 +135,13 @@ export async function getToolDeclarations() {
         {
           name: 'propose_payroll_run',
           description:
-            'Proposes running payroll for a specific employee group. This does NOT execute anything — it gives the user a link to the dashboard with that group pre-selected, where they review and sign the transaction themselves. Only call this once the group is unambiguous (see Guardrail 4) — if the user said "everyone" or a group name that does not exactly match one in the database, ask first instead of calling this. Use this (never execute_payroll_run) whenever the instruction leaves ANY room for interpretation.',
+            'Proposes running payroll for a specific employee group. This does NOT execute anything — it queues a confirmation card the user reviews and signs themselves. Only call this once the group is unambiguous (see Guardrail 4) — if the user said "everyone" or a group name that does not exactly match one in the database, ask first instead of calling this. Set autoConfirm based on how clear the instruction was — see the AUTOCONFIRM section of your instructions.',
           parameters: {
             type: T.OBJECT,
-            properties: { group: { type: T.STRING, description: 'The exact group name as it appears in the employee database, or "All Employees".' } },
+            properties: {
+              group: { type: T.STRING, description: 'The exact group name as it appears in the employee database, or "All Employees".' },
+              autoConfirm: { type: T.BOOLEAN, description: 'true if the group matched exactly and the user clearly instructed running it now — skips the review card and goes straight to a wallet-signature prompt. false if the group name was a close-but-not-exact match, or the user seemed to be asking rather than instructing — shows the full review card first.' },
+            },
             required: ['group'],
           },
         },
@@ -171,7 +189,7 @@ export async function getToolDeclarations() {
         {
           name: 'propose_edit_employee',
           description:
-            'Proposes updating an existing employee\'s salary, department, group, or wallet address — queues a confirmation card the human must approve, exactly like propose_add_employee. Use this whenever which employee, which field, or the new value is ambiguous, or the user seems to be asking rather than instructing. Only include the fields that are actually changing.',
+            'Proposes updating an existing employee\'s salary, department, group, or wallet address — queues a confirmation card, exactly like propose_add_employee. Use this whenever which employee, which field, or the new value is ambiguous, or the user seems to be asking rather than instructing. Only include the fields that are actually changing. Set autoConfirm based on how clear the instruction was — see the AUTOCONFIRM section of your instructions.',
           parameters: {
             type: T.OBJECT,
             properties: {
@@ -181,6 +199,7 @@ export async function getToolDeclarations() {
               group:          { type: T.STRING, description: 'New group, only if changing.' },
               salary:         { type: T.STRING, description: 'New numeric salary, only if changing.' },
               newAddress:     { type: T.STRING, description: 'New wallet address, only if changing.' },
+              autoConfirm:    { type: T.BOOLEAN, description: 'true if the employee, the field, and the new value were all stated explicitly and clearly — skips the review card and goes straight to a wallet-signature prompt. false if anything was ambiguous or interpreted — shows the full review card first.' },
             },
             required: ['currentAddress'],
           },
@@ -201,10 +220,11 @@ export async function getToolDeclarations() {
         {
           name: 'propose_bulk_add_employees',
           description:
-            'Proposes adding MULTIPLE employees at once — use this after extracting employee data from an uploaded document/image (a roster, spreadsheet screenshot, offer letters, etc). Shows the user a single card listing everything extracted so they can review before anything is written to the database. Only include employees where you have a full name, a valid-looking wallet address, and a salary — never invent or guess a missing field; leave that employee out and tell the user what was missing instead.',
+            'Proposes adding MULTIPLE employees at once — use this after extracting employee data from an uploaded document/image/CSV, or from employee records pasted directly into the chat as text (see BULK EMPLOYEE DATA in your instructions). Shows the user a card listing everything extracted. Only include employees where you have a full name, a valid-looking wallet address, and a salary — never invent or guess a missing field; leave that employee out and tell the user what was missing instead. Set autoConfirm based on how clear the instruction was — see the AUTOCONFIRM section of your instructions.',
           parameters: {
             type: T.OBJECT,
             properties: {
+              autoConfirm: { type: T.BOOLEAN, description: 'true if the source data (upload or pasted text) was clean and the user clearly meant to add these people, with no missing/ambiguous records among the ones included — skips the review card and goes straight to a wallet-signature prompt. false if any record needed interpretation, or the user hasn\'t clearly said to proceed yet — shows the full review card first.' },
               employees: {
                 type: T.ARRAY,
                 items: {
@@ -251,6 +271,20 @@ export async function getToolDeclarations() {
       ],
     },
   ];
-  _toolDeclarations = declarations;
-  return _toolDeclarations;
+    _toolDeclarations = declarations;
+  }
+
+  if (mode === 'autonomous') return _toolDeclarations;
+
+  // 'confirm' mode: strip the autonomous-only tools so the model
+  // structurally cannot call them, rather than relying on it to follow a
+  // system-prompt instruction not to.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return _toolDeclarations.map((group: any) => ({
+    ...group,
+    functionDeclarations: group.functionDeclarations.filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (fn: any) => !AUTONOMOUS_ONLY_TOOLS.has(fn.name)
+    ),
+  }));
 }

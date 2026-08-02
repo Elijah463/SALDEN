@@ -42,7 +42,7 @@ import { useApp } from '@/context/AppContext';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 
-export type PayrollSyncStatus = 'idle' | 'checking' | 'loading' | 'done' | 'error';
+export type PayrollSyncStatus = 'idle' | 'checking' | 'loading' | 'done' | 'error' | 'needs-unlock';
 
 // Minimal structural shape — avoids coupling this file to a specific
 // wagmi/viem generic version. Only the methods actually used are declared.
@@ -75,6 +75,7 @@ export function usePayrollSync({
   const { state, dispatch, hydrateFromCache, loadData, addToast } = useApp();
   const [status, setStatus] = useState<PayrollSyncStatus>('idle');
   const [currentCid, setCurrentCid] = useState<string | null>(null);
+  const [pendingUnlockCid, setPendingUnlockCid] = useState<string | null>(null);
   const lastCheckedAt = useRef<number>(0);
   const inFlight      = useRef(false);
   // signMessage here branches to wagmi (external wallet) or a Circle
@@ -137,30 +138,30 @@ export function usePayrollSync({
       const hasVisibleData = hydrated || state.employees.length > 0;
 
       if (!hasVisibleData) {
-        // Nothing on screen to lose — load silently (first-ever visit, or
-        // an empty local cache). This matches the previous dashboard-only
-        // "load if empty" behaviour, now available on every page.
+        // BUG FIX: this used to call loadData() (which needs a wallet
+        // signature) right here, inside an effect that fires
+        // automatically on mount — with NO preceding user click. That's
+        // almost certainly the actual root cause behind "my employee data
+        // didn't load on a new browser": a fresh browser/device NEVER has
+        // a local cache, so it always lands in this exact branch, which
+        // always tried to auto-request a signature the instant the page
+        // loaded. Wallets and browsers are far more likely to silently
+        // block, ignore, or let a user miss a signature prompt that
+        // wasn't triggered by an actual tap — especially on mobile, and
+        // especially on a device/wallet pairing with no established
+        // trust yet. On the SAME browser/device you'd used before, this
+        // could easily have gone unnoticed as "working", since a click
+        // somewhere nearby may have coincidentally satisfied whatever the
+        // wallet/browser required.
         //
-        // Previously bailed out here with `if (!walletClient) { setStatus
-        // ('done'); return; }` — silently finishing with zero data loaded
-        // for every social-login user (wagmi never has a walletClient for
-        // a Circle session), with no error shown at all. sign() now
-        // routes through useUniversalWrite, which works for both wallet
-        // types, so there's no reason to give up before even trying.
-        setStatus('loading');
-        try {
-          const { loaded } = await loadData({ walletAddress: address, cid, signMessage: sign });
-          setStatus('done');
-          if (loaded) { setCurrentCid(cid); addToast('Restored your employee data.', 'success'); }
-        } catch (signErr) {
-          // A declined/failed signature is a real, user-visible outcome —
-          // surface it instead of silently finishing "done" with nothing
-          // loaded, which is what made this look like sync was just
-          // broken with no explanation.
-          console.error('[usePayrollSync] Could not sign to load data:', signErr);
-          setStatus('error');
-          addToast((signErr as Error).message || 'Could not load your employee data — please try again.', 'warning');
-        }
+        // Fix: never call loadData() from here. Surface a `needs-unlock`
+        // state with the CID that's waiting, and require the caller to
+        // invoke unlockAndLoad() below from a real button press — so the
+        // signature request is always tied to a genuine user gesture,
+        // reliably, on every browser and wallet.
+        dispatch({ type: 'SET_SYNC_AVAILABLE', payload: { available: false, cid: null } });
+        setPendingUnlockCid(cid);
+        setStatus('needs-unlock');
       } else {
         // There's already data on screen — do not silently overwrite it.
         // Surface the prompt and let the user decide via syncNow().
@@ -173,7 +174,7 @@ export function usePayrollSync({
     } finally {
       inFlight.current = false;
     }
-  }, [registryClone, address, publicClient, hydrateFromCache, loadData, dispatch, sign, addToast, state.employees.length]);
+  }, [registryClone, address, publicClient, hydrateFromCache, dispatch, state.employees.length]);
 
   // Initial check once the registry clone + wallet are known.
   useEffect(() => {
@@ -192,6 +193,31 @@ export function usePayrollSync({
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [runCheck, refocusThrottleMs]);
+
+  // THE only place that calls loadData()/sign() for the first-ever-load
+  // case now — always invoked from a real onClick in the calling page
+  // (see dashboard/page.tsx and app/ai-agent/page.tsx's "Unlock your
+  // data" button), never automatically. This is what makes the signature
+  // request reliable across every wallet/browser instead of depending on
+  // an effect-triggered prompt that's easy for a wallet/browser to block
+  // or for a user to miss.
+  const unlockAndLoad = useCallback(async () => {
+    if (!address || !pendingUnlockCid) return;
+    setStatus('loading');
+    try {
+      const { loaded } = await loadData({ walletAddress: address, cid: pendingUnlockCid, signMessage: sign });
+      setStatus('done');
+      if (loaded) {
+        setCurrentCid(pendingUnlockCid);
+        setPendingUnlockCid(null);
+        addToast('Restored your employee data.', 'success');
+      }
+    } catch (err) {
+      console.error('[usePayrollSync] unlockAndLoad failed:', err);
+      setStatus('needs-unlock'); // stay unlockable — a declined/failed signature isn't a dead end
+      addToast((err as Error).message || 'Could not load your employee data — please try again.', 'warning');
+    }
+  }, [address, pendingUnlockCid, loadData, sign, addToast]);
 
   const syncNow = useCallback(async () => {
     if (!address || !state.pendingCid) return;
@@ -213,5 +239,11 @@ export function usePayrollSync({
     pendingCid:    state.pendingCid,
     currentCid,
     syncNow,
+    /** True when there's an on-chain CID waiting to be loaded but doing so
+     *  needs a wallet signature — render an explicit "Unlock your data"
+     *  button and call unlockAndLoad() from its onClick. Never trigger
+     *  this automatically. */
+    needsUnlock: status === 'needs-unlock',
+    unlockAndLoad,
   };
 }

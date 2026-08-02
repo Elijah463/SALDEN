@@ -50,7 +50,7 @@ import { NetworkGuard }        from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useCircleAdapter }    from '@/lib/circle/useCircleAdapter';
 import { getAppKit }           from '@/lib/circle/appKit';
-import { txLink, arcTestnet, CONTRACTS } from '@/lib/contracts/config';
+import { arcTestnet, CONTRACTS, ARCSCAN_BASE } from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { saveWalletActivity }  from '@/lib/db/indexeddb';
 
@@ -73,6 +73,12 @@ interface BridgeChainConfig {
   logo:        string;
   usdcAddress: `0x${string}`;
   viemChain:   Chain;
+  /** Block explorer base URL for THIS chain — successTx is always a
+   *  source-chain hash (see this file's header comment), so linking it
+   *  always needs the FROM chain's own explorer, never a single hardcoded
+   *  one. Verified against each chain's own official/standard testnet
+   *  explorer. */
+  explorerBase: string;
 }
 
 // USDC uses 6 decimals on every one of these chains (Circle's own
@@ -82,12 +88,12 @@ interface BridgeChainConfig {
 const USDC_DECIMALS = 6;
 
 const BRIDGE_CHAINS: BridgeChainConfig[] = [
-  { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet },
-  { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum-sepolia.png',  usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia },
-  { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',              usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia },
-  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.jpeg',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia },
-  { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg',        usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji },
-  { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',            usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia },
+  { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet,      explorerBase: ARCSCAN_BASE },
+  { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum-sepolia.png',  usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia,        explorerBase: 'https://sepolia.etherscan.io' },
+  { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',              usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia,    explorerBase: 'https://sepolia.basescan.org' },
+  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.png',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia, explorerBase: 'https://sepolia.arbiscan.io' },
+  { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg',        usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji,  explorerBase: 'https://testnet.snowtrace.io' },
+  { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',            usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia,   explorerBase: 'https://sepolia.lineascan.build' },
 ];
 
 function chainByKey(key: AppKitChain): BridgeChainConfig {
@@ -107,15 +113,21 @@ function clientFor(chain: BridgeChainConfig) {
 }
 
 async function fetchUsdcBalance(chain: BridgeChainConfig, address: `0x${string}`): Promise<bigint | null> {
-  try {
-    const client = clientFor(chain);
-    const balance = await client.readContract({
-      address: chain.usdcAddress, abi: ERC20_ABI, functionName: 'balanceOf', args: [address],
-    });
-    return balance as bigint;
-  } catch {
-    return null;
+  // Retries a transient RPC hiccup instead of permanently showing "—" for
+  // this chain's balance until an unrelated re-render happens to retry it
+  // — same reliability fix applied to the swap page's balance fetch.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const client = clientFor(chain);
+      const balance = await client.readContract({
+        address: chain.usdcAddress, abi: ERC20_ABI, functionName: 'balanceOf', args: [address],
+      });
+      return balance as bigint;
+    } catch {
+      if (attempt < 3) await new Promise(r => setTimeout(r, 800));
+    }
   }
+  return null;
 }
 
 function formatUnits6(raw: bigint): string {
@@ -496,6 +508,34 @@ export default function BridgePage() {
       if (/reject|cancel|denied/i.test(msg)) {
         setError('Transaction cancelled.');
         setBridgeSteps([]);
+      } else if (/action\s+native\.\w+\s+is not supported/i.test(msg)) {
+        // Known @circle-fin/app-kit (1.0.1) limitation, not a real problem
+        // with this transaction. Arc's native gas token IS USDC — dual
+        // representation, 18-decimal "native" balance and a 6-decimal
+        // ERC-20 at 0x3600...0000, same underlying asset (confirmed
+        // against docs.arc.network's deployment guide). Circle's own
+        // swap-kit skill explicitly tells developers to special-case
+        // native == USDC on Arc themselves because the SDK doesn't do it
+        // automatically for every capability yet; Bridge's internal
+        // native-balance preflight appears to be one of the capabilities
+        // that doesn't have that special case, so it throws trying to
+        // check a "native" balance action that isn't wired up for Arc.
+        // We already verify the user has enough USDC ourselves (the
+        // `insufficientBalance` check that gates the Bridge button, from
+        // a real on-chain read) — on Arc that IS the native-gas check —
+        // so this specific failure carries no new information about the
+        // user's funds. Rather than show the raw SDK internals, say so
+        // plainly and point at the one thing that would actually help:
+        // upgrading past app-kit 1.0.1 once Circle ships an Arc-aware fix
+        // (last published version at the time of writing), or moving to
+        // @circle-fin/bridge-kit directly (actively released, currently
+        // 1.8.3, vs. app-kit's unchanged 1.0.1 wrapping it).
+        setError(
+          'Circle\u2019s bridge SDK hit a known limitation checking Arc\u2019s gas balance (Arc uses USDC as its native gas token, and this SDK version doesn\u2019t yet special-case that for bridging). Your USDC balance is fine — this isn\u2019t a funds issue. Please try again in a moment, and if it persists this needs an SDK update on our end rather than a change on your side.'
+        );
+        setBridgeSteps(prev =>
+          prev.map(s => s.state === 'active' ? { ...s, state: 'error' } : s)
+        );
       } else {
         setError(msg);
         setBridgeSteps(prev =>
@@ -727,7 +767,7 @@ export default function BridgePage() {
           </button>
 
           <p style={{ textAlign: 'center', fontSize: 11, color: '#CBD5E1', marginTop: 12 }}>
-            Powered by LI.FI
+            Powered by Circle CCTP
           </p>
 
           {bridgeSteps.length > 0 && (
@@ -747,7 +787,7 @@ export default function BridgePage() {
                 Funds will arrive on {toChain.name} shortly — no action needed on your end.
               </p>
               {successTx && (
-                <a href={txLink(successTx)} target="_blank" rel="noreferrer" style={{
+                <a href={`${fromChain.explorerBase}/tx/${successTx}`} target="_blank" rel="noreferrer" style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
                   color: '#4F46E5', textDecoration: 'none', fontWeight: 600,
                 }}>

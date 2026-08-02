@@ -383,7 +383,7 @@ export default function TransactionHistoryPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14 }}>
               <StatCard label="Total Volume" value={`${totalVolume.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`} icon={<DollarSign size={18} color="#4F46E5" />} />
               <StatCard label="Transactions" value={txs.length.toString()} icon={<TrendingUp size={18} color="#14B8A6" />} color="#14B8A6" />
-              <StatCard label="Wallet Activity" value="Swaps · Bridges · Deposits" icon={<Wallet size={18} color="#059669" />} color="#059669" href="/transaction-history/wallet-activity" />
+              <StatCard label="Wallet Activity" value="View Txns" icon={<Wallet size={18} color="#059669" />} color="#059669" href="/transaction-history/wallet-activity" />
               <StatCard label="Private Transactions" value="Coming soon" icon={<Lock size={18} color="#94A3B8" />} color="#94A3B8" href="/transaction-history/private-transactions" />
             </div>
 

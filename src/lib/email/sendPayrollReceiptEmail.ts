@@ -37,7 +37,7 @@ export interface PayrollReceiptEmailResult {
 
 function buildSummaryLine(executedBy: 'manual' | 'ai_agent'): string {
   return executedBy === 'ai_agent'
-    ? 'This payroll run was executed autonomously by the Salden AI Payroll Agent on your behalf.'
+    ? 'This payroll run was executed by the Salden AI Payroll Agent.'
     : 'This payroll run was executed manually by you.';
 }
 

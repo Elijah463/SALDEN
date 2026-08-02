@@ -7,19 +7,23 @@
  * instead of calling wagmi's walletClient.writeContract() directly.
  * Branches on the user's real login method:
  *
- *   - 'external' → wagmi's walletClient.writeContract(), unchanged from
- *     before. Nothing about the external-wallet path changes.
- *   - 'circle'   → Circle's user-controlled wallets do NOT support
- *     /user/transactions/contractExecution for Arc's chain category
- *     ("Other EVM blockchains" — confirmed against Circle's own docs,
- *     which explicitly say contract execution isn't supported there,
- *     only signing). So this constructs the raw transaction itself
- *     (nonce/gas/fees via publicClient — the same inputs wagmi would
- *     need anyway), gets it SIGNED via a Circle challenge
- *     (POST /api/circle/sign-transaction-challenge →
- *     executeCircleSignTransactionChallenge, prompts the user's PIN),
- *     and broadcasts the signed result itself via
- *     publicClient.sendRawTransaction().
+ *   - 'external' → wagmi's walletClient.writeContract(), plus a
+ *     publicClient.simulateContract() preflight (see decodeContractError
+ *     import below) so a revert shows its real, decoded reason instead
+ *     of raw viem/RPC text, and so the wallet never even pops up a
+ *     signature request for a call that's guaranteed to fail.
+ *   - 'circle'   → Circle's user-controlled wallets now support
+ *     /user/transactions/contractExecution directly, now that Arc
+ *     Testnet wallets are created under Circle's real `ARC-TESTNET`
+ *     chain code (see lib/circle/user-wallet.ts's initializeUserWallet
+ *     doc comment for the full history — this used to be blocked by a
+ *     wrong chain classification, not an actual Circle limitation).
+ *     Circle handles simulation, gas estimation, signing and
+ *     broadcasting server-side — this hook just creates the challenge
+ *     (POST /api/circle/contract-execution-challenge) and hands it to
+ *     the Circle Web SDK for the user's PIN
+ *     (executeCircleTransactionChallenge), then polls for the on-chain
+ *     result the same way the external-wallet path waits for a receipt.
  *
  * Deliberately NOT wired into Swap — see app/wallet/swap/page.tsx's own
  * external-wallet notice; Circle's Swap adapter needs a standard EIP-1193
@@ -31,19 +35,22 @@
  * Debugging a failure: each layer below is independently checkable.
  *   1. Is `canWrite` false? → loginMethod/email/walletClient problem,
  *      check useEffectiveAddress().
- *   2. Does nonce/fee/gas estimation throw? → a publicClient RPC problem,
- *      unrelated to Circle — same as any wagmi read would hit.
- *   3. Does POST /api/circle/sign-transaction-challenge fail? → problem
- *      in lib/circle/user-wallet.ts (session/challenge creation) or
- *      lib/circle/entitySecret.ts (encryption) — test that route alone.
- *   4. Does the SDK challenge itself error? → problem in the challengeId/
- *      userToken/encryptionKey handoff, or the user declining/failing
- *      their PIN — check executeCircleSignTransactionChallenge's own
- *      error.
- *   5. Does sendRawTransaction reject the signed tx? → check
- *      executeCircleSignTransactionChallenge's 0x-prefix normalisation
- *      note; Circle's exact EVM encoding for `signedTransaction` wasn't
- *      independently confirmed against a live EVM-chain response.
+ *   2. Does the simulateContract preflight throw (external) / does
+ *      Circle's own contractExecution call reject synchronously
+ *      (circle)? → the call would genuinely revert — check
+ *      decodeContractError()'s output / the API error message, both are
+ *      now decoded against the real contract ABI (see
+ *      lib/contracts/abis.ts and lib/contracts/decodeError.ts).
+ *   3. Does POST /api/circle/contract-execution-challenge fail? →
+ *      problem in lib/circle/user-wallet.ts (session/challenge creation)
+ *      or lib/circle/entitySecret.ts (encryption) — test that route
+ *      alone.
+ *   4. Does the SDK challenge itself error? → problem in the
+ *      challengeId/userToken/encryptionKey handoff, or the user
+ *      declining/failing their PIN.
+ *   5. Does the transaction stay QUEUED/SENT and never resolve? →
+ *      check executeCircleTransactionChallenge's polling loop in
+ *      executeChallenge.ts and /api/circle/tx-status.
  */
 
 import { useCallback } from 'react';
@@ -51,9 +58,10 @@ import { useWalletClient, usePublicClient } from 'wagmi';
 import { encodeFunctionData, type Abi } from 'viem';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { arcTestnet } from '@/lib/contracts/config';
+import { decodeContractError } from '@/lib/contracts/decodeError';
 import {
   executeCircleMessageSigningChallenge,
-  executeCircleSignTransactionChallenge,
+  executeCircleTransactionChallenge,
 } from '@/lib/circle/executeChallenge';
 
 export interface UniversalWriteParams {
@@ -63,8 +71,7 @@ export interface UniversalWriteParams {
   args?:         readonly unknown[];
   /** Native-token value to send with the call, in wei. Rare in this app
    *  (no current write flow sends native value) — included for
-   *  completeness, converted to a decimal string for Circle since their
-   *  API expects a human-decimal amount, not wei. */
+   *  completeness. */
   value?:        bigint;
 }
 
@@ -79,12 +86,15 @@ export interface UniversalSendTransactionParams {
 export interface UniversalWriteResult {
   /** Performs the write. Throws on failure — same contract as wagmi's
    *  writeContract, so existing try/catch call sites don't need to
-   *  change their error handling. */
+   *  change their error handling. Errors are decoded against the real
+   *  contract ABI where possible (see lib/contracts/decodeError.ts) —
+   *  callers get `AlreadyDeployed`-style messages, not raw revert data. */
   writeContract: (params: UniversalWriteParams, onStatusChange?: (msg: string) => void) => Promise<`0x${string}`>;
   /** Sends a pre-built raw transaction (to/data/value already encoded by
    *  the caller — e.g. LI.FI's quote.transactionRequest) instead of an
    *  ABI+functionName+args writeContract needs to encode itself. Same
-   *  wallet branching as writeContract underneath. */
+   *  wallet branching as writeContract underneath — no ABI decoding here
+   *  since there's no ABI to decode against. */
   sendTransaction: (params: UniversalSendTransactionParams, onStatusChange?: (msg: string) => void) => Promise<`0x${string}`>;
   /** Signs a plain message. Same branch logic as writeContract — wagmi
    *  for external wallets, a Circle SIGN_MESSAGE challenge for social
@@ -108,62 +118,42 @@ export function useUniversalWrite(): UniversalWriteResult {
     loginMethod === 'circle'   ? !!email :
     false;
 
-  // Shared by writeContract and sendTransaction's Circle branches — see
-  // this file's top-level docstring for the full reasoning. Circle's
-  // user-controlled wallets don't support contractExecution for Arc's
-  // chain category, only signing, so this constructs the transaction
-  // itself (same inputs wagmi/viem would need anyway), gets it SIGNED via
-  // a Circle challenge, and broadcasts the signed result itself.
-  const signAndBroadcastCircleTx = useCallback(async (
+  // Circle contractExecution path — shared by writeContract and
+  // sendTransaction's 'circle' branches. Takes already-ABI-encoded
+  // calldata (callData) rather than re-deriving Circle's
+  // abiFunctionSignature format — see the API route's doc comment for
+  // why. Circle handles simulation/gas/signing/broadcast; this just
+  // creates the challenge, runs it through the user's PIN, and polls for
+  // the resulting on-chain status.
+  const executeContractCallViaCircle = useCallback(async (
     to: `0x${string}`, data: `0x${string}`, value: bigint | undefined,
     onStatusChange?: (msg: string) => void,
   ): Promise<`0x${string}`> => {
     if (!email) throw new Error('Not logged in.');
-    if (!address) throw new Error('No wallet address available.');
-    if (!publicClient) throw new Error('No RPC connection available.');
 
     onStatusChange?.('Preparing transaction…');
 
-    const [nonce, feesPerGas, gas] = await Promise.all([
-      publicClient.getTransactionCount({ address: address as `0x${string}`, blockTag: 'pending' }),
-      publicClient.estimateFeesPerGas(),
-      publicClient.estimateGas({ account: address as `0x${string}`, to, data, value }),
-    ]);
-
-    const maxFeePerGas = feesPerGas.maxFeePerGas ?? feesPerGas.gasPrice;
-    const maxPriorityFeePerGas = feesPerGas.maxPriorityFeePerGas ?? feesPerGas.gasPrice;
-    if (!maxFeePerGas || !maxPriorityFeePerGas) {
-      throw new Error('Could not estimate network fees for this transaction.');
-    }
-
-    const res = await fetch('/api/circle/sign-transaction-challenge', {
+    const res = await fetch('/api/circle/contract-execution-challenge', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
-        transaction: {
-          to, data,
-          value:                value ? value.toString() : undefined,
-          gas:                  gas.toString(),
-          maxFeePerGas:         maxFeePerGas.toString(),
-          maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
-          nonce,
-          chainId: arcTestnet.id,
-        },
+        contractAddress: to,
+        callData:        data,
+        value:           value ? value.toString() : undefined,
       }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error ?? 'Could not prepare transaction for signing.');
+      throw new Error(err.error ?? 'Could not prepare transaction.');
     }
 
-    const { challengeId, userToken, encryptionKey } = await res.json();
-    const signedTx = await executeCircleSignTransactionChallenge({ challengeId, userToken, encryptionKey, onStatusChange });
-
-    onStatusChange?.('Broadcasting transaction…');
-    return publicClient.sendRawTransaction({ serializedTransaction: signedTx });
-  }, [email, address, publicClient]);
+    const { challengeId, userToken, encryptionKey, walletId } = await res.json();
+    return executeCircleTransactionChallenge({
+      challengeId, userToken, encryptionKey, walletId, onStatusChange,
+    });
+  }, [email]);
 
   const writeContract = useCallback(async (
     params: UniversalWriteParams,
@@ -171,6 +161,25 @@ export function useUniversalWrite(): UniversalWriteResult {
   ): Promise<`0x${string}`> => {
     if (loginMethod === 'external') {
       if (!walletClient) throw new Error('Wallet not connected.');
+      if (!address) throw new Error('No wallet address available.');
+
+      // Preflight simulate so a revert shows its real decoded reason
+      // (AlreadyDeployed, TransferFromFailed, etc. — see
+      // lib/contracts/decodeError.ts) instead of raw viem/RPC text, and
+      // so the wallet never prompts for a signature on a call that's
+      // guaranteed to fail.
+      if (publicClient) {
+        try {
+          await publicClient.simulateContract({
+            address: params.address, abi: params.abi,
+            functionName: params.functionName, args: params.args,
+            account: address as `0x${string}`, value: params.value,
+          });
+        } catch (simErr) {
+          throw new Error(decodeContractError(simErr, params.abi));
+        }
+      }
+
       onStatusChange?.('Waiting for signature…');
       return walletClient.writeContract({
         address: params.address, abi: params.abi,
@@ -182,11 +191,15 @@ export function useUniversalWrite(): UniversalWriteResult {
       const callData = encodeFunctionData({
         abi: params.abi, functionName: params.functionName, args: params.args,
       });
-      return signAndBroadcastCircleTx(params.address, callData, params.value, onStatusChange);
+      try {
+        return await executeContractCallViaCircle(params.address, callData, params.value, onStatusChange);
+      } catch (err) {
+        throw new Error(decodeContractError(err, params.abi));
+      }
     }
 
     throw new Error('Not logged in.');
-  }, [loginMethod, walletClient, signAndBroadcastCircleTx]);
+  }, [loginMethod, walletClient, address, publicClient, executeContractCallViaCircle]);
 
   const sendTransaction = useCallback(async (
     params: UniversalSendTransactionParams,
@@ -206,11 +219,11 @@ export function useUniversalWrite(): UniversalWriteResult {
     }
 
     if (loginMethod === 'circle') {
-      return signAndBroadcastCircleTx(params.to, params.data, value, onStatusChange);
+      return executeContractCallViaCircle(params.to, params.data, value, onStatusChange);
     }
 
     throw new Error('Not logged in.');
-  }, [loginMethod, walletClient, address, signAndBroadcastCircleTx]);
+  }, [loginMethod, walletClient, address, executeContractCallViaCircle]);
 
   const signMessage = useCallback(async (
     message: string,

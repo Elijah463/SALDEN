@@ -118,10 +118,10 @@ export default function DepositPage() {
   return (
     <AppLayout title="Deposit">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {/* Back */}
-        <button onClick={() => view === 'qr' ? setView('options') : router.back()}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#14B8A6', fontFamily: 'inherit', padding: 0 }}>
-          <ArrowLeft size={16} /> Back
+        {/* Back — styled to match wallet/swap and wallet/bridge's back button */}
+        <button onClick={() => view === 'qr' ? setView('options') : router.push('/wallet')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#64748B', fontFamily: 'inherit', padding: 0 }}>
+          <ArrowLeft size={15} /> {view === 'qr' ? 'Back' : 'Back to Wallet'}
         </button>
 
         {view === 'options' ? (

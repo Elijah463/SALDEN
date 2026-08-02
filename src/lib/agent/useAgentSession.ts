@@ -9,7 +9,7 @@
  * one) and re-signed automatically when missing or expired.
  *
  * SESSION_TTL_MS_CLIENT must stay <= the server's actual TTL
- * (lib/agent/auth.ts SESSION_TTL_MS, currently 15 minutes) — kept a
+ * (lib/agent/auth.ts SESSION_TTL_MS, currently 30 minutes) — kept a
  * minute under it here so the client never tries to use a token the
  * server has already expired.
  */
@@ -17,7 +17,7 @@
 import { useCallback, useRef } from 'react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
-const SESSION_TTL_MS_CLIENT = 14 * 60 * 1000; // 1 min under the server's 15 min TTL
+const SESSION_TTL_MS_CLIENT = 29 * 60 * 1000; // 1 min under the server's 30 min TTL
 
 interface CachedSession { token: string; walletAddress: string; expiresAt: number }
 
