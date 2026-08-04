@@ -53,12 +53,28 @@ export async function executeCircleChallenge({
 
   onStatusChange?.('Fetching your wallet address…');
 
-  // Poll for the wallet address — Circle provisions it asynchronously
-  const MAX_POLLS      = 20;
+  // Poll for the wallet address — Circle provisions it asynchronously after
+  // the PIN-setup challenge completes. BUG FIX: this used to give up after
+  // 30s total (20 polls x 1.5s) — tight enough that a normal-but-slightly-
+  // slow provision (still very plausible right after the user's very first
+  // PIN entry, vs. a warm returning-user session) threw here even though
+  // the PIN was genuinely accepted and the wallet was still being created
+  // in the background. The caller (LoginModal) had no way to distinguish
+  // that from a real failure, so it dropped the user back to an
+  // unauthenticated "Login" button — the wallet then showed up moments
+  // later, which is exactly why logging in again immediately afterward
+  // found it as an existing account. Extended to 90s, with a status update
+  // partway through so a genuinely-slow (not stuck) provision doesn't look
+  // frozen.
+  const MAX_POLLS      = 60;
   const POLL_INTERVAL  = 1500;
+  const REASSURANCE_AT = 15; // ~22.5s in
 
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise(r => setTimeout(r, POLL_INTERVAL));
+    if (i === REASSURANCE_AT) {
+      onStatusChange?.('Still setting up your wallet — this can take a little longer on a first-time setup…');
+    }
     try {
       const res = await fetch(
         `/api/auth/wallet-address?userId=${encodeURIComponent(email)}`
@@ -70,7 +86,10 @@ export async function executeCircleChallenge({
     } catch { /* continue polling */ }
   }
 
-  throw new Error('Wallet not ready — challenge may not have completed. Please try again.');
+  throw new Error(
+    'Your PIN was accepted, but your wallet is taking longer than usual to finish setting up. ' +
+    'Please wait a few seconds and try logging in again — it should be ready.'
+  );
 }
 
 // ── Transaction (contract execution) challenge — used by useUniversalWrite ────

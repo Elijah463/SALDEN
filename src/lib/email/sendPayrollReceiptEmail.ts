@@ -35,7 +35,10 @@ export interface PayrollReceiptEmailResult {
   message: string;
 }
 
-function buildSummaryLine(executedBy: 'manual' | 'ai_agent'): string {
+function buildSummaryLine(executedBy: 'manual' | 'ai_agent' | 'ai_agent_scheduled'): string {
+  if (executedBy === 'ai_agent_scheduled') {
+    return 'This payroll run was executed automatically by the Salden AI Payroll Agent as a scheduled payment.';
+  }
   return executedBy === 'ai_agent'
     ? 'This payroll run was executed by the Salden AI Payroll Agent.'
     : 'This payroll run was executed manually by you.';

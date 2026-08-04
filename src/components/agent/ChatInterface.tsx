@@ -29,6 +29,8 @@ import { useApp }    from '@/context/AppContext';
 import ChatMessage   from '@/components/agent/ChatMessage';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
 import { generateSessionId, loadSessionMessages, saveSession } from '@/lib/chatSessions';
+import { saveAgentLog } from '@/lib/db/indexeddb';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { txLink } from '@/lib/contracts/config';
 import {
   UnlistedPaymentCard, AddEmployeeCard, PayrollRunCard,
@@ -146,31 +148,9 @@ function incrementDailyCount(): number {
   } catch { return 0; }
 }
 
-// ── Action log card (renders the real, server-generated tool-call log) ────────
-
-function ActionLogCard({ entries }: { entries: ActionLogEntry[] }) {
-  if (entries.length === 0) return null;
-  return (
-    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {entries.map((log, i) => {
-        const tone = log.status === 'SUCCESS' ? 'success' : log.status === 'FAILED' ? 'error' : 'warn';
-        const palette = {
-          success: { color: '#059669', label: '✓ Success' },
-          error:   { color: '#DC2626', label: '✗ Failed' },
-          warn:    { color: '#92400E', label: '⏳ Queued' },
-        }[tone];
-        return (
-          <div key={i} style={{ fontSize: 12.5, lineHeight: 1.6 }}>
-            <span style={{ fontWeight: 700, color: palette.color }}>{palette.label}</span>
-            <span style={{ color: '#94A3B8' }}> · {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — </span>
-            <span style={{ color: '#475569' }}>{log.action}</span>
-            {log.detail && <span style={{ color: '#64748B' }}> — {log.detail}</span>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+// (ActionLogCard removed — these entries are now persisted to the Manage
+// Agent page's log store instead of rendered inline in chat. See the
+// persistence effect inside ChatInterface below.)
 
 // ── Faucet result card (unchanged behaviour from prior round) ─────────────────
 
@@ -214,7 +194,7 @@ function FaucetResultCard({ address, walletAddress, token, agentAddress, onResol
         }
       } catch (err: unknown) {
         if (!cancelled) {
-          const msg = err instanceof Error ? err.message : 'Faucet request failed';
+          const msg = friendlyErrorMessage(err, 'Faucet request failed');
           setError(msg); setLoading(false);
           onResolved?.('error', msg);
         }
@@ -313,6 +293,11 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   // otherwise a fresh id is generated for a brand-new conversation.
   const currentSessionIdRef = useRef<string>(sessionId ?? generateSessionId());
   const loadedSessionIdRef  = useRef<string | null>(null);
+  // Tracks which `${message id}:${actionLog index}` entries have already
+  // been written to the Manage Agent page's log store, so the persistence
+  // effect further down never re-persists the same entry on every
+  // subsequent messages update.
+  const persistedLogKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => { setDailyCount(getDailyCount()); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
@@ -407,6 +392,49 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     const interval = setInterval(pollOnce, 5000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [messages, walletAddress, onDataChanged]);
+
+  // ── Persist finalized action-log entries to the Manage Agent page's log
+  // store, instead of showing them inline in chat (see ActionLogCard's
+  // removal above). Runs off `messages` itself rather than only the
+  // initial send response, so it also catches entries that start out
+  // QUEUED and only resolve later — either via the tx-status poller just
+  // above, or via one of the confirmation cards' own onResolved handlers
+  // (FaucetResultCard, AddEmployeeCard, PayrollRunCard, etc.) — without
+  // needing a separate persistence call duplicated into every one of those
+  // handlers. `persistedLogKeys` guards against re-persisting the same
+  // entry on every subsequent messages update; the deterministic
+  // `${message id}-${entry index}` id passed to saveAgentLog also makes a
+  // duplicate write (e.g. after a session reload) an idempotent overwrite
+  // rather than a second row.
+  useEffect(() => {
+    if (!walletAddress) return;
+    for (const m of messages) {
+      if (!m.actionLog) continue;
+      m.actionLog.forEach((entry, i) => {
+        if (entry.status === 'QUEUED') return; // not final yet — wait for it to resolve
+        const key = `${m.id}:${i}`;
+        if (persistedLogKeysRef.current.has(key)) return;
+        persistedLogKeysRef.current.add(key);
+
+        // Best-effort tx-hash attachment: when this turn produced exactly
+        // one event that already resolved to a txHash, pair it with a
+        // SUCCESS entry — covers the common single-action-per-turn case.
+        // A multi-action turn simply logs without a tx link rather than
+        // risk pairing the wrong hash to the wrong entry.
+        const soleTxHash = m.events?.length === 1 ? m.events[0].txHash : undefined;
+
+        saveAgentLog({
+          id:            `${m.id}-${i}`,
+          walletAddress,
+          timestamp:     new Date(entry.timestamp).getTime() || Date.now(),
+          action:        entry.action,
+          status:        entry.status === 'SUCCESS' ? 'success' : 'failed',
+          details:       entry.detail,
+          txHash:        entry.status === 'SUCCESS' ? soleTxHash : undefined,
+        }).catch(err => console.warn('[ChatInterface] Failed to persist agent log entry:', err));
+      });
+    }
+  }, [messages, walletAddress]);
 
   function resetConversation() {
     setMessages([]);
@@ -627,7 +655,17 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         ? 'Wallet not connected. Please reconnect and try again.'
         : /network|fetch/i.test(raw)
         ? 'Network error. Check your connection and try again.'
-        : 'Something went wrong. Please try again.';
+        // BUG FIX: this used to fall through to a hardcoded generic
+        // string for anything that didn't match one of the three patterns
+        // above — silently discarding the server's own specific,
+        // already-friendly message (e.g. "I'm getting rate-limited right
+        // now — please wait about a minute and try again.") and showing
+        // the same unhelpful "Something went wrong" for every distinct
+        // failure. `raw` here is our own controlled text from the server's
+        // `error` field, never a raw exception dump — safe to show as-is;
+        // friendlyErrorMessage() is a defensive backstop in case it's ever
+        // something unexpectedly long.
+        : friendlyErrorMessage(err, 'Something went wrong. Please try again.');
       setError(msg);
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: 'assistant',
@@ -719,7 +757,9 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                   ⓘ This response was shortened and regenerated after hitting the length limit.
                 </div>
               )}
-              {m.actionLog && m.actionLog.length > 0 && <ActionLogCard entries={m.actionLog} />}
+              {/* actionLog is no longer rendered inline — see the persistence
+                  effect above, which sends finalized entries to the Manage
+                  Agent page's log store instead. */}
 
               {m.role === 'assistant' && m.events?.map((ev, i) => {
                 const resolved = m.eventsResolved?.[i];

@@ -47,6 +47,7 @@ import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 function Section({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -115,7 +116,7 @@ export default function ContractFunctionsPage() {
       await waitForSuccessfulReceipt(publicClient, hash);
       addToast(paused ? 'Contract unpaused — payments and withdrawals resumed.' : 'Contract paused — payments and withdrawals halted.', 'success');
       await loadPausedState();
-    } catch (err) { addToast((err as Error).message, 'error'); }
+    } catch (err) { addToast(friendlyErrorMessage(err, 'Could not update the pause state. Please try again.'), 'error'); }
     finally { setPauseLoading(false); }
   }
 
@@ -138,7 +139,7 @@ export default function ContractFunctionsPage() {
       await waitForSuccessfulReceipt(publicClient, hash);
       addToast(`Agent added. Tx: ${hash.slice(0, 12)}…`, 'success');
       setAgentAddr('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
+    } catch (err) { addToast(friendlyErrorMessage(err, 'Could not add agent. Please try again.'), 'error'); }
     finally { setAgentLoading(false); }
   }
 
@@ -155,7 +156,7 @@ export default function ContractFunctionsPage() {
       await waitForSuccessfulReceipt(publicClient, hash);
       addToast(`Agent removed. Tx: ${hash.slice(0, 12)}…`, 'success');
       setRemoveAgentAddr('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
+    } catch (err) { addToast(friendlyErrorMessage(err, 'Could not remove agent. Please try again.'), 'error'); }
     finally { setRemoveAgentLoading(false); }
   }
 
@@ -193,7 +194,7 @@ export default function ContractFunctionsPage() {
       setTokenForm({ address: '', name: '', symbol: '', decimals: '6' });
       addToast(`${symbol.toUpperCase()} added to token registry.`, 'success');
     } catch (err) {
-      setTokenError((err as Error).message);
+      setTokenError(friendlyErrorMessage(err, 'Could not add token. Please try again.'));
     } finally {
       setTokenLoading(false);
     }
@@ -228,7 +229,7 @@ export default function ContractFunctionsPage() {
       await waitForSuccessfulReceipt(publicClient, hash);
       addToast(`Withdrawal submitted. Tx: ${hash.slice(0, 12)}…`, 'success');
       setWithdrawToken('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
+    } catch (err) { addToast(friendlyErrorMessage(err, 'Withdrawal failed. Please try again.'), 'error'); }
     finally { setWithdrawing(false); }
   }
 
@@ -246,7 +247,7 @@ export default function ContractFunctionsPage() {
       addToast(`Emergency withdrawal submitted. Tx: ${hash.slice(0, 12)}…`, 'success');
       setEmergencyOpen(false);
       setEmergencyToken('');
-    } catch (err) { addToast((err as Error).message, 'error'); }
+    } catch (err) { addToast(friendlyErrorMessage(err, 'Emergency withdrawal failed. Please try again.'), 'error'); }
     finally { setEmergencyBusy(false); }
   }
 

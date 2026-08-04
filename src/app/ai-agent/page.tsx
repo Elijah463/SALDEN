@@ -30,14 +30,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, ExternalLink, Copy, Loader2 } from 'lucide-react';
-import { useWalletClient, usePublicClient } from 'wagmi';
+import { useWalletClient, usePublicClient, useAccount, useChainId } from 'wagmi';
 import { AgentLayout }           from '@/components/agent/AgentLayout';
+import { NetworkGuard }          from '@/components/shared/NetworkGuard';
 import ChatInterface             from '@/components/agent/ChatInterface';
 import { useAgentStatus }        from '@/lib/useAgentStatus';
 import { useEffectiveAddress }   from '@/lib/useEffectiveAddress';
 import { useApp }                from '@/context/AppContext';
 import { usePayrollSync }        from '@/lib/usePayrollSync';
-import { txLink, CONTRACTS }     from '@/lib/contracts/config';
+import { txLink, CONTRACTS, arcTestnet } from '@/lib/contracts/config';
 import {
   PAYROLL_ADD_AGENT_ABI,
   REGISTRY_ADD_AGENT_ABI,
@@ -46,6 +47,8 @@ import {
 } from '@/lib/contracts/agentAbis';
 import { REGISTRY_FACTORY_ABI }  from '@/lib/contracts/abis';
 import { useCloneAccess }        from '@/lib/useCloneAccess';
+import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 import type { ActivateResult }   from '@/lib/useAgentStatus';
 import { copyToClipboard } from '@/lib/clipboard';
 
@@ -131,6 +134,11 @@ export default function AIAgentPage() {
   const { isPremiumUser, payrollClone, registryClone } = state;
   const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
+  // For the wrong-network guard below — see its comment for why this
+  // needs to be its own check rather than relying on the "No wallet"
+  // branch to catch it.
+  const { isConnected: wagmiConnected } = useAccount();
+  const chainId = useChainId();
 
   // Deep-link support for chat-history/page.tsx: /ai-agent?session=<id>
   // resumes a saved conversation, /ai-agent?new=<timestamp> starts fresh.
@@ -164,6 +172,19 @@ export default function AIAgentPage() {
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAY_MS = 1200;
     (async () => {
+      // ── Cache-first — see lib/serverCloneCache.ts. Same fix as
+      // dashboard/page.tsx's registry check: a hit resolves instantly with
+      // no RPC call, which is what makes landing directly on /ai-agent (or
+      // refreshing here) reliable on a fresh browser/device too.
+      try {
+        const cached = await readCloneCache(address);
+        if (cancelled) return;
+        if (cached.registryClone) {
+          dispatch({ type: 'SET_REGISTRY', payload: cached.registryClone });
+          return;
+        }
+      } catch { /* cache is best-effort — fall through to the on-chain check */ }
+
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           const existing = await publicClient.readContract({
@@ -176,6 +197,7 @@ export default function AIAgentPage() {
           const ZERO = '0x0000000000000000000000000000000000000000';
           if (existing && existing.toLowerCase() !== ZERO) {
             dispatch({ type: 'SET_REGISTRY', payload: existing });
+            writeCloneCache(address, { registryClone: existing });
           }
           return;
         } catch (err) {
@@ -302,7 +324,7 @@ export default function AIAgentPage() {
       setStep1Error(
         /reject|cancel|denied/i.test(raw) ? 'Transaction cancelled.' :
         /network|rpc/i.test(raw)          ? 'Network error. Try again.' :
-        'Transaction failed. Please try again.',
+        friendlyErrorMessage(err, 'Transaction failed. Please try again.'),
       );
       setStep1Status('failed');
     }
@@ -340,7 +362,7 @@ export default function AIAgentPage() {
       setStep2Error(
         /reject|cancel|denied/i.test(raw) ? 'Transaction cancelled.' :
         /network|rpc/i.test(raw)          ? 'Network error. Try again.' :
-        'Transaction failed. Please try again.',
+        friendlyErrorMessage(err, 'Transaction failed. Please try again.'),
       );
       setStep2Status('failed');
     }
@@ -460,6 +482,18 @@ export default function AIAgentPage() {
       return () => clearTimeout(t);
     }
   }, [bothDone, refresh, address]);
+
+  // ── Wrong network (external wallets only — social login is always on
+  // the right chain by construction) ─────────────────────────────────────
+  // Placed before every other branch below: isConnected/address stay
+  // truthy from wagmi even when the wallet is on the wrong chain, so
+  // without this check the "No wallet" branch never catches it and the
+  // user reaches ChatInterface fine — only to have useWalletClient() fail
+  // to produce a client at actual signature time, which is what surfaced
+  // as a misleading "Connect your wallet first" despite being connected.
+  if (wagmiConnected && chainId !== arcTestnet.id) {
+    return <NetworkGuard>{null}</NetworkGuard>;
+  }
 
   // ── No wallet ─────────────────────────────────────────────────────────────
   if (!address) {

@@ -197,6 +197,38 @@ export default function SettingsPage() {
   const [groupError,   setGroupError]   = useState('');
   const [groupSaving,  setGroupSaving]  = useState(false);
 
+  // AI Agent execution mode — 'confirm' (default, human always signs from
+  // their own wallet) vs 'autonomous' (agent's own Circle-managed wallet
+  // executes execute_* actions with no per-action human signature). See
+  // lib/agent/agentMode.ts and app/api/agent/mode/route.ts — both already
+  // fully wired into chat/route.ts's tool selection; this section is the
+  // missing piece that actually lets an employer control it.
+  const [agentMode,      setAgentModeState] = useState<'confirm' | 'autonomous'>('confirm');
+  const [modeLoading,    setModeLoading]    = useState(false);
+  const [modeSaving,     setModeSaving]     = useState(false);
+  const [modeError,      setModeError]      = useState('');
+  const [modeSaved,      setModeSaved]      = useState(false);
+
+  useEffect(() => {
+    if (!address) return;
+    let cancelled = false;
+    (async () => {
+      setModeLoading(true);
+      try {
+        const res = await fetch(`/api/agent/mode?wallet=${address}`);
+        if (!res.ok) throw new Error('Could not load current mode.');
+        const data = await res.json() as { mode?: 'confirm' | 'autonomous' };
+        if (!cancelled && data.mode) setAgentModeState(data.mode);
+      } catch {
+        // Non-fatal — the toggle still renders at the safe 'confirm'
+        // default even if we couldn't fetch the actual current value.
+      } finally {
+        if (!cancelled) setModeLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [address]);
+
   // AI Agent daily spend limit — per-employer configurable ceiling, see
   // app/api/agent/limits/route.ts and lib/agent/employerLimits.ts. This
   // sits BELOW the platform-wide absolute limit (AGENT_MAX_DAILY_TOTAL);
@@ -204,6 +236,34 @@ export default function SettingsPage() {
   // (or, up to the platform ceiling, looser than the previous shared
   // default every employer used to be stuck with).
   const { getToken } = useAgentSession();
+
+  async function handleSetAgentMode(nextMode: 'confirm' | 'autonomous') {
+    if (!address || !canWrite || nextMode === agentMode) return;
+    setModeSaving(true);
+    setModeError('');
+    setModeSaved(false);
+    try {
+      const token = await getToken(address, universalSignMessage);
+      const res = await fetch('/api/agent/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ walletAddress: address, mode: nextMode }),
+      });
+      const data = await res.json() as { ok?: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setModeError(data.error ?? 'Could not save your setting.');
+        return;
+      }
+      setAgentModeState(nextMode);
+      setModeSaved(true);
+      setTimeout(() => setModeSaved(false), 3000);
+    } catch {
+      setModeError('Could not save your setting. Please try again.');
+    } finally {
+      setModeSaving(false);
+    }
+  }
+
   const [dailyLimitInput, setDailyLimitInput] = useState('');
   const [platformCeiling, setPlatformCeiling] = useState<number | null>(null);
   const [limitLoading,    setLimitLoading]    = useState(false);
@@ -530,6 +590,64 @@ export default function SettingsPage() {
             </a>
           </div>
         )}
+
+        {/* ── AI Agent Execution Mode ──────────────────────────────────────── */}
+        <Section title="AI Agent Execution Mode">
+          <p style={{ fontSize: 13, color: '#64748B', marginBottom: 16, lineHeight: 1.6 }}>
+            By default the AI Agent always <strong>proposes</strong> a transaction and waits for you to
+            confirm and sign it yourself — whether you're using an external wallet (MetaMask, Rabby,
+            etc.) or a Salden social-login wallet. Turning this on lets the agent also{' '}
+            <strong>execute</strong> clear, unambiguous chat requests immediately from its own
+            dedicated agent wallet, with no signature from you for that action.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <div>
+              <p style={{ fontSize: 14, fontWeight: 600, color: '#0F172A', margin: '0 0 2px' }}>
+                {agentMode === 'autonomous' ? 'Autonomous mode is ON' : 'Human confirmation required (default)'}
+              </p>
+              <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>
+                {agentMode === 'autonomous'
+                  ? 'The agent may execute clear requests from its own wallet without asking you to sign.'
+                  : 'Every agent action is proposed to your wallet for you to review, confirm, and sign.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={agentMode === 'autonomous'}
+              aria-label="Toggle AI Agent autonomous execution mode"
+              disabled={modeLoading || modeSaving || !address || !canWrite}
+              onClick={() => handleSetAgentMode(agentMode === 'autonomous' ? 'confirm' : 'autonomous')}
+              style={{
+                position: 'relative', width: 46, height: 26, borderRadius: 999, border: 'none',
+                cursor: (modeLoading || modeSaving || !address || !canWrite) ? 'default' : 'pointer',
+                background: agentMode === 'autonomous' ? '#4F46E5' : '#CBD5E1',
+                transition: 'background 0.15s', flexShrink: 0,
+                opacity: (modeSaving || modeLoading) ? 0.7 : 1,
+              }}
+            >
+              <span style={{
+                position: 'absolute', top: 3, left: agentMode === 'autonomous' ? 23 : 3,
+                width: 20, height: 20, borderRadius: '50%', background: '#fff',
+                transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+              }} />
+            </button>
+          </div>
+          {modeError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 10 }}>{modeError}</p>}
+          {modeSaved && <p style={{ fontSize: 12, color: '#16A34A', marginTop: 10 }}>Saved.</p>}
+          {agentMode === 'autonomous' && (
+            <div style={{
+              marginTop: 14, padding: '10px 12px', background: '#FFFBEB', border: '1px solid #FDE68A',
+              borderRadius: 10, fontSize: 12, color: '#92400E', lineHeight: 1.5,
+            }}>
+              Keep the agent wallet funded with USDC so it can pay autonomously —{' '}
+              <a href="/ai-agent/agent-wallet" style={{ color: '#92400E', fontWeight: 700 }}>view/fund it here</a>.
+              Note: scheduled/recurring payments always run from the agent wallet regardless of this
+              setting, since a schedule has to execute with no one present by definition — this toggle
+              only controls whether the agent can also skip your confirmation for immediate chat requests.
+            </div>
+          )}
+        </Section>
 
         {/* ── AI Agent Daily Spend Limit ──────────────────────────────────── */}
         <Section title="AI Agent Daily Spend Limit">

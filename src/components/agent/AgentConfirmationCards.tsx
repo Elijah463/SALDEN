@@ -36,6 +36,7 @@ import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAd
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { CONTRACTS, txLink } from '@/lib/contracts/config';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
@@ -294,7 +295,7 @@ export function UnlistedPaymentCard({
         ? 'Insufficient balance to complete this payment.'
         : /network|fetch|rpc/i.test(raw)
         ? 'Network error — check your connection and try again.'
-        : 'Payment failed. Please try again.';
+        : friendlyErrorMessage(err, 'Payment failed. Please try again.');
       setError(msg);
       setPayState('error');
       onResolved('error', msg);
@@ -434,16 +435,27 @@ export function AddEmployeeCard({
       // caught below and shown the same way any other sync failure is.
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
-      if (registryClone) {
-        setAddState('anchoring');
-        const hash = await universalWrite({
-          address: registryClone as `0x${string}`,
-          abi: REGISTRY_UPDATE_CID_ABI,
-          functionName: 'updateCID', args: [cid],
-          // Wallet will show: "Update employee database reference on-chain"
-        });
-        await waitForSuccessfulReceipt(publicClient, hash);
+      // BUG FIX: this used to be `if (registryClone) { ...anchor... }` —
+      // silently SKIPPING the on-chain anchor (and still reporting
+      // "confirmed"/"done") whenever registryClone hadn't loaded into
+      // state yet. The new employee was saved to IPFS but the on-chain CID
+      // pointer never moved, so every other device/session (and a fresh
+      // load of this one) would never see them — while the person who
+      // just added them saw a success card and had no reason to think
+      // anything was wrong. Failing loudly here means the same retry the
+      // user would already do for any other sync failure also recovers
+      // this case, instead of a silent, hard-to-detect data gap.
+      if (!registryClone) {
+        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
       }
+      setAddState('anchoring');
+      const hash = await universalWrite({
+        address: registryClone as `0x${string}`,
+        abi: REGISTRY_UPDATE_CID_ABI,
+        functionName: 'updateCID', args: [cid],
+        // Wallet will show: "Update employee database reference on-chain"
+      });
+      await waitForSuccessfulReceipt(publicClient, hash);
 
       setAddState('done');
       onResolved('confirmed');
@@ -454,7 +466,7 @@ export function AddEmployeeCard({
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
         ? 'Network error — check your connection and try again.'
-        : 'Could not save employee. Please try again.';
+        : friendlyErrorMessage(err, 'Could not save employee. Please try again.');
       setError(msg);
       setAddState('error');
       onResolved('error', msg);
@@ -574,15 +586,21 @@ export function EditEmployeeCard({
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
-      if (registryClone) {
-        setEditState('anchoring');
-        const hash = await universalWrite({
-          address: registryClone as `0x${string}`,
-          abi: REGISTRY_UPDATE_CID_ABI,
-          functionName: 'updateCID', args: [cid],
-        });
-        await waitForSuccessfulReceipt(publicClient, hash);
+      // See AddEmployeeCard's identical fix above for the full writeup —
+      // silently skipping the anchor here (the old `if (registryClone)`)
+      // meant an "employee updated" success card could be shown even
+      // though the change never actually reached the on-chain registry
+      // other devices/sessions read from.
+      if (!registryClone) {
+        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
       }
+      setEditState('anchoring');
+      const hash = await universalWrite({
+        address: registryClone as `0x${string}`,
+        abi: REGISTRY_UPDATE_CID_ABI,
+        functionName: 'updateCID', args: [cid],
+      });
+      await waitForSuccessfulReceipt(publicClient, hash);
 
       setEditState('done');
       onResolved('confirmed');
@@ -593,7 +611,7 @@ export function EditEmployeeCard({
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
         ? 'Network error — check your connection and try again.'
-        : 'Could not update employee. Please try again.';
+        : friendlyErrorMessage(err, 'Could not update employee. Please try again.');
       setError(msg);
       setEditState('error');
       onResolved('error', msg);
@@ -684,15 +702,21 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
-      if (registryClone) {
-        setRemoveState('anchoring');
-        const hash = await universalWrite({
-          address: registryClone as `0x${string}`,
-          abi: REGISTRY_UPDATE_CID_ABI,
-          functionName: 'updateCID', args: [cid],
-        });
-        await waitForSuccessfulReceipt(publicClient, hash);
+      // See AddEmployeeCard's identical fix above for the full writeup.
+      // Especially important for a removal: silently skipping the anchor
+      // here would mean a "removed" employee still shows up for anyone
+      // reading from the last-anchored CID, which is the opposite of what
+      // an employer confirming a removal expects.
+      if (!registryClone) {
+        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
       }
+      setRemoveState('anchoring');
+      const hash = await universalWrite({
+        address: registryClone as `0x${string}`,
+        abi: REGISTRY_UPDATE_CID_ABI,
+        functionName: 'updateCID', args: [cid],
+      });
+      await waitForSuccessfulReceipt(publicClient, hash);
 
       setRemoveState('done');
       onResolved('confirmed');
@@ -703,7 +727,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
         ? 'Network error — check your connection and try again.'
-        : 'Could not remove employee. Please try again.';
+        : friendlyErrorMessage(err, 'Could not remove employee. Please try again.');
       setError(msg);
       setRemoveState('error');
       onResolved('error', msg);
@@ -793,15 +817,20 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
 
-      if (registryClone) {
-        setAddState('anchoring');
-        const hash = await universalWrite({
-          address: registryClone as `0x${string}`,
-          abi: REGISTRY_UPDATE_CID_ABI,
-          functionName: 'updateCID', args: [cid],
-        });
-        await waitForSuccessfulReceipt(publicClient, hash);
+      // See AddEmployeeCard's identical fix for the full writeup — this
+      // used to silently skip anchoring (and still report success) for a
+      // whole batch of newly-added employees whenever registryClone hadn't
+      // loaded into state yet.
+      if (!registryClone) {
+        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
       }
+      setAddState('anchoring');
+      const hash = await universalWrite({
+        address: registryClone as `0x${string}`,
+        abi: REGISTRY_UPDATE_CID_ABI,
+        functionName: 'updateCID', args: [cid],
+      });
+      await waitForSuccessfulReceipt(publicClient, hash);
 
       setAddState('done');
       onResolved('confirmed');
@@ -812,7 +841,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
         ? 'Network error — check your connection and try again.'
-        : 'Could not add employees. Please try again.';
+        : friendlyErrorMessage(err, 'Could not add employees. Please try again.');
       setError(msg);
       setAddState('error');
       onResolved('error', msg);
@@ -1022,7 +1051,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       const raw = err instanceof Error ? err.message : '';
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
-        : (raw || 'Payroll run failed. Please try again.');
+        : friendlyErrorMessage(err, 'Payroll run failed. Please try again.');
       setError(msg);
       setPayState('error');
       onResolved('error', msg);

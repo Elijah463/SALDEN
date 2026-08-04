@@ -407,7 +407,7 @@ export const executeScheduledPayment = inngest.createFunction(
           recipientCount: schedule.resolvedPayments!.length,
           token:          schedule.token,
           amount:         schedule.amount,
-          executedBy:     'ai_agent',
+          executedBy:     'ai_agent_scheduled',
         });
       });
 

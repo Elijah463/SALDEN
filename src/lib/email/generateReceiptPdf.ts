@@ -37,7 +37,7 @@ export interface ReceiptPdfInput {
   token:          string;
   remark?:        string;
   amount:         string;      // human-readable total, e.g. "1,250.00"
-  executedBy:     'manual' | 'ai_agent';
+  executedBy:     'manual' | 'ai_agent' | 'ai_agent_scheduled';
   /** Per-employee breakdown for the table below. Optional — older callers
    *  (or a caller that genuinely couldn't resolve individual employees)
    *  still get a valid PDF, just without the per-recipient table. */
@@ -173,7 +173,9 @@ export function generateReceiptPdf(input: ReceiptPdfInput): Buffer {
   metaRow('Recipients', String(input.recipientCount));
   metaRow('Token', input.token);
   if (input.remark) metaRow('Remark', input.remark);
-  metaRow('Executed by', input.executedBy === 'ai_agent'
+  metaRow('Executed by', input.executedBy === 'ai_agent_scheduled'
+    ? 'Salden AI Payroll Agent — scheduled payment'
+    : input.executedBy === 'ai_agent'
     ? 'Salden AI Payroll Agent'
     : 'Employer (manual)');
 

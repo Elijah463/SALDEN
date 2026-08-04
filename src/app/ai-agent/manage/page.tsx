@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { AgentLayout } from '@/components/agent/AgentLayout';
+import { NetworkGuard } from '@/components/shared/NetworkGuard';
 import { SetSchedulePaymentModal } from '@/components/agent/SetSchedulePaymentModal';
 import { RecurringPaymentModal } from '@/components/agent/RecurringPaymentModal';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
@@ -156,6 +157,7 @@ export default function ManageAgentPage() {
   const activeScheds = schedules.filter(s => s.status === 'active').length;
 
   return (
+    <NetworkGuard>
     <AgentLayout title="Manage AI Agent">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
@@ -512,5 +514,6 @@ export default function ManageAgentPage() {
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </AgentLayout>
+    </NetworkGuard>
   );
 }

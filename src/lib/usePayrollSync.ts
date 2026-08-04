@@ -41,6 +41,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 export type PayrollSyncStatus = 'idle' | 'checking' | 'loading' | 'done' | 'error' | 'needs-unlock';
 
@@ -215,7 +216,7 @@ export function usePayrollSync({
     } catch (err) {
       console.error('[usePayrollSync] unlockAndLoad failed:', err);
       setStatus('needs-unlock'); // stay unlockable — a declined/failed signature isn't a dead end
-      addToast((err as Error).message || 'Could not load your employee data — please try again.', 'warning');
+      addToast(friendlyErrorMessage(err, 'Could not load your employee data — please try again.'), 'warning');
     }
   }, [address, pendingUnlockCid, loadData, sign, addToast]);
 

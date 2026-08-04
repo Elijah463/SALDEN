@@ -121,7 +121,7 @@ export async function initializeUserWallet(userToken: string): Promise<string> {
     '/user/initialize',
     {
       idempotencyKey: crypto.randomUUID(),
-      blockchains:    ['ARC-TESTNET'],
+      blockchains:    [ARC_BLOCKCHAIN],
       accountType:    'EOA',
     },
     userToken
@@ -139,12 +139,36 @@ export interface CircleWallet {
   state:      string;
 }
 
-export async function getUserWallets(userToken: string): Promise<CircleWallet[]> {
-  const json = await circleGet('/wallets', userToken);
+// The chain code every wallet in this app is created under — see
+// initializeUserWallet() below. Kept as one constant so the filter here and
+// the creation call can never independently drift apart.
+const ARC_BLOCKCHAIN = 'ARC-TESTNET';
+
+// `blockchain` is a documented filter on GET /wallets (confirmed against
+// Circle's own List Wallets API reference — "Filter by blockchain", query
+// param `blockchain`). Filtering server-side, rather than fetching
+// everything and filtering in JS, also means an account with wallets on
+// several chains (e.g. a pre-migration EVM-TESTNET wallet alongside a real
+// ARC-TESTNET one) never has the wrong one show up in the result at all.
+export async function getUserWallets(userToken: string, blockchain: string = ARC_BLOCKCHAIN): Promise<CircleWallet[]> {
+  const json = await circleGet(`/wallets?blockchain=${encodeURIComponent(blockchain)}`, userToken);
   return (json.data?.wallets ?? []) as CircleWallet[];
 }
 
 // ── 5. Check if a user already has a wallet (no challenge needed) ─────────────
+//
+// Only ever considers ARC-TESTNET wallets "the" wallet. An account whose
+// ONLY wallet predates the switch to the ARC-TESTNET chain code (see
+// initializeUserWallet()'s doc comment) will correctly come back as
+// isNewUser: true here — the login flow then runs the normal
+// initializeUserWallet() challenge again, which provisions a proper,
+// working ARC-TESTNET wallet for that already-existing Circle user (no new
+// email/PIN needed, just a fresh CREATE_WALLET-type challenge). That new
+// wallet gets a NEW address — funds and any registry/payroll clone tied to
+// the old, wrong-chain address are NOT automatically carried over, since
+// they're genuinely a different wallet record on Circle's side. There's no
+// code-level fix for that part; it's a one-time consequence of the earlier
+// misclassification, not something this app can silently migrate.
 export async function getUserFirstWallet(
   userId: string
 ): Promise<{ session: CircleSession; wallet: CircleWallet | null; isNewUser: boolean }> {
@@ -152,7 +176,7 @@ export async function getUserFirstWallet(
   const session = await getUserSession(userId);
   const wallets = await getUserWallets(session.userToken);
 
-  const liveWallet = wallets.find(w => w.state === 'LIVE') ?? null;
+  const liveWallet = wallets.find(w => w.state === 'LIVE' && w.blockchain === ARC_BLOCKCHAIN) ?? null;
   return {
     session,
     wallet:    liveWallet,

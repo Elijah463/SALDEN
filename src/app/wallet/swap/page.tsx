@@ -50,6 +50,7 @@ import { saveWalletActivity } from '@/lib/db/indexeddb';
 import { useSwapQuote }        from '@/lib/swap/useSwapQuote';
 import { useTokenDecimals, withResolvedDecimals } from '@/lib/swap/useTokenDecimals';
 import { TokenBox, StepProgress } from '@/components/wallet/SwapUI';
+import { friendlyErrorMessage }   from '@/lib/errorMessage';
 
 type SwapStep = 'approve' | 'swap' | 'confirm' | '';
 
@@ -189,7 +190,7 @@ export default function SwapPage() {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Swap failed';
-      setError(/reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : msg);
+      setError(/reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : friendlyErrorMessage(err, 'Swap failed. Please try again.'));
     } finally {
       setSwapping(false);
       setSwapStep('');

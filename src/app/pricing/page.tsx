@@ -16,6 +16,7 @@ import {
   Loader2, ArrowRight, Lock, Star,
 } from 'lucide-react';
 import { AppLayout }          from '@/components/layout/AppLayout';
+import { NetworkGuard }       from '@/components/shared/NetworkGuard';
 import { useApp }             from '@/context/AppContext';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI, ERC20_ABI } from '@/lib/contracts/abis';
@@ -24,6 +25,8 @@ import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAd
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCloneAccess } from '@/lib/useCloneAccess';
+import { writeCloneCache } from '@/lib/cloneCache';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
 function Row({ label, free, premium }: { label: string; free: boolean | string; premium: boolean | string }) {
@@ -79,6 +82,7 @@ export default function PricingPage() {
 
       if (existingClone && existingClone !== '0x0000000000000000000000000000000000000000') {
         dispatch({ type: 'SET_PAYROLL_CLONE', payload: existingClone });
+        if (address) writeCloneCache(address, { payrollClone: existingClone });
         addToast('You already have a Premium payroll contract — activating it now.', 'info');
         setStep('idle');
         return;
@@ -114,6 +118,7 @@ export default function PricingPage() {
 
       dispatch({ type: 'SET_PAYROLL_CLONE', payload: cloneAddr });
       dispatch({ type: 'SET_PREMIUM',       payload: true        });
+      if (address) writeCloneCache(address, { payrollClone: cloneAddr });
       trackClientEvent({ event: 'user_upgraded', walletAddress: address, txHash: deployTx });
       setStep('done');
       addToast('Premium activated. Your private payroll contract is ready.', 'success', 8000);
@@ -131,6 +136,7 @@ export default function PricingPage() {
           if (nowClone && nowClone !== '0x0000000000000000000000000000000000000000') {
             dispatch({ type: 'SET_PAYROLL_CLONE', payload: nowClone });
             dispatch({ type: 'SET_PREMIUM',       payload: true      });
+            if (address) writeCloneCache(address, { payrollClone: nowClone });
             addToast('You already have a Premium payroll contract — activating it now.', 'info');
             setStep('idle');
             return;
@@ -138,7 +144,7 @@ export default function PricingPage() {
         }
       } catch { /* fall through to showing the original error below */ }
 
-      setErrMsg((err as Error).message ?? 'Transaction failed.');
+      setErrMsg(friendlyErrorMessage(err, 'Transaction failed.'));
       setStep('error');
     }
   }
@@ -146,6 +152,7 @@ export default function PricingPage() {
   const isLoading = step === 'approving' || step === 'deploying';
 
   return (
+    <NetworkGuard>
     <AppLayout title="Pricing">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
 
@@ -318,5 +325,6 @@ export default function PricingPage() {
         }
       `}</style>
     </AppLayout>
+    </NetworkGuard>
   );
 }

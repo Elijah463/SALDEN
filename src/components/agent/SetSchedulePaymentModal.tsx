@@ -19,6 +19,7 @@ import { useAgentStatus } from '@/lib/useAgentStatus';
 import { saveAgentSchedule, type AgentSchedule } from '@/lib/db/indexeddb';
 import { CONTRACTS } from '@/lib/contracts/config';
 import { ALL_EMPLOYEES_LABEL } from '@/lib/groups';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 interface SetSchedulePaymentModalProps {
   open: boolean;
@@ -225,7 +226,7 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
       onScheduled(schedule);
       onClose();
     } catch (err) {
-      setError((err as Error).message ?? 'Could not create schedule.');
+      setError(friendlyErrorMessage(err, 'Could not create schedule.'));
     } finally {
       setSaving(false);
     }

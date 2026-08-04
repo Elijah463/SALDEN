@@ -153,6 +153,48 @@ const MAX_OUTPUT_TOKS_RETRY    = 1024; // bumped once on truncation
 const MAX_EMPLOYEES_IN_CONTEXT = 300;
 const MAX_TOOL_ROUNDS          = 4;    // hard ceiling on function-call loop iterations
 
+// ── Transient-error retry wrapper for the Gemini API calls below ───────────────
+// Gemini's free tier has tight per-minute request/token quotas — a 429
+// (RESOURCE_EXHAUSTED) or a momentary 503 (UNAVAILABLE/overloaded) is a
+// completely ordinary, expected occurrence there, not a real failure. Before
+// this wrapper, ANY error out of chat.sendMessage() propagated straight to
+// the outermost catch (see the end of this file) and came back as the
+// generic "Something went wrong. Please try again." — even for a purely
+// transient hiccup that a short wait and one retry would very often clear
+// on its own. Deliberately short (well under a couple of seconds per
+// attempt) since every call site here runs inside the same MAX_TOOL_ROUNDS
+// loop that already has a `maxDuration` budget (see this file's export
+// above) to respect — this must never turn one slow round into a request
+// that blows the whole function's timeout.
+const GEMINI_RETRY_DELAYS_MS = [800, 1800]; // up to 2 retries beyond the first attempt
+const TRANSIENT_GEMINI_ERROR_PATTERN = /429|RESOURCE_EXHAUSTED|rate.?limit|quota|503|UNAVAILABLE|overloaded|ECONNRESET|ETIMEDOUT|fetch failed|network/i;
+
+function isTransientGeminiError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return TRANSIENT_GEMINI_ERROR_PATTERN.test(msg);
+}
+
+/** Wraps a single Gemini API call (chat.sendMessage or models.generateContent)
+ *  with a short, bounded retry — ONLY for errors that look transient (rate
+ *  limit / overloaded / network blip). Anything else (a genuine 400, an
+ *  auth failure, a schema error) rethrows immediately on the first attempt,
+ *  since retrying those would only waste the remaining time budget on a
+ *  call that will never succeed. */
+async function withGeminiRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === GEMINI_RETRY_DELAYS_MS.length || !isTransientGeminiError(err)) throw err;
+      console.warn(`[agent/chat] ${label} hit a transient error (attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1}), retrying:`, err instanceof Error ? err.message : err);
+      await new Promise(r => setTimeout(r, GEMINI_RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  throw lastErr;
+}
+
 // ── Off-topic early-exit keywords ─────────────────────────────────────────────
 const PAYROLL_KEYWORDS = [
   'pay', 'payroll', 'salary', 'employee', 'staff', 'wallet', 'usdc', 'token',
@@ -835,7 +877,7 @@ export async function POST(req: NextRequest) {
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await chat.sendMessage({ message: nextInput as any });
+      const result = await withGeminiRetry('chat.sendMessage', () => chat.sendMessage({ message: nextInput as any }));
       // @google/genai's GenerateContentResponse has candidates/text/
       // functionCalls directly on it (no .response wrapper the old SDK
       // used), and text/functionCalls are plain properties, not methods.
@@ -1419,7 +1461,7 @@ export async function POST(req: NextRequest) {
     // nothing ever happening).
     if (!finalText) {
       finalText = actionLog.length > 0
-        ? 'I processed your request. Check the action log above for what happened, or ask me a follow-up question.'
+        ? 'I processed your request — check the Manage Agent page\'s log for exactly what happened, or ask me a follow-up question.'
         : "I wasn't able to do anything with that — could you rephrase, or try again?";
       finalRawParts = [{ text: finalText }];
     }
@@ -1433,13 +1475,13 @@ export async function POST(req: NextRequest) {
     // to defend rather than correct.
     if (isCritical && !proposeToolCalledThisTurn && finalText && !finalText.includes('?')) {
       try {
-        const correctionResult = await genAI.models.generateContent({
+        const correctionResult = await withGeminiRetry('correction generateContent', () => genAI.models.generateContent({
           model: 'gemini-3.6-flash',
           contents: `${systemInstruction}\n\nUser said: "${userText}"\n\n` +
             `Your previous response was: "${finalText.slice(0, 300)}"\n\n` +
             G4_CORRECTION_NOTE,
           config: { tools, maxOutputTokens: MAX_OUTPUT_TOKS },
-        });
+        }));
         const corrected = correctionResult.text;
         if (corrected && corrected.trim()) finalText = corrected;
         else finalText = 'Could you give me a bit more detail? I want to make sure I have everything right before proceeding.';
@@ -1497,7 +1539,18 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // Log internally, never expose stack traces or config details to the client.
     console.error('[agent/chat]', err instanceof Error ? err.message : err);
-    return NextResponse.json({ error: 'Something went wrong. Please try again.' }, { status: 500 });
+    // withGeminiRetry() above already retried a couple of times before
+    // giving up — reaching here with a still-transient error means the
+    // free-tier quota is genuinely exhausted right now, not that
+    // something is broken. Telling the user that plainly (and that
+    // waiting helps) is a lot more useful than the same opaque message
+    // for every possible failure, which was the actual complaint this
+    // fixes: real, different problems all looked identical and
+    // unactionable from the chat.
+    const message = isTransientGeminiError(err)
+      ? "I'm getting rate-limited right now — please wait about a minute and try again."
+      : 'Something went wrong on my end. Please try again — if it keeps happening, try rephrasing your request.';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

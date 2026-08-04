@@ -15,6 +15,7 @@ import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { getCachedTokens, setCachedTokens } from '@/lib/db/indexeddb';
 import { getToken, DEFAULT_TOKEN_REGISTRY, TOKEN_ICON_PATHS, tokenIconRenderSize, type TokenEntry } from '@/lib/token-registry';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 const REMARK_OPTIONS = [
   'Salary Payment',
@@ -161,7 +162,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
         hasSetDefault.current = true;
       }
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Failed to load tokens');
+      setFetchError(friendlyErrorMessage(err, 'Failed to load tokens'));
       const fallback = Object.values(tokenRegistry);
       setTokens(fallback.length ? fallback : Object.values(DEFAULT_TOKEN_REGISTRY));
       if (!hasSetDefault.current) { setSelectedToken(CONTRACTS.USDC); hasSetDefault.current = true; }

@@ -92,7 +92,7 @@ export interface TxRecord {
   receiptEmailSentAt?: number | null;
   description?: string;
   /** Who triggered this transaction — drives payroll receipt email wording and audit trail. */
-  executedBy?: 'manual' | 'ai_agent';
+  executedBy?: 'manual' | 'ai_agent' | 'ai_agent_scheduled';
 }
 
 export interface AgentLog {

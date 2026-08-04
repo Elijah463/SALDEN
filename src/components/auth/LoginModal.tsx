@@ -25,6 +25,7 @@ import { useAccount } from 'wagmi';
 import { Mail, ArrowRight, Loader2 } from 'lucide-react';
 import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
 import { setStoredSession } from '@/lib/useEffectiveAddress';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 // ── Google icon ───────────────────────────────────────────────────────────────
 function GoogleIcon() {
@@ -151,6 +152,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
         if (!data.isNewUser && data.walletAddress) {
           // Returning user — wallet already exists
           storeSession(data.email, data.walletAddress);
+          onClose();
           router.push('/dashboard');
           return;
         }
@@ -165,9 +167,10 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
           onStatusChange: setGoogleMsg,
         });
         storeSession(data.email, walletAddress);
+        onClose();
         router.push('/dashboard');
       } catch (err) {
-        const msg = (err as Error)?.message ?? 'Sign-in failed';
+        const msg = friendlyErrorMessage(err, 'Sign-in failed');
         setEmailErr(msg);
         setStep('choose');
       }
@@ -199,7 +202,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
         }
       });
     } catch (err) {
-      setEmailErr((err as Error).message ?? 'Failed to load Google Sign-In');
+      setEmailErr(friendlyErrorMessage(err, 'Failed to load Google Sign-In'));
     }
   }
 
@@ -210,22 +213,36 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
 
   async function handleEmailSubmit() {
     if (!validateEmail(email)) { setEmailErr('Please enter a valid email address'); return; }
+    // BUG FIX — "No wallet found for this account yet" for accounts that
+    // actually have one: this used to pass the raw, as-typed `email`
+    // (whatever casing/whitespace the input field or autofill produced)
+    // straight into the /auth/otp URL. OTPForm then used THAT raw value as
+    // the identity key for storeSession() — but /api/auth/email-wallet
+    // normalizes (.trim().toLowerCase()) before creating/looking up the
+    // Circle user. Any casing/whitespace mismatch between the two meant
+    // every later Circle action (sign/contract-execution challenges) was
+    // looked up under a DIFFERENT, wallet-less Circle user than the one
+    // that actually got provisioned and funded. Normalizing once, here,
+    // before it's used as an identity key anywhere, keeps every downstream
+    // consumer (OTPForm, send-otp, email-wallet, the stored session) in
+    // agreement.
+    const normalizedEmail = email.trim().toLowerCase();
     setEmailErr('');
     setLoading(true);
     try {
       const res = await fetch('/api/auth/send-otp', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email }),
+        body:    JSON.stringify({ email: normalizedEmail }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to send code');
       onClose();
       router.push(
-        `/auth/otp?email=${encodeURIComponent(email)}&token=${encodeURIComponent(data.token)}`
+        `/auth/otp?email=${encodeURIComponent(normalizedEmail)}&token=${encodeURIComponent(data.token)}`
       );
     } catch (err) {
-      setEmailErr((err as Error).message ?? 'Failed to send code. Please try again.');
+      setEmailErr(friendlyErrorMessage(err, 'Failed to send code. Please try again.'));
     } finally { setLoading(false); }
   }
 

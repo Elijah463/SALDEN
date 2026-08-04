@@ -22,12 +22,15 @@ import {
 } from 'wagmi';
 import { encodeFunctionData, keccak256 } from 'viem';
 import { AppLayout }      from '@/components/layout/AppLayout';
+import { NetworkGuard }   from '@/components/shared/NetworkGuard';
 import { useApp }         from '@/context/AppContext';
 import { Modal }          from '@/components/shared/Modal';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { usePayrollSync } from '@/lib/usePayrollSync';
 import { useCloneAccess } from '@/lib/useCloneAccess';
+import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -138,10 +141,11 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
       dispatch({ type: 'SET_PAYROLL_DATA', payload: {
         payrollSetup: { fullName, companyName, email, employeeRange: empRange, registryClone: clone },
       } });
+      writeCloneCache(address, { registryClone: clone });
       trackClientEvent({ event: 'user_registered', walletAddress: address, txHash: hash });
       onComplete();
     } catch (err) {
-      setErrors([(err as Error).message ?? 'Transaction failed. Please try again.']);
+      setErrors([friendlyErrorMessage(err, 'Transaction failed. Please try again.')]);
     } finally { setSubmitting(false); setSubmitStatus(''); }
   }
 
@@ -256,7 +260,7 @@ function EmployeeModal({
       }
       onClose();
     } catch (err) {
-      setProceedError((err as Error).message ?? 'Failed to finalize setup');
+      setProceedError(friendlyErrorMessage(err, 'Failed to finalize setup'));
     } finally { setProceeding(false); }
   }
 
@@ -284,7 +288,7 @@ function EmployeeModal({
         onClose();
       }
     } catch (err) {
-      setErrors([(err as Error).message]);
+      setErrors([friendlyErrorMessage(err, 'Could not save employee. Please try again.')]);
     } finally { setSaving(false); }
   }
 
@@ -321,7 +325,7 @@ function EmployeeModal({
       if (fileRef.current) fileRef.current.value = '';
       if (!setupMode) onClose();
     }
-    catch (err) { setFileError((err as Error).message); }
+    catch (err) { setFileError(friendlyErrorMessage(err, 'Could not import employees. Please try again.')); }
     finally { setImporting(false); }
   }
 
@@ -594,6 +598,20 @@ export default function DashboardPage() {
     const RETRY_DELAY_MS = 1200;
 
     (async () => {
+      // ── Cache-first: see lib/serverCloneCache.ts. A hit here resolves
+      // immediately with no RPC call at all — this is what makes this
+      // reliable on a fresh browser/device/"Try again" click instead of
+      // depending on a cold RPC connection succeeding.
+      try {
+        const cached = await readCloneCache(address);
+        if (cancelled) return;
+        if (cached.registryClone) {
+          dispatch({ type: 'SET_REGISTRY', payload: cached.registryClone });
+          setRegistryStatus('exists');
+          return;
+        }
+      } catch { /* cache is best-effort — fall through to the on-chain check */ }
+
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           const existing = await publicClient.readContract({
@@ -607,6 +625,7 @@ export default function DashboardPage() {
           if (existing && existing.toLowerCase() !== ZERO) {
             dispatch({ type: 'SET_REGISTRY', payload: existing });
             setRegistryStatus('exists');
+            writeCloneCache(address, { registryClone: existing });
           } else {
             setRegistryStatus('none');
           }
@@ -1036,7 +1055,7 @@ export default function DashboardPage() {
       }
     } catch (err) {
       const msg = (err as Error).message ?? '';
-      const friendly = /reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : 'Payroll failed. Please try again.';
+      const friendly = /reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : friendlyErrorMessage(err, 'Payroll failed. Please try again.');
       setExecutionState('failed');
       setExecuteError(friendly);
     } finally {
@@ -1055,6 +1074,7 @@ export default function DashboardPage() {
 
   // ─── Render ────────────────────────────────────────────────────────────────
   return (
+    <NetworkGuard>
     <AppLayout title="Dashboard" companyName={payrollSetup?.companyName}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
 
@@ -1417,5 +1437,6 @@ export default function DashboardPage() {
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </AppLayout>
+    </NetworkGuard>
   );
 }

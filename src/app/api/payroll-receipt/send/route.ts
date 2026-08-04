@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
       remark?:         string;
       ref?:            string;
       timestamp?:      number;
-      executedBy?:     'manual' | 'ai_agent';
+      executedBy?:     'manual' | 'ai_agent' | 'ai_agent_scheduled';
       employees?: {
         fullName?:      string;
         department?:    string;
@@ -186,9 +186,9 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    if (executedBy !== 'manual' && executedBy !== 'ai_agent') {
+    if (executedBy !== 'manual' && executedBy !== 'ai_agent' && executedBy !== 'ai_agent_scheduled') {
       return NextResponse.json(
-        { status: 'failed', message: "executedBy must be 'manual' or 'ai_agent'" },
+        { status: 'failed', message: "executedBy must be 'manual', 'ai_agent', or 'ai_agent_scheduled'" },
         { status: 400 }
       );
     }

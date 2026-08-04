@@ -19,6 +19,7 @@ import { SaldenLogo }    from '@/components/shared/Logo';
 import { Mail, ArrowLeft, RefreshCw, Loader2 } from 'lucide-react';
 import { executeCircleChallenge } from '@/lib/circle/executeChallenge';
 import { setStoredSession, getStoredSession } from '@/lib/useEffectiveAddress';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 const OTP_LENGTH      = 6;
 const RESEND_COOLDOWN = 30;
@@ -39,7 +40,16 @@ function storeSession(email: string, walletAddress: string) {
 export function OTPForm() {
   const router  = useRouter();
   const params  = useSearchParams();
-  const email   = params.get('email') ?? '';
+  // BUG FIX — normalized here, at the source, so every use below (OTP
+  // verification, /api/auth/email-wallet, and — critically —
+  // storeSession()) is guaranteed to match the normalized identity Circle
+  // was actually created/looked-up under server-side. See
+  // components/auth/LoginModal.tsx's handleEmailSubmit() for the full
+  // writeup of the bug this caused ("No wallet found" for accounts that
+  // genuinely have one). Kept here too (not just at the LoginModal source)
+  // since this page can also be reached via a resent-code link that
+  // round-trips the email through the URL again.
+  const email   = (params.get('email') ?? '').trim().toLowerCase();
   const wallet  = params.get('wallet') ?? '';   // set for external-wallet link flow
   const token   = params.get('token') ?? '';
 
@@ -173,7 +183,7 @@ export function OTPForm() {
       router.push('/dashboard');
 
     } catch (err) {
-      setError((err as Error).message ?? 'Verification failed. Please try again.');
+      setError(friendlyErrorMessage(err, 'Verification failed. Please try again.'));
     } finally {
       setVerifying(false);
       setStatusMsg('');

@@ -45,7 +45,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: tokenInfo.error_description }, { status: 401 });
     }
 
-    const email        = tokenInfo.email as string;
+    // Normalized for consistency with /api/auth/email-wallet's
+    // (.trim().toLowerCase()) — keeps a Google-signed-in and
+    // email-OTP-signed-in identity for the same address from ever landing
+    // on two different Circle users. See LoginModal.tsx's handleEmailSubmit
+    // for the full writeup of the bug an inconsistency like this causes.
+    const email        = ((tokenInfo.email as string) ?? '').trim().toLowerCase();
     const emailVerified = tokenInfo.email_verified === 'true' || tokenInfo.email_verified === true;
 
     if (!email || !emailVerified) {

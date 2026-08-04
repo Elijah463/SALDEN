@@ -44,6 +44,7 @@ import { useApp } from '@/context/AppContext';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { CONTRACTS } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
+import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -62,6 +63,19 @@ export function useCloneAccess(): void {
     const RETRY_DELAY_MS = 1200;
 
     (async () => {
+      // ── Cache-first — see lib/serverCloneCache.ts. Same reasoning as the
+      // registryClone check in dashboard/page.tsx: a cache hit resolves
+      // instantly with no RPC call, which is what makes this reliable on a
+      // fresh browser/device instead of depending on a cold RPC connection.
+      try {
+        const cached = await readCloneCache(address);
+        if (cancelled) return;
+        if (cached.payrollClone) {
+          dispatch({ type: 'SET_PAYROLL_CLONE', payload: cached.payrollClone });
+          return;
+        }
+      } catch { /* cache is best-effort — fall through to the on-chain check */ }
+
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           const existing = await publicClient.readContract({
@@ -74,6 +88,7 @@ export function useCloneAccess(): void {
           if (cancelled) return;
           if (existing && existing.toLowerCase() !== ZERO_ADDRESS) {
             dispatch({ type: 'SET_PAYROLL_CLONE', payload: existing });
+            writeCloneCache(address, { payrollClone: existing });
           }
           return;
         } catch (err) {

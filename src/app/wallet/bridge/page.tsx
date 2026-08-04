@@ -53,6 +53,7 @@ import { getAppKit }           from '@/lib/circle/appKit';
 import { arcTestnet, CONTRACTS, ARCSCAN_BASE } from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { saveWalletActivity }  from '@/lib/db/indexeddb';
+import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 // ── Supported chains ─────────────────────────────────────────────────────────
 
@@ -537,7 +538,7 @@ export default function BridgePage() {
           prev.map(s => s.state === 'active' ? { ...s, state: 'error' } : s)
         );
       } else {
-        setError(msg);
+        setError(friendlyErrorMessage(err, 'Bridge failed. Please try again.'));
         setBridgeSteps(prev =>
           prev.map(s => s.state === 'active' ? { ...s, state: 'error' } : s)
         );
