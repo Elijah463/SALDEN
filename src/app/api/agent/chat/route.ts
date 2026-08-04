@@ -877,7 +877,13 @@ export async function POST(req: NextRequest) {
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await withGeminiRetry('chat.sendMessage', () => chat.sendMessage({ message: nextInput as any }));
+      // `genAI` comes from getGenAI(), which is typed `any` (see its
+      // declaration above) — TS can't structurally match an `any`-returning
+      // callback against withGeminiRetry<T>()'s `() => Promise<T>` param, so
+      // it falls back to inferring T as `unknown` instead of `any`. Cast the
+      // result explicitly so the (already-untyped) SDK response shape below
+      // is usable the same way it was before the @google/genai migration.
+      const result = await withGeminiRetry('chat.sendMessage', () => chat.sendMessage({ message: nextInput as any })) as any;
       // @google/genai's GenerateContentResponse has candidates/text/
       // functionCalls directly on it (no .response wrapper the old SDK
       // used), and text/functionCalls are plain properties, not methods.
@@ -1475,13 +1481,16 @@ export async function POST(req: NextRequest) {
     // to defend rather than correct.
     if (isCritical && !proposeToolCalledThisTurn && finalText && !finalText.includes('?')) {
       try {
+        // Same `any`-through-generic inference issue as the chat.sendMessage
+        // call above — see the comment there.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const correctionResult = await withGeminiRetry('correction generateContent', () => genAI.models.generateContent({
           model: 'gemini-3.6-flash',
           contents: `${systemInstruction}\n\nUser said: "${userText}"\n\n` +
             `Your previous response was: "${finalText.slice(0, 300)}"\n\n` +
             G4_CORRECTION_NOTE,
           config: { tools, maxOutputTokens: MAX_OUTPUT_TOKS },
-        }));
+        })) as any;
         const corrected = correctionResult.text;
         if (corrected && corrected.trim()) finalText = corrected;
         else finalText = 'Could you give me a bit more detail? I want to make sure I have everything right before proceeding.';
