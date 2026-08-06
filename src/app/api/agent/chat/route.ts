@@ -166,7 +166,7 @@ const MAX_TOOL_ROUNDS          = 4;    // hard ceiling on function-call loop ite
 // loop that already has a `maxDuration` budget (see this file's export
 // above) to respect — this must never turn one slow round into a request
 // that blows the whole function's timeout.
-const GEMINI_RETRY_DELAYS_MS = [800, 1800]; // up to 2 retries beyond the first attempt
+const GEMINI_RETRY_DELAYS_MS = [900, 2000, 4000]; // up to 3 retries beyond the first attempt
 const TRANSIENT_GEMINI_ERROR_PATTERN = /429|RESOURCE_EXHAUSTED|rate.?limit|quota|503|UNAVAILABLE|overloaded|ECONNRESET|ETIMEDOUT|fetch failed|network/i;
 
 function isTransientGeminiError(err: unknown): boolean {
@@ -179,17 +179,31 @@ function isTransientGeminiError(err: unknown): boolean {
  *  limit / overloaded / network blip). Anything else (a genuine 400, an
  *  auth failure, a schema error) rethrows immediately on the first attempt,
  *  since retrying those would only waste the remaining time budget on a
- *  call that will never succeed. */
-async function withGeminiRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+ *  call that will never succeed.
+ *
+ *  `deadlineMs` (a Date.now()-scale wall-clock timestamp, not a duration) is
+ *  the request-level budget from this file's `maxDuration = 60` export —
+ *  multi-tool-round flows (schedule-payment being the clearest example:
+ *  several sequential chat.sendMessage calls in the same request, each an
+ *  independent chance to hit Gemini's free-tier per-minute quota) can
+ *  legitimately need every one of the 3 retries above on more than one
+ *  round in the same request. Retrying blindly regardless of remaining
+ *  time risked this function itself being hard-killed by Vercel's own
+ *  timeout — a much worse, unhandled failure than our own clean
+ *  rate-limited message. When there isn't enough time left for a
+ *  worthwhile attempt, this stops retrying and throws immediately instead. */
+async function withGeminiRetry<T>(label: string, fn: () => Promise<T>, deadlineMs?: number): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= GEMINI_RETRY_DELAYS_MS.length; attempt++) {
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt === GEMINI_RETRY_DELAYS_MS.length || !isTransientGeminiError(err)) throw err;
+      const nextDelay = GEMINI_RETRY_DELAYS_MS[attempt];
+      const outOfTime = deadlineMs !== undefined && nextDelay !== undefined && Date.now() + nextDelay + 2000 > deadlineMs;
+      if (attempt === GEMINI_RETRY_DELAYS_MS.length || !isTransientGeminiError(err) || outOfTime) throw err;
       console.warn(`[agent/chat] ${label} hit a transient error (attempt ${attempt + 1}/${GEMINI_RETRY_DELAYS_MS.length + 1}), retrying:`, err instanceof Error ? err.message : err);
-      await new Promise(r => setTimeout(r, GEMINI_RETRY_DELAYS_MS[attempt]));
+      await new Promise(r => setTimeout(r, nextDelay));
     }
   }
   throw lastErr;
@@ -598,6 +612,11 @@ interface ActionLogEntry {
 // ── POST handler ──────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  // Wall-clock deadline for this whole request, derived from this file's
+  // `maxDuration = 60` export with a 5s buffer left for the rest of the
+  // response-building work after the last Gemini call returns — see
+  // withGeminiRetry's comment for why this exists.
+  const requestDeadline = Date.now() + 55_000;
   try {
     if (!process.env.GOOGLE_AI_API_KEY) {
       return NextResponse.json({ error: 'The AI Agent is temporarily unavailable.' }, { status: 503 });
@@ -883,7 +902,7 @@ export async function POST(req: NextRequest) {
       // it falls back to inferring T as `unknown` instead of `any`. Cast the
       // result explicitly so the (already-untyped) SDK response shape below
       // is usable the same way it was before the @google/genai migration.
-      const result = await withGeminiRetry('chat.sendMessage', () => chat.sendMessage({ message: nextInput as any })) as any;
+      const result = await withGeminiRetry('chat.sendMessage', () => chat.sendMessage({ message: nextInput as any }), requestDeadline) as any;
       // @google/genai's GenerateContentResponse has candidates/text/
       // functionCalls directly on it (no .response wrapper the old SDK
       // used), and text/functionCalls are plain properties, not methods.
@@ -1490,7 +1509,7 @@ export async function POST(req: NextRequest) {
             `Your previous response was: "${finalText.slice(0, 300)}"\n\n` +
             G4_CORRECTION_NOTE,
           config: { tools, maxOutputTokens: MAX_OUTPUT_TOKS },
-        })) as any;
+        }), requestDeadline) as any;
         const corrected = correctionResult.text;
         if (corrected && corrected.trim()) finalText = corrected;
         else finalText = 'Could you give me a bit more detail? I want to make sure I have everything right before proceeding.';

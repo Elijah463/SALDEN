@@ -16,7 +16,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/shared/Modal';
-import { addressLink } from '@/lib/contracts/config';
+import { addressLink, arcTestnet } from '@/lib/contracts/config';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, sanitizeString } from '@/lib/validation';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
@@ -24,6 +24,8 @@ import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { usePayrollSync } from '@/lib/usePayrollSync';
+import { useCloneAccess } from '@/lib/useCloneAccess';
+import { useRegistryCloneAccess } from '@/lib/useRegistryCloneAccess';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
@@ -111,10 +113,21 @@ export default function SettingsPage() {
   // which silently broke profile save + group add/remove sync on this
   // page for every non-external-wallet login.
   const { address }      = useEffectiveAddress();
-  const publicClient     = usePublicClient();
+  const publicClient     = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast, syncData, hydrateFromCache } = useApp();
   const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups, employees } = state;
   usePayrollSync({ registryClone, address, publicClient });
+  // Settings never had its own resolution for either clone address — it
+  // only ever read state.payrollClone/state.registryClone as populated by
+  // whatever page the person happened to visit earlier this session (or
+  // payrollSetup's cached/synced value). Landing here directly — a fresh
+  // browser/device, or opening Settings straight from a bookmark — left
+  // both null, which is why Contract Information's rows disappeared
+  // entirely rather than showing stale-but-correct data. These two hooks
+  // are the same self-healing lookups dashboard/ai-agent already rely on
+  // (see their file comments for the full history).
+  useCloneAccess();
+  useRegistryCloneAccess();
 
   // BUG FIX: this page is the primary place users check/edit their company
   // name and receipt email, so it should show whatever is already saved as
@@ -191,6 +204,30 @@ export default function SettingsPage() {
     setEmail(payrollSetup.email ?? '');
     profileHydrated.current = true;
   }, [payrollSetup]);
+
+  // Fast cross-device/browser path: the IPFS hydration above needs a
+  // wallet signature (to derive the decryption key) plus an IPFS fetch, so
+  // on a brand-new browser or device it can take a few seconds — or never
+  // resolve at all until the wallet reconnects. This reads the same two
+  // fields from the server-side cache (lib/serverProfileCache.ts, kept in
+  // sync by the write-through below and by the setup wizard) so they
+  // render immediately instead of blank. Whichever source — this cache or
+  // the IPFS effect above — resolves first with real data wins and marks
+  // profileHydrated so the other is a no-op, same "hydrate once" guard
+  // already protecting the user's active typing.
+  useEffect(() => {
+    if (!address) return;
+    fetch(`/api/profile?address=${address}`)
+      .then(res => res.json())
+      .then((data: { companyName: string | null; email: string | null }) => {
+        if (profileHydrated.current) return;
+        if (!data.companyName && !data.email) return;
+        setCompanyName(data.companyName ?? '');
+        setEmail(data.email ?? '');
+        profileHydrated.current = true;
+      })
+      .catch(() => { /* best-effort fast path — IPFS hydration above is unaffected */ });
+  }, [address]);
 
   // Group management
   const [newGroup,     setNewGroup]     = useState('');
@@ -346,6 +383,16 @@ export default function SettingsPage() {
       dispatch({ type: 'SET_PAYROLL_DATA', payload: { payrollSetup: updated } });
       dispatch({ type: 'SET_COMPANY_NAME', payload: updated.companyName });
       await syncAndAnchor(updated);
+      // Best-effort write-through to the cross-device/browser fast-path
+      // cache (lib/serverProfileCache.ts) — never blocks or fails the
+      // save itself; the IPFS record above is already the real save.
+      if (address) {
+        fetch('/api/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address, companyName: updated.companyName, email: updated.email }),
+        }).catch(() => { /* best-effort */ });
+      }
       setProfileSaveVersion(v => v + 1);
       addToast('Profile saved.', 'success');
     } catch { addToast('Failed to save profile.', 'error'); }

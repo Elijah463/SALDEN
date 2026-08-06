@@ -14,7 +14,7 @@
  *   continuous re-fetches on every block.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter }        from 'next/navigation';
 import { useBalance, usePublicClient } from 'wagmi';
 import {
@@ -176,9 +176,27 @@ export default function WalletPage() {
 
   // ERC-20 balances — nativeBalance intentionally excluded from deps
   // to avoid re-fetching on every block; USDC is shown from nativeBalance directly
+  //
+  // A transient RPC hiccup (Arc's public testnet RPC intermittently
+  // rate-limits with HTTP 429) used to be indistinguishable from a
+  // genuinely empty wallet: any failed balanceOf() read fell into the same
+  // catch block that displayed "0.00", identical to what a real zero
+  // balance shows. That's exactly the reported symptom — refreshing
+  // sometimes shows the real balance and sometimes shows 0.00 for the same
+  // funded wallet, purely depending on whether that particular read hit a
+  // rate limit. Fixed the same way swap/page.tsx's fetchTokenBalance
+  // already does it: retry a few times first (a rate limit is usually
+  // gone within a second or two), and on total failure keep whatever
+  // balance was last successfully read instead of overwriting it with a
+  // fake zero — an unknown balance and a confirmed-zero balance are not
+  // the same thing and shouldn't render the same way.
+  const erc20BalancesRef = useRef(erc20Balances);
+  useEffect(() => { erc20BalancesRef.current = erc20Balances; }, [erc20Balances]);
+
   const fetchErc20 = useCallback(async () => {
     if (!address || !publicClient) return;
     setLoadingErc20(true);
+    const previous = erc20BalancesRef.current;
     const out: Record<string, string> = {};
     for (const t of TOKENS) {
       if (t.fromNative) continue;
@@ -186,20 +204,29 @@ export default function WalletPage() {
         ? (ENV_TOKEN_ADDRESSES[t.envKey] as `0x${string}` | undefined)
         : undefined;
       if (!addr) { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; continue; }
-      try {
-        const raw = await publicClient.readContract({
-          address: addr, abi: ERC20_ABI,
-          functionName: 'balanceOf',
-          args: [address as `0x${string}`],
-        }) as bigint;
-        const div   = BigInt(10 ** t.decimals);
-        const whole = raw / div;
-        const dp    = t.displayDecimals;
-        const frac  = (raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0');
-        out[t.symbol] = `${Number(whole).toLocaleString()}.${frac}`;
-      } catch { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; }
+
+      let resolved: string | null = null;
+      for (let attempt = 1; attempt <= 3 && resolved === null; attempt++) {
+        try {
+          const raw = await publicClient.readContract({
+            address: addr, abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [address as `0x${string}`],
+          }) as bigint;
+          const div   = BigInt(10 ** t.decimals);
+          const whole = raw / div;
+          const dp    = t.displayDecimals;
+          const frac  = (raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0');
+          resolved = `${Number(whole).toLocaleString()}.${frac}`;
+        } catch {
+          if (attempt < 3) await new Promise(r => setTimeout(r, 800));
+        }
+      }
+      // Keep the last known-good value on total failure rather than
+      // clobbering it with a fake "0.00" — see comment above.
+      out[t.symbol] = resolved ?? previous[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`;
     }
-    setErc20Balances(out);
+    setErc20Balances(prev => ({ ...prev, ...out }));
     setLoadingErc20(false);
   }, [address, publicClient]);
 

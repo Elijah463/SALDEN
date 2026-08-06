@@ -400,6 +400,13 @@ export const REGISTRY_ABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "getCIDHash",
+    "outputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [{ "internalType": "address", "name": "agent", "type": "address" }],
     "name": "addAgent",
     "outputs": [],

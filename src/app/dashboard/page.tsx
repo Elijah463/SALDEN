@@ -33,6 +33,7 @@ import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
@@ -61,7 +62,7 @@ import {
   REGISTRY_ABI,
   ERC20_ABI,
 } from '@/lib/contracts/abis';
-import { CONTRACTS } from '@/lib/contracts/config';
+import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
 
 // ── papaparse ─────────────────────────────────────────────────────────────────
 async function parseCsv(file: File): Promise<Record<string, unknown>[]> {
@@ -85,7 +86,7 @@ const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
 function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const { dispatch } = useApp();
   const { address, loginMethod } = useEffectiveAddress();
-  const publicClient           = usePublicClient();
+  const publicClient           = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract, canWrite } = useUniversalWrite();
 
   const [fullName,    setFullName]    = useState('');
@@ -216,7 +217,7 @@ function EmployeeModal({
 }: EmployeeModalProps) {
   const { dispatch, state, syncData } = useApp();
   const { address }            = useEffectiveAddress();
-  const publicClient           = usePublicClient();
+  const publicClient           = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign                   = useCachedSignMessage();
 
@@ -527,7 +528,7 @@ export default function DashboardPage() {
   const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
   // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
   const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
-  const publicClient              = usePublicClient();
+  const publicClient              = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign                      = useCachedSignMessage();
 
@@ -733,6 +734,7 @@ export default function DashboardPage() {
   const [executionState,  setExecutionState]  = useState<ExecutionState>('idle');
   const [executeError,    setExecuteError]    = useState('');
   const [execTxHash,      setExecTxHash]      = useState('');
+  const [execTxHashes,    setExecTxHashes]    = useState<string[]>([]);
   const [execSummary,     setExecSummary]     = useState<PaymentSummary | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -884,27 +886,40 @@ export default function DashboardPage() {
     const tokenDec    = overrideToken?.decimals  ?? 6;
     const tokenScale  = 10 ** tokenDec;
     const contractAddr = (payrollClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
-    const addrs        = targetEmployees.map(e => e.walletAddress as `0x${string}`);
-    const amounts      = targetEmployees.map(e => BigInt(Math.round(Number(e.salaryAmount) * tokenScale)));
-    const totalAmount  = amounts.reduce((a, b) => a + b, 0n);
+    const totalAmount  = targetEmployees.reduce(
+      (sum, e) => sum + BigInt(Math.round(Number(e.salaryAmount) * tokenScale)), 0n,
+    );
 
     if (!canWrite || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
+
+    // batchPay reverts on-chain above the active contract's MAX_BATCH_SIZE
+    // (100 standalone / 1,000 premium clone — see lib/contracts/batchLimits.ts).
+    // A payroll run larger than that cap is split here into sequential
+    // batches of at most that many recipients each, so e.g. 152 employees
+    // on the free tier runs as two batches (100 + 52) instead of one
+    // oversized call that could never succeed.
+    const chunks = chunkForBatchPay(targetEmployees, !!payrollClone);
 
     setIsExecuting(true);
     setExecutionState('pending');
     setExecuteError('');
     setExecTxHash('');
+    setExecTxHashes([]);
     setExecSummary(null);
     setExecuteStatus('Preparing payroll execution…');
+    const completedTxHashes: `0x${string}`[] = [];
     try {
       setExecuteStatus(`Checking ${tokenSymbol} allowance…`);
-      setExecuteProgress({ current: 0, total: targetEmployees.length });
+      setExecuteProgress({ current: 0, total: chunks.length });
 
       const allowance = await publicClient.readContract({
         address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
         args: [address as `0x${string}`, contractAddr],
       }) as bigint;
 
+      // One approval for the FULL total covers every batch below — ERC-20
+      // allowance persists across multiple sequential transferFrom calls,
+      // so there's no need to re-approve per batch.
       if (allowance < totalAmount) {
         setExecuteStatus(`Approving ${tokenSymbol} transfer…`);
         const approveTx = await universalWrite({
@@ -915,147 +930,173 @@ export default function DashboardPage() {
         await waitForSuccessfulReceipt(publicClient, approveTx);
       }
 
-      setExecuteStatus('Executing batch payment…');
-      let txHash: `0x${string}`;
+      const receiptEmail = payrollSetup?.email ?? null;
 
-      // Build structured Arc Memo JSON (ImportantUpdate #8).
-      // Arc Memo contract preserves msg.sender so the payroll clone sees the
-      // original wallet address, not the Memo contract. No contract changes needed.
-      const ref     = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-      const memoJson = JSON.stringify({
-        protocol: 'salden', type: 'batchPay', ref,
-        date: new Date().toISOString(),
-        remark, token: tokenSymbol,
-        totalAmount: (Number(totalAmount) / tokenScale).toFixed(2),
-        recipients: targetEmployees.length,
-        group: resolvedGroup, employer: address,
-      });
-      const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
-        .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
-      // The real Memo contract's memoId is a caller-chosen bytes32 (see
-      // event `Memo`'s indexed memoId) — deriving it as a hash of the
-      // memo content itself keeps it deterministic and collision-safe
-      // without inventing a separate ID scheme.
-      const memoId = keccak256(memoHex);
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk       = chunks[chunkIndex];
+        const chunkAddrs   = chunk.map(e => e.walletAddress as `0x${string}`);
+        const chunkAmounts = chunk.map(e => BigInt(Math.round(Number(e.salaryAmount) * tokenScale)));
+        const chunkTotal   = chunkAmounts.reduce((a, b) => a + b, 0n);
+        const batchLabel   = chunks.length > 1 ? ` (batch ${chunkIndex + 1} of ${chunks.length})` : '';
 
-      // Encode batchPay calldata for the Memo contract to forward
-      setExecuteStatus('Executing batch payment…');
-      if (payrollClone) {
-        const batchData = encodeFunctionData({
-          abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
-          args: [addrs, amounts, tokenAddr],
+        // Build structured Arc Memo JSON (ImportantUpdate #8).
+        // Arc Memo contract preserves msg.sender so the payroll clone sees the
+        // original wallet address, not the Memo contract. No contract changes needed.
+        const ref     = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+        const memoJson = JSON.stringify({
+          protocol: 'salden', type: 'batchPay', ref,
+          date: new Date().toISOString(),
+          remark, token: tokenSymbol,
+          totalAmount: (Number(chunkTotal) / tokenScale).toFixed(2),
+          recipients: chunk.length,
+          group: resolvedGroup, employer: address,
+          ...(chunks.length > 1 ? { batch: chunkIndex + 1, batchCount: chunks.length } : {}),
         });
-        // Arc Memo contract: memo(target, data, memoId, memoData) — see
-        // lib/contracts/abis.ts for why this isn't called callWithMemo.
-        // msg.sender is preserved — payroll clone sees the user's wallet address
-        txHash = await universalWrite({
-          address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-          functionName: 'memo',
-          args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
-        }, setExecuteStatus);
-      } else {
-        const batchData = encodeFunctionData({
-          abi: ENTERPRISE_PAYROLL_ABI, functionName: 'batchPay',
-          args: [addrs, amounts],
+        const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
+          .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
+        // The real Memo contract's memoId is a caller-chosen bytes32 (see
+        // event `Memo`'s indexed memoId) — deriving it as a hash of the
+        // memo content itself keeps it deterministic and collision-safe
+        // without inventing a separate ID scheme.
+        const memoId = keccak256(memoHex);
+
+        setExecuteStatus(`Executing batch payment${batchLabel}…`);
+        let txHash: `0x${string}`;
+        if (payrollClone) {
+          const batchData = encodeFunctionData({
+            abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
+            args: [chunkAddrs, chunkAmounts, tokenAddr],
+          });
+          // Arc Memo contract: memo(target, data, memoId, memoData) — see
+          // lib/contracts/abis.ts for why this isn't called callWithMemo.
+          // msg.sender is preserved — payroll clone sees the user's wallet address
+          txHash = await universalWrite({
+            address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+            functionName: 'memo',
+            args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
+          }, setExecuteStatus);
+        } else {
+          const batchData = encodeFunctionData({
+            abi: ENTERPRISE_PAYROLL_ABI, functionName: 'batchPay',
+            args: [chunkAddrs, chunkAmounts],
+          });
+          txHash = await universalWrite({
+            address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+            functionName: 'memo',
+            args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
+          }, setExecuteStatus);
+        }
+
+        setExecuteStatus(`Confirming batch payment${batchLabel} on-chain…`);
+        await waitForSuccessfulReceipt(publicClient, txHash);
+        completedTxHashes.push(txHash);
+        setExecTxHash(txHash);
+        setExecTxHashes([...completedTxHashes]);
+        setExecuteProgress({ current: chunkIndex + 1, total: chunks.length });
+
+        const chunkTotalHuman = (Number(chunkTotal) / tokenScale).toLocaleString('en-US', { minimumFractionDigits: 2 });
+
+        await saveTxRecord({
+          id: txHash, hash: txHash, ref,
+          type: 'batchPay', status: 'success',
+          amount: chunkTotalHuman, token: tokenSymbol,
+          remark,
+          recipientCount: chunk.length,
+          timestamp: Date.now(),
+          // Only 'pending' if we're actually about to attempt a send below —
+          // otherwise this stayed 'pending' forever, since nothing else
+          // would ever move it to 'sent'/'failed' if there was no email to
+          // begin with (the fetch below was simply skipped entirely).
+          receiptEmailStatus: receiptEmail ? 'pending' : null,
+          executedBy: 'manual',
+        }, address);
+
+        trackClientEvent({
+          event: 'batch_paid', walletAddress: address, txHash,
+          employeeCount: chunk.length, volumeUsdc: Number(chunkTotalHuman.replace(/,/g, '')),
         });
-        txHash = await universalWrite({
-          address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-          functionName: 'memo',
-          args: [contractAddr, batchData as `0x${string}`, memoId, memoHex],
-        }, setExecuteStatus);
+
+        // Auto-send payroll receipt email after batchPay (ImportantUpdate - automatic for batchPay only).
+        // Fire-and-forget: payroll already succeeded, email failure is non-critical.
+        // Uses the company email stored in payrollSetup. One email per batch,
+        // matching what actually happened on-chain (each batch is its own
+        // real transaction with its own recipients).
+        if (receiptEmail) {
+          fetch('/api/payroll-receipt/send', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              txHash,
+              walletAddress:  address,
+              recipientEmail: receiptEmail,
+              recipientCount: chunk.length,
+              amount:         chunkTotalHuman,
+              token:          tokenSymbol,
+              remark,
+              ref,
+              timestamp:      Date.now(),
+              executedBy:     'manual',
+              employees: chunk.map(e => ({
+                fullName:      e.fullName,
+                department:    e.department,
+                walletAddress: e.walletAddress,
+                salaryAmount:  Number(e.salaryAmount).toLocaleString('en-US', { minimumFractionDigits: 2 }),
+                group:         e.group,
+              })),
+            }),
+          }).then(async res => {
+            const newStatus = res.ok ? 'sent' : 'failed';
+            // Update the IndexedDB record with the actual send status
+            await saveTxRecord({
+              id: txHash, hash: txHash, ref,
+              type: 'batchPay', status: 'success',
+              amount: chunkTotalHuman, token: tokenSymbol,
+              remark,
+              recipientCount: chunk.length,
+              timestamp: Date.now(),
+              receiptEmailStatus: newStatus,
+              executedBy: 'manual',
+            }, address);
+          }).catch(() => {
+            // Receipt send failed — update status silently
+            saveTxRecord({
+              id: txHash, hash: txHash, ref,
+              type: 'batchPay', status: 'success',
+              amount: chunkTotalHuman, token: tokenSymbol,
+              remark,
+              recipientCount: chunk.length,
+              timestamp: Date.now(),
+              receiptEmailStatus: 'failed',
+              executedBy: 'manual',
+            }, address).catch(() => { /* ignore double failure */ });
+          });
+        }
       }
-
-      setExecuteStatus('Confirming on-chain…');
-      await waitForSuccessfulReceipt(publicClient, txHash);
-      setExecuteProgress({ current: targetEmployees.length, total: targetEmployees.length });
-      setExecTxHash(txHash);
 
       const totalHuman = (Number(totalAmount) / tokenScale).toLocaleString('en-US', { minimumFractionDigits: 2 });
       setExecSummary({
         recipientCount: targetEmployees.length,
         amount:         totalHuman,
         token:          tokenSymbol,
+        batchCount:     chunks.length > 1 ? chunks.length : undefined,
         // usdEquivalent intentionally left unset until live price quotes
         // (LI.FI integration) are wired in — see ExecutionModal.tsx.
       });
       setExecutionState('success');
-      const receiptEmail = payrollSetup?.email ?? null;
-      await saveTxRecord({
-        id: txHash, hash: txHash, ref,
-        type: 'batchPay', status: 'success',
-        amount: totalHuman, token: tokenSymbol,
-        remark,
-        recipientCount: targetEmployees.length,
-        timestamp: Date.now(),
-        // Only 'pending' if we're actually about to attempt a send below —
-        // otherwise this stayed 'pending' forever, since nothing else
-        // would ever move it to 'sent'/'failed' if there was no email to
-        // begin with (the fetch below was simply skipped entirely).
-        receiptEmailStatus: receiptEmail ? 'pending' : null,
-        executedBy: 'manual',
-      }, address);
-
-      trackClientEvent({
-        event: 'batch_paid', walletAddress: address, txHash,
-        employeeCount: targetEmployees.length, volumeUsdc: Number(totalHuman.replace(/,/g, '')),
-      });
-
-      // Auto-send payroll receipt email after batchPay (ImportantUpdate - automatic for batchPay only).
-      // Fire-and-forget: payroll already succeeded, email failure is non-critical.
-      // Uses the company email stored in payrollSetup.
-      if (receiptEmail) {
-        fetch('/api/payroll-receipt/send', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            txHash,
-            walletAddress:  address,
-            recipientEmail: receiptEmail,
-            recipientCount: targetEmployees.length,
-            amount:         totalHuman,
-            token:          tokenSymbol,
-            remark,
-            ref,
-            timestamp:      Date.now(),
-            executedBy:     'manual',
-            employees: targetEmployees.map(e => ({
-              fullName:      e.fullName,
-              department:    e.department,
-              walletAddress: e.walletAddress,
-              salaryAmount:  Number(e.salaryAmount).toLocaleString('en-US', { minimumFractionDigits: 2 }),
-              group:         e.group,
-            })),
-          }),
-        }).then(async res => {
-          const newStatus = res.ok ? 'sent' : 'failed';
-          // Update the IndexedDB record with the actual send status
-          await saveTxRecord({
-            id: txHash, hash: txHash, ref,
-            type: 'batchPay', status: 'success',
-            amount: totalHuman, token: tokenSymbol,
-            remark,
-            recipientCount: targetEmployees.length,
-            timestamp: Date.now(),
-            receiptEmailStatus: newStatus,
-            executedBy: 'manual',
-          }, address);
-        }).catch(() => {
-          // Receipt send failed — update status silently
-          saveTxRecord({
-            id: txHash, hash: txHash, ref,
-            type: 'batchPay', status: 'success',
-            amount: totalHuman, token: tokenSymbol,
-            remark,
-            recipientCount: targetEmployees.length,
-            timestamp: Date.now(),
-            receiptEmailStatus: 'failed',
-            executedBy: 'manual',
-          }, address).catch(() => { /* ignore double failure */ });
-        });
-      }
     } catch (err) {
       const msg = (err as Error).message ?? '';
-      const friendly = /reject|cancel|denied/i.test(msg) ? 'Transaction cancelled.' : friendlyErrorMessage(err, 'Payroll failed. Please try again.');
+      const cancelled = /reject|cancel|denied/i.test(msg);
+      // A run split into multiple batches can fail partway through with
+      // some batches already confirmed on-chain — the earlier version of
+      // this always showed a blanket "Payroll failed", which is exactly
+      // what previously made an already-successful batch look like nothing
+      // had happened, risking a duplicate payment if retried from scratch.
+      const partial = completedTxHashes.length > 0 && completedTxHashes.length < chunks.length;
+      const friendly = cancelled
+        ? 'Transaction cancelled.'
+        : partial
+          ? `${completedTxHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice — only the remaining employees need to be run again.`
+          : friendlyErrorMessage(err, 'Payroll failed. Please try again.');
       setExecutionState('failed');
       setExecuteError(friendly);
     } finally {
@@ -1423,9 +1464,10 @@ export default function DashboardPage() {
         statusText={executeStatus}
         progress={executeProgress}
         txHash={execTxHash}
+        txHashes={execTxHashes}
         error={executeError}
         summary={execSummary}
-        onClose={() => { setExecutionState('idle'); setExecuteError(''); setExecTxHash(''); setExecSummary(null); }}
+        onClose={() => { setExecutionState('idle'); setExecuteError(''); setExecTxHash(''); setExecTxHashes([]); setExecSummary(null); }}
       />
       <LoginModal open={loginOpen} onClose={() => setLoginOpen(false)} />
       {profileModalOpen && (

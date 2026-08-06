@@ -141,9 +141,29 @@ export async function checkAndTopUpBalance(params: {
   }
 
   let faucetAttempted = false;
+  let faucetOutcomeNote = '';
   if (balance < params.needed) {
     faucetAttempted = true;
-    try { await requestFaucetDrip(params.agentWalletAddress); } catch { /* re-check regardless */ }
+    // Previously discarded the actual result of this call entirely (a bare
+    // `catch {}` with no capture of the resolved value either) — so even
+    // when Circle explicitly returned "rate_limited" with its own reason,
+    // that information never reached the person; they'd just see a
+    // generic "even after requesting testnet funds" message with no way
+    // to tell a real rate-limit apart from any other failure. This is
+    // also, concretely, why a faucet request can appear to fail "for no
+    // reason": this exact automatic top-up can silently spend the agent
+    // wallet's rate-limit allowance during a scheduled/autonomous payment
+    // attempt the person never directly saw, then a later explicit
+    // request for the same address correctly gets rate-limited — correct
+    // behavior, but confusing without this note explaining it happened.
+    try {
+      const drip = await requestFaucetDrip(params.agentWalletAddress);
+      if (drip.status === 'rate_limited') {
+        faucetOutcomeNote = ` An automatic top-up was attempted just now but Circle's faucet is currently rate-limiting this address: ${drip.message}`;
+      } else if (drip.status === 'error') {
+        faucetOutcomeNote = ` An automatic top-up was attempted just now but failed: ${drip.message}`;
+      }
+    } catch { /* re-check regardless */ }
     await new Promise(r => setTimeout(r, 4000));
     try {
       balance = await publicClient.readContract({
@@ -155,7 +175,7 @@ export async function checkAndTopUpBalance(params: {
     if (balance < params.needed) {
       return {
         ok: false, balance, faucetAttempted,
-        error: `The agent wallet only has ${formatUnits(balance, params.tokenDecimals)} but this payment needs ${formatUnits(params.needed, params.tokenDecimals)}, even after requesting testnet funds. Fund the agent wallet from the Agent Wallet page and try again.`,
+        error: `The agent wallet only has ${formatUnits(balance, params.tokenDecimals)} but this payment needs ${formatUnits(params.needed, params.tokenDecimals)}.${faucetOutcomeNote} Fund the agent wallet from the Agent Wallet page and try again.`,
       };
     }
   }

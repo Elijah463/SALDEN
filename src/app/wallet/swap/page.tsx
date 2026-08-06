@@ -43,6 +43,7 @@ import { AppLayout }           from '@/components/layout/AppLayout';
 import { NetworkGuard }        from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite }   from '@/lib/circle/useUniversalWrite';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { txLink, arcTestnet }  from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { TOKENS, toRawAmount, fromRawAmount, type TokenMeta } from '@/lib/swap/tokens';
@@ -161,7 +162,15 @@ export default function SwapPage() {
         // clicking Swap a second time "just worked": by then the approve
         // from the first attempt had finally landed. Waiting for the
         // receipt here closes that race for good.
-        await publicClient.waitForTransactionReceipt({ hash: approveTxHash });
+        //
+        // Uses waitForSuccessfulReceipt (bounded ~45s timeout) rather than
+        // calling publicClient.waitForTransactionReceipt directly — Arc's
+        // public RPC intermittently rate-limits, and the raw viem call has
+        // no such bound (its default can run for minutes), which is
+        // exactly what was showing up as "stuck on Approve forever, but a
+        // refresh shows it already went through": the approve had already
+        // landed on-chain, this wait just never found out.
+        await waitForSuccessfulReceipt(publicClient, approveTxHash);
       }
 
       // Execute the swap — LI.FI's own pre-built, already-encoded transaction
@@ -172,8 +181,9 @@ export default function SwapPage() {
       });
 
       setSwapStep('confirm');
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-      if (receipt.status !== 'success') throw new Error('Swap transaction reverted on-chain.');
+      // Same reasoning as the approve wait above — bounded, and reports a
+      // clear timeout/revert message instead of an indefinite hang.
+      await waitForSuccessfulReceipt(publicClient, txHash);
 
       setLastReceivedAmount(amountOut);
       setSuccessTx(txHash);

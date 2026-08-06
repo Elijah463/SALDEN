@@ -110,7 +110,7 @@ export interface UniversalWriteResult {
 
 export function useUniversalWrite(): UniversalWriteResult {
   const { loginMethod, email, address } = useEffectiveAddress();
-  const { data: walletClient } = useWalletClient();
+  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const canWrite =

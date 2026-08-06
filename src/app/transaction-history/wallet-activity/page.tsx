@@ -14,7 +14,7 @@ import { usePublicClient } from 'wagmi';
 import { ArrowLeft, Repeat, Waypoints, ArrowDownToLine, ExternalLink, Loader2 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { txLink } from '@/lib/contracts/config';
+import { txLink, arcTestnet } from '@/lib/contracts/config';
 import { getWalletActivity, type WalletActivityRecord } from '@/lib/db/indexeddb';
 import { detectIncomingDeposits } from '@/lib/walletActivity/detectDeposits';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
@@ -123,7 +123,7 @@ function ActivityTile({ record }: { record: WalletActivityRecord }) {
 
 export default function WalletActivityPage() {
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const [activity, setActivity] = useState<WalletActivityRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
 

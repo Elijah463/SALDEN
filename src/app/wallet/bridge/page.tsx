@@ -108,7 +108,17 @@ function chainByKey(key: AppKitChain): BridgeChainConfig {
 const publicClients = new Map<AppKitChain, ReturnType<typeof createPublicClient>>();
 function clientFor(chain: BridgeChainConfig) {
   if (!publicClients.has(chain.key)) {
-    publicClients.set(chain.key, createPublicClient({ chain: chain.viemChain, transport: http() }));
+    // Arc Testnet specifically is routed through our own /api/rpc proxy —
+    // same reasoning as Web3Provider.tsx's transport config: Arc's public
+    // RPC intermittently rate-limits, and going through our own domain
+    // gets this the same retry + short-TTL de-dup as every other Arc read
+    // in the app. The other bridge chains (Sepolia, Base Sepolia, etc.)
+    // are untouched — they're different networks with no reported issue
+    // and no reason to route through an Arc-specific proxy.
+    const transport = chain.key === 'Arc_Testnet'
+      ? http(typeof window !== 'undefined' ? '/api/rpc' : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz').replace(/\/$/, '') + '/api/rpc')
+      : http();
+    publicClients.set(chain.key, createPublicClient({ chain: chain.viemChain, transport }));
   }
   return publicClients.get(chain.key)!;
 }

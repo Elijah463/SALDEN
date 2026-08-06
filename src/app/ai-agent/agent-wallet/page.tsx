@@ -5,13 +5,13 @@
  * and token balances for USDC, EURC, cirBTC. (ImportantUpdate #13i)
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePublicClient, useBalance } from 'wagmi';
 import { ArrowDownToLine, Eye, EyeOff, Copy, Loader2, CheckCircle2 } from 'lucide-react';
 import { AgentLayout } from '@/components/agent/AgentLayout';
 import { useAgentStatus } from '@/lib/useAgentStatus';
 import { ERC20_ABI }     from '@/lib/contracts/abis';
-import { arcTestnet }    from '@/lib/contracts/config';
+import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
@@ -45,6 +45,12 @@ function AgentTokenIcon({ symbol, bg }: { symbol: string; bg: string }) {
   );
 }
 
+function tokenAddress(symbol: string): `0x${string}` | undefined {
+  if (symbol === 'USDC') return CONTRACTS.USDC as `0x${string}`;
+  if (symbol === 'EURC') return process.env.NEXT_PUBLIC_EURC_ADDRESS as `0x${string}` | undefined;
+  return process.env.NEXT_PUBLIC_CIRBTC_ADDRESS as `0x${string}` | undefined;
+}
+
 export default function AgentWalletPage() {
   const { status, agentInfo }  = useAgentStatus();
   const agentAddr = agentInfo?.agentWallet as `0x${string}` | undefined;
@@ -54,33 +60,72 @@ export default function AgentWalletPage() {
   const [copied,  setCopied]  = useState(false);
   const [tokenBals, setTokenBals] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
+  const tokenBalsRef = useRef(tokenBals);
+  useEffect(() => { tokenBalsRef.current = tokenBals; }, [tokenBals]);
 
   const { data: nativeBal } = useBalance({ address: agentAddr, query: { enabled: !!agentAddr } });
 
+  // Retries a failed balanceOf() read before giving up, and on total
+  // failure keeps the last known-good value instead of overwriting it with
+  // a fake "0.00" — same fix applied to wallet/page.tsx's fetchErc20 for
+  // the same reason: Arc's public testnet RPC intermittently rate-limits,
+  // and collapsing that into a fake zero was indistinguishable from a
+  // genuinely empty wallet.
   const fetchTokens = useCallback(async () => {
     if (!agentAddr || !pc) return;
     setLoading(true);
+    const previous = tokenBalsRef.current;
     const out: Record<string, string> = {};
     for (const t of TOKENS) {
       if (t.symbol === 'USDC') {
         out.USDC = nativeBal ? parseFloat(nativeBal.formatted).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
         continue;
       }
-      const addr = t.symbol === 'EURC'
-        ? (process.env.NEXT_PUBLIC_EURC_ADDRESS as `0x${string}` | undefined)
-        : (process.env.NEXT_PUBLIC_CIRBTC_ADDRESS as `0x${string}` | undefined);
+      const addr = tokenAddress(t.symbol);
       if (!addr) { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; continue; }
-      try {
-        const raw = await pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [agentAddr] }) as bigint;
-        const div = BigInt(10 ** t.decimals);
-        const dp  = t.displayDecimals;
-        out[t.symbol] = `${(raw / div).toString()}.${(raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0')}`;
-      } catch { out[t.symbol] = `0.${'0'.repeat(t.displayDecimals)}`; }
+      let resolved: string | null = null;
+      for (let attempt = 1; attempt <= 3 && resolved === null; attempt++) {
+        try {
+          const raw = await pc.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [agentAddr] }) as bigint;
+          const div = BigInt(10 ** t.decimals);
+          const dp  = t.displayDecimals;
+          resolved = `${(raw / div).toString()}.${(raw % div).toString().padStart(t.decimals, '0').slice(0, dp).padEnd(dp, '0')}`;
+        } catch {
+          if (attempt < 3) await new Promise(r => setTimeout(r, 800));
+        }
+      }
+      out[t.symbol] = resolved ?? previous[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`;
     }
-    setTokenBals(out); setLoading(false);
+    setTokenBals(prev => ({ ...prev, ...out })); setLoading(false);
   }, [agentAddr, pc, nativeBal]);
 
   useEffect(() => { if (agentAddr) fetchTokens(); }, [agentAddr, fetchTokens]);
+
+  // Live USD prices via LI.FI — same source/endpoint as wallet/page.tsx, so
+  // the dollar value shown here matches the user wallet exactly.
+  const [tokenPrices, setTokenPrices] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(
+      TOKENS.map(async t => {
+        const addr = tokenAddress(t.symbol);
+        if (!addr) return [t.symbol, null] as const;
+        try {
+          const res = await fetch(`/api/lifi/price?chainId=${arcTestnet.id}&token=${addr}`);
+          const data = await res.json() as { price: { priceUSD: string } | null };
+          return [t.symbol, data.price ? Number(data.price.priceUSD) : null] as const;
+        } catch {
+          return [t.symbol, null] as const;
+        }
+      }),
+    ).then(results => {
+      if (cancelled) return;
+      const map: Record<string, number> = {};
+      for (const [symbol, price] of results) if (price !== null) map[symbol] = price;
+      setTokenPrices(map);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   async function copy() {
     if (!agentAddr) return;
@@ -135,18 +180,31 @@ export default function AgentWalletPage() {
         ) : (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, padding: '20px 20px 8px' }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Tokens</h3>
-            {TOKENS.map(t => (
-              <div key={t.symbol} style={{ display: 'flex', alignItems: 'center', padding: '14px 0', gap: 14, borderBottom: '1px solid #F1F5F9' }}>
-                <AgentTokenIcon symbol={t.symbol} bg={t.bg} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{t.symbol}</div>
-                  <div style={{ fontSize: 12, color: '#94A3B8' }}>{t.name}</div>
+            {TOKENS.map(t => {
+              const balanceStr = tokenBals[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`;
+              const balanceNum = Number(balanceStr.replace(/,/g, '')) || 0;
+              const price = tokenPrices[t.symbol] ?? (t.symbol === 'USDC' ? 1 : undefined);
+              const usdValue = price !== undefined
+                ? (balanceNum * price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : null;
+              return (
+                <div key={t.symbol} style={{ display: 'flex', alignItems: 'center', padding: '14px 0', gap: 14, borderBottom: '1px solid #F1F5F9' }}>
+                  <AgentTokenIcon symbol={t.symbol} bg={t.bg} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>{t.symbol}</div>
+                    <div style={{ fontSize: 12, color: '#94A3B8' }}>{t.name}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', fontFamily: "'JetBrains Mono', monospace" }}>
+                      {loading ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} /> : balanceStr}
+                    </div>
+                    {!loading && usdValue && (
+                      <div style={{ fontSize: 12, color: '#94A3B8' }}>≈${usdValue}</div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', fontFamily: "'JetBrains Mono', monospace" }}>
-                  {loading ? <Loader2 size={14} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} /> : (tokenBals[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

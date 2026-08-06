@@ -29,7 +29,7 @@ Salden leverages Circle’s programmable stablecoin technology to allow seemless
 | Multi-token support (any ERC-20) | | ✓ |
 | AI Agent with scheduling | | ✓ |
 | Emergency withdrawal | | ✓ |
-| Cost | Free | $10 USDC one-time |
+| Cost | Free | $10 testnet USDC |
 
 ---
 
@@ -95,4 +95,4 @@ Full license text available at [gnu.org/licenses/agpl-3.0](https://www.gnu.org/l
 - [Documentation](https://app.salden.xyz/docs)
 - [ArcScan Explorer](https://testnet.arcscan.app)
 - [ARC Testnet Faucet](https://faucet.circle.com)
-- [Twitter / X](https://x.com/SaldenPayroll)
+- [Twitter / X](https://x.com/Salden_xyz)

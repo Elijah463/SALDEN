@@ -42,7 +42,7 @@ import { useEffect } from 'react';
 import { usePublicClient } from 'wagmi';
 import { useApp } from '@/context/AppContext';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { CONTRACTS } from '@/lib/contracts/config';
+import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
 
@@ -52,7 +52,7 @@ export function useCloneAccess(): void {
   const { state, dispatch } = useApp();
   const { payrollClone } = state;
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   useEffect(() => {
     // Never overrides a value we already have — this is ONLY a fallback

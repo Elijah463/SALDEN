@@ -23,7 +23,7 @@ import { Button }              from '@/components/shared/Button';
 import { useApp }              from '@/context/AppContext';
 import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
-import { txLink }              from '@/lib/contracts/config';
+import { txLink, arcTestnet }              from '@/lib/contracts/config';
 import { truncAddr }           from '@/lib/validation';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
@@ -235,7 +235,7 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
 
 export default function TransactionHistoryPage() {
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { state, saveTxRecord, hydrateFromCache } = useApp();
   const { payrollSetup, registryClone } = state;
   usePayrollSync({ registryClone, address, publicClient });

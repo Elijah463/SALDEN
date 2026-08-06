@@ -8,7 +8,9 @@
  *   success   → green checkmark + "Transaction Successful" + close X
  *   failed    → red X + "Transaction Failed" + error message + close X
  *
- * For large batches (>30 employees):
+ * For payroll runs split into multiple on-chain batches (recipient count
+ * over the active contract's per-transaction cap — see
+ * lib/contracts/batchLimits.ts):
  *   Shows a progress bar: "Batch N of M" + percentage
  */
 
@@ -32,6 +34,11 @@ export interface PaymentSummary {
    *  which case that line is simply omitted rather than showing a
    *  fabricated/stale conversion. */
   usdEquivalent?: string;
+  /** Present when a payroll run exceeded the active contract's
+   *  per-transaction recipient cap (100 standalone / 1,000 premium clone —
+   *  see lib/contracts/batchLimits.ts) and was split into this many
+   *  sequential on-chain batches. */
+  batchCount?: number;
 }
 
 interface ExecutionModalProps {
@@ -39,16 +46,20 @@ interface ExecutionModalProps {
   statusText:  string;
   progress?:   ExecutionProgress | null;
   txHash?:     string;
+  /** All on-chain tx hashes for this run, in order — set when a run was
+   *  split into multiple batches. When present and longer than one entry,
+   *  this is shown instead of the single `txHash` link below. */
+  txHashes?:   string[];
   error?:      string;
   summary?:    PaymentSummary | null;
   onClose:     () => void;
 }
 
-export function ExecutionModal({ state, statusText, progress, txHash, error, summary, onClose }: ExecutionModalProps) {
+export function ExecutionModal({ state, statusText, progress, txHash, txHashes, error, summary, onClose }: ExecutionModalProps) {
   if (state === 'idle') return null;
 
   const showClose = state === 'success' || state === 'failed';
-  // pct is always a number when the progress bar is visible (guarded by progress.total > 30)
+  // pct is always a number when the progress bar is visible (guarded by progress.total > 1)
   // but we default to 0 to satisfy TypeScript's null check
   const pct = progress && progress.total > 0
     ? Math.round((progress.current / progress.total) * 100)
@@ -131,7 +142,7 @@ export function ExecutionModal({ state, statusText, progress, txHash, error, sum
         <p style={{ fontSize: 14, color: '#64748B', marginBottom: progress ? 20 : 0, lineHeight: 1.6 }}>
           {state === 'failed' && error ? error
            : state === 'success' && summary
-             ? `Paid ${summary.recipientCount} employee${summary.recipientCount !== 1 ? 's' : ''} — ${summary.amount} ${summary.token}`
+             ? `Paid ${summary.recipientCount} employee${summary.recipientCount !== 1 ? 's' : ''} — ${summary.amount} ${summary.token}${summary.batchCount && summary.batchCount > 1 ? ` (in ${summary.batchCount} batches)` : ''}`
              : statusText}
         </p>
 
@@ -142,8 +153,12 @@ export function ExecutionModal({ state, statusText, progress, txHash, error, sum
           </p>
         )}
 
-        {/* Batch progress bar */}
-        {state === 'pending' && progress && progress.total > 30 && (
+        {/* Batch progress bar — progress.total is the number of on-chain
+            batches this run needed (1 for the common case of a payroll
+            small enough for a single transaction), not the employee count;
+            only worth showing once there's genuinely more than one batch
+            to track. */}
+        {state === 'pending' && progress && progress.total > 1 && (
           <div style={{ marginTop: 20 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ fontSize: 12, color: '#64748B', fontWeight: 600 }}>
@@ -166,8 +181,23 @@ export function ExecutionModal({ state, statusText, progress, txHash, error, sum
           </div>
         )}
 
-        {/* Tx hash on success */}
-        {state === 'success' && txHash && (
+        {/* Tx hash(es) on success — a run split into multiple batches shows
+            every batch's hash; otherwise the single hash as before. */}
+        {state === 'success' && txHashes && txHashes.length > 1 ? (
+          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+            {txHashes.map((h, i) => (
+              <a key={h} href={txLink(h)} target="_blank" rel="noreferrer"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  fontSize: 13, color: '#4F46E5',
+                  fontFamily: "'JetBrains Mono', monospace",
+                  textDecoration: 'none',
+                }}>
+                Batch {i + 1}: {h.slice(0, 8)}…{h.slice(-6)} <ExternalLink size={13} />
+              </a>
+            ))}
+          </div>
+        ) : state === 'success' && txHash && (
           <a href={txLink(txHash)} target="_blank" rel="noreferrer"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,

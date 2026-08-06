@@ -94,10 +94,24 @@ export async function requestFaucetDrip(address: string): Promise<FaucetOutcome>
   }
 
   if (res.status === 429) {
+    // Read Circle's actual response body instead of assuming why — a 429
+    // here doesn't necessarily mean THIS address's own 2-hour allowance
+    // was hit; it's also the generic status Circle (or any API) returns
+    // for other throttling (e.g. a shared-API-key-level limit if this
+    // backend's faucet calls are running in a tight burst — see
+    // lib/agent/autonomousExecution.ts's automatic top-up, which can call
+    // this same endpoint for the agent wallet without the person ever
+    // directly asking for it). Reporting Circle's own message when
+    // available beats confidently asserting a specific cause we haven't
+    // actually verified.
+    const body = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+    const circleReason = body?.message ?? body?.error;
     return {
       status:  'rate_limited',
       address,
-      message: 'Circle limits the testnet faucet to 20 USDC per address every 2 hours, and that limit has already been reached for this wallet. Please try again later.',
+      message: circleReason
+        ? `Circle's faucet returned: "${circleReason}"`
+        : 'Circle\'s testnet faucet is rate-limiting this request (HTTP 429). This is normally the 20 USDC / 2-hour per-address limit, but can also happen from other requests in quick succession — please try again in a few minutes.',
     };
   }
 

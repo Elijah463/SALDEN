@@ -6,7 +6,7 @@
  * Scorechain removed per spec. All checks run client-side via viem.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePublicClient } from 'wagmi';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
@@ -19,6 +19,7 @@ import { useApp } from '@/context/AppContext';
 import { CONTRACTS, arcTestnet, addressLink } from '@/lib/contracts/config';
 import { ENTERPRISE_PAYROLL_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { isValidEthAddress, truncAddr } from '@/lib/validation';
+import { useRegistryCloneAccess } from '@/lib/useRegistryCloneAccess';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -80,6 +81,14 @@ export default function CompliancePage() {
   const publicClient         = usePublicClient({ chainId: arcTestnet.id });
   const { state }            = useApp();
   const { employees, registryClone } = state;
+  // Compliance never had its own resolution for registryClone — it only
+  // ever trusted whatever state.registryClone happened to already be
+  // populated by another page visited earlier this session, which is why
+  // "No registry clone deployed. Employee data is stored locally only."
+  // could show up even for an account with a real, already-deployed
+  // registry: landing here directly left it null with nothing to recover
+  // it. Same self-healing lookup dashboard/ai-agent/settings already use.
+  useRegistryCloneAccess();
 
   const [checks,       setChecks]       = useState<ComplianceCheck[]>([]);
   const [isRunning,    setIsRunning]    = useState(false);
@@ -258,6 +267,20 @@ export default function CompliancePage() {
     if (!mounted) return;
     runChecks();
   }, [mounted]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // useRegistryCloneAccess() above resolves registryClone asynchronously
+  // (a cache read, or an on-chain call, either of which can take a
+  // moment) — without this, the Registry Sync check above kept showing
+  // its stale initial "not found" result even after the real address
+  // arrived a moment later, since the effect above only ever runs once,
+  // on mount. Guarded to fire only the first time registryClone actually
+  // resolves, not on every subsequent change.
+  const registryResolvedRef = useRef(false);
+  useEffect(() => {
+    if (!mounted || !registryClone || registryResolvedRef.current) return;
+    registryResolvedRef.current = true;
+    runChecks();
+  }, [mounted, registryClone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Score colour ──────────────────────────────────────────────────────────
 

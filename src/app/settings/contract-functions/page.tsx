@@ -37,7 +37,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { Modal } from '@/components/shared/Modal';
 import { useApp } from '@/context/AppContext';
-import { CONTRACTS, addressLink } from '@/lib/contracts/config';
+import { CONTRACTS, addressLink, arcTestnet } from '@/lib/contracts/config';
 import { MULTI_TOKEN_PAYROLL_ABI, REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, isValidEthAddress, sanitizeString } from '@/lib/validation';
 import { upsertToken, removeToken, TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
@@ -65,7 +65,7 @@ function Section({ title, icon, children }: { title: string; icon?: React.ReactN
 
 export default function ContractFunctionsPage() {
   const { address }  = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast, syncData } = useApp();
   const { isPremiumUser, payrollClone, registryClone, tokenRegistry } = state;
   usePayrollSync({ registryClone, address, publicClient });

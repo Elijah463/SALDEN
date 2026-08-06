@@ -32,6 +32,25 @@ import { useSignatureExplainer } from '@/context/SignatureExplainerContext';
  * cleared when the tab closes, never persisted across sessions or to
  * disk long-term.
  */
+// btoa() only accepts Latin1 (0-255) code points and throws
+// InvalidCharacterError on anything outside that range — e.g. the em-dash
+// (—, U+2014) in ENCRYPTION_KEY_MESSAGE below. Since this function used to
+// call btoa() directly on the raw message text, EVERY call for that message
+// threw synchronously, before a signature was ever requested. The caller
+// (AppContext.syncData) treats that as "encryption failed" and silently
+// falls back to storing employee data as PLAINTEXT — so encryption has
+// never actually been engaging for any message containing a non-Latin1
+// character. This mirrors the same byte-loop encode already used in
+// AppContext.tsx's toBase64() and indexeddb.ts's getOrCreateDeviceKey() for
+// the same reason: encode the UTF-8 bytes first, then base64 those bytes,
+// instead of feeding raw text straight to btoa().
+function safeBtoa(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 export function useCachedSignMessage() {
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { address, loginMethod } = useEffectiveAddress();
@@ -40,7 +59,7 @@ export function useCachedSignMessage() {
   const sign = useCallback(async (msg: string): Promise<string> => {
     if (!canWrite || !address) throw new Error('No wallet');
 
-    const storageKey = `salden_sig::${address.toLowerCase()}::${btoa(msg).slice(0, 32)}`;
+    const storageKey = `salden_sig::${address.toLowerCase()}::${safeBtoa(msg).slice(0, 32)}`;
 
     try {
       const cached = sessionStorage.getItem(storageKey);

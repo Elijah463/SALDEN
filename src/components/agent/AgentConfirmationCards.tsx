@@ -35,7 +35,8 @@ import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
-import { CONTRACTS, txLink } from '@/lib/contracts/config';
+import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
+import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
@@ -143,7 +144,7 @@ export function UnlistedPaymentCard({
   const { state, saveTxRecord } = useApp();
   const { payrollClone, tokenRegistry, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
   const [payState, setPayState] = useState<PayState>('idle');
@@ -174,12 +175,27 @@ export function UnlistedPaymentCard({
       setError(`Could not resolve "${token}" in the token registry — refusing to guess decimals for a real payment.`);
       setPayState('error'); return;
     }
+    // The AI agent is only ever reachable by premium users who have
+    // already deployed their own SaldenMultiTokenPayroll clone (the
+    // /ai-agent page itself gates on isPremiumUser before any of these
+    // cards can render) — so the agent must only ever call batchPay on
+    // that clone, never the free-tier standalone SaldenEnterprisePayroll
+    // contract (whose batchPay doesn't even take a token argument). This
+    // is a defensive guard, not an expected path: it should be
+    // structurally impossible to reach this card without payrollClone
+    // already set, but failing clearly here beats silently targeting the
+    // wrong contract if that assumption is ever violated.
+    if (!payrollClone) {
+      executing.current = false;
+      setError('No payroll clone found for this account — the AI agent can only process payments through your deployed clone contract.');
+      setPayState('error'); return;
+    }
 
     try {
       const tokenAddr   = tokenEntry.address as `0x${string}`;
       const tokenScale  = 10 ** tokenEntry.decimals;
       const amountUnits = BigInt(Math.round(Number(amount) * tokenScale));
-      const contractAddr = (payrollClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
+      const contractAddr = payrollClone as `0x${string}`;
 
       // ── Allowance check + approval (mirrors dashboard/page.tsx) ────────────
       setPayState('approving');
@@ -302,10 +318,28 @@ export function UnlistedPaymentCard({
     }
   }, [canWrite, universalWrite, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
 
+  // Previously fired handleConfirm() exactly once on mount, keyed only to
+  // [autoConfirm] — if canWrite/publicClient hadn't resolved yet on that
+  // very first render (a real, observed timing gap on brand-new component
+  // instances), this closure permanently captured `canWrite = false` and
+  // never re-evaluated it, surfacing a false "Wallet not connected" even
+  // though the wallet genuinely was connected moments later. Now this waits
+  // briefly for canWrite/publicClient to resolve and re-fires as soon as
+  // they do; only falls through to handleConfirm's own (correct) "wallet
+  // not connected" error if they're still unset after a real grace period.
+  const autoConfirmedRef = useRef(false);
   useEffect(() => {
-    if (autoConfirm) void handleConfirm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConfirm]);
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    if (canWrite && publicClient) {
+      autoConfirmedRef.current = true;
+      void handleConfirm();
+      return;
+    }
+    const t = setTimeout(() => {
+      if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
 
   if (payState === 'done') {
     return (
@@ -378,7 +412,7 @@ export function AddEmployeeCard({
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [addState, setAddState] = useState<AddState>('idle');
   const [error,    setError]    = useState('');
@@ -473,10 +507,23 @@ export function AddEmployeeCard({
     }
   }, [canWrite, universalWrite, sign, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
+  // See the identical comment on this pattern in UnlistedPaymentCard above —
+  // waits briefly for canWrite/publicClient to resolve before auto-firing,
+  // instead of permanently trusting whatever they were on this component's
+  // very first render.
+  const autoConfirmedRef = useRef(false);
   useEffect(() => {
-    if (autoConfirm) void handleConfirm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConfirm]);
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    if (canWrite && publicClient) {
+      autoConfirmedRef.current = true;
+      void handleConfirm();
+      return;
+    }
+    const t = setTimeout(() => {
+      if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
 
   if (addState === 'done') {
     return (
@@ -545,7 +592,7 @@ export function EditEmployeeCard({
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [editState, setEditState] = useState<AddState>('idle');
   const [error,     setError]     = useState('');
@@ -618,10 +665,25 @@ export function EditEmployeeCard({
     }
   }, [canWrite, universalWrite, sign, publicClient, existing, fullName, department, group, salary, newAddress, currentAddress, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
 
+  // See the identical comment on this pattern in UnlistedPaymentCard above —
+  // waits briefly for canWrite/publicClient to resolve before auto-firing,
+  // instead of permanently trusting whatever they were on this component's
+  // very first render. This is the specific card behind the repeated
+  // "update failed — connect wallet first" reports when editing an employee
+  // and proposing the resulting on-chain update.
+  const autoConfirmedRef = useRef(false);
   useEffect(() => {
-    if (autoConfirm) void handleConfirm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConfirm]);
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    if (canWrite && publicClient) {
+      autoConfirmedRef.current = true;
+      void handleConfirm();
+      return;
+    }
+    const t = setTimeout(() => {
+      if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
 
   if (editState === 'done') {
     return (
@@ -675,7 +737,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [removeState, setRemoveState] = useState<AddState>('idle');
   const [error,       setError]       = useState('');
@@ -777,7 +839,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [addState, setAddState] = useState<AddState>('idle');
   const [error,    setError]    = useState('');
@@ -912,7 +974,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   const { state, saveTxRecord } = useApp();
   const { employees, payrollClone, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
-  const publicClient = usePublicClient();
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
   const [payState, setPayState] = useState<PayState>('idle');
@@ -947,13 +1009,32 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       setError('Duplicate wallet addresses in this group — resolve in the dashboard before running payroll.');
       setPayState('error'); return;
     }
+    // The AI agent is only ever reachable by premium users who have
+    // already deployed their own SaldenMultiTokenPayroll clone (the
+    // /ai-agent page itself gates on isPremiumUser before any of these
+    // cards can render) — so the agent must only ever call batchPay on
+    // that clone, never the free-tier standalone SaldenEnterprisePayroll
+    // contract. Defensive guard, not an expected path — see identical
+    // comment in UnlistedPaymentCard above.
+    if (!payrollClone) {
+      executing.current = false;
+      setError('No payroll clone found for this account — the AI agent can only run payroll through your deployed clone contract.');
+      setPayState('error'); return;
+    }
+
+    // batchPay reverts on-chain above the clone's MAX_BATCH_SIZE (1,000 —
+    // see lib/contracts/batchLimits.ts). Split into sequential batches so a
+    // payroll run of any size completes as a series of on-chain batches
+    // instead of one oversized call.
+    const chunks = chunkForBatchPay(targetEmployees, true);
+    const contractAddr = payrollClone as `0x${string}`;
+    const completedHashes: `0x${string}`[] = [];
 
     try {
       const tokenAddr    = CONTRACTS.USDC as `0x${string}`;
-      const contractAddr = (payrollClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
-      const addrs        = targetEmployees.map(e => e.walletAddress as `0x${string}`);
-      const amounts      = targetEmployees.map(e => BigInt(Math.round(Number(e.salaryAmount) * 1e6)));
-      const amountUnits  = amounts.reduce((a, b) => a + b, 0n);
+      const amountUnits  = targetEmployees.reduce(
+        (sum, e) => sum + BigInt(Math.round(Number(e.salaryAmount) * 1e6)), 0n,
+      );
 
       setPayState('approving');
       const allowance = await publicClient.readContract({
@@ -961,6 +1042,8 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         args: [walletAddress as `0x${string}`, contractAddr],
       }) as bigint;
 
+      // One approval for the FULL total covers every batch below — ERC-20
+      // allowance persists across multiple sequential transferFrom calls.
       if (allowance < amountUnits) {
         const approveTx = await universalWrite({
           address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
@@ -969,99 +1052,132 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         await waitForSuccessfulReceipt(publicClient, approveTx);
       }
 
-      setPayState('paying');
-      const ref = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-      const totalHuman = (Number(amountUnits) / 1e6).toFixed(2);
-      const memoJson = JSON.stringify({
-        protocol: 'salden', type: 'batchPay', ref,
-        date: new Date().toISOString(),
-        remark: 'AI Agent — payroll run (user-confirmed)',
-        token: 'USDC', totalAmount: totalHuman,
-        recipients: targetEmployees.length, group, employer: walletAddress,
-      });
-      const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
-        .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
-
-      const batchData = encodeFunctionData({
-        abi: PAYROLL_BATCH_PAY_ABI,
-        functionName: 'batchPay',
-        args: [addrs, amounts, tokenAddr],
-      });
-
-      const hash = await universalWrite({
-        address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
-        functionName: 'memo',
-        args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
-      });
-
-      setPayState('confirming');
-      await waitForSuccessfulReceipt(publicClient, hash);
-      setTxHash(hash);
-
-      if (sessionToken) {
-        fetch(`${API_BASE}/agent/spend/record`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
-          body: JSON.stringify({ walletAddress, amount: Number(totalHuman), txHash: hash }),
-        }).catch(() => {});
-      }
-
       const receiptEmail = payrollSetup?.email ?? null;
-      await saveTxRecord({
-        id: hash, hash, ref,
-        type: 'batchPay', status: 'success',
-        amount: totalHuman, token: 'USDC',
-        remark: `AI Agent — payroll run (${group})`,
-        recipientCount: targetEmployees.length,
-        timestamp: Date.now(),
-        receiptEmailStatus: receiptEmail ? 'pending' : null,
-        executedBy: 'ai_agent',
-      }, walletAddress);
+      let lastHash: `0x${string}` = '0x0' as `0x${string}`;
 
-      if (receiptEmail) {
-        fetch(`${API_BASE}/payroll-receipt/send`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            txHash: hash, walletAddress, recipientEmail: receiptEmail,
-            recipientCount: targetEmployees.length, amount: totalHuman, token: 'USDC',
-            remark: `AI Agent — payroll run (${group})`,
-            ref, timestamp: Date.now(), executedBy: 'ai_agent',
-            employees: targetEmployees.map(e => ({
-              fullName: e.fullName, department: e.department,
-              walletAddress: e.walletAddress,
-              salaryAmount: Number(e.salaryAmount).toFixed(2),
-              group: e.group,
-            })),
-          }),
-        }).then(async res => {
-          await saveTxRecord({
-            id: hash, hash, ref, type: 'batchPay', status: 'success',
-            amount: totalHuman, token: 'USDC', remark: `AI Agent — payroll run (${group})`,
-            recipientCount: targetEmployees.length, timestamp: Date.now(),
-            receiptEmailStatus: res.ok ? 'sent' : 'failed',
-            executedBy: 'ai_agent',
-          }, walletAddress);
-        }).catch(() => {});
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk       = chunks[chunkIndex];
+        const chunkAddrs   = chunk.map(e => e.walletAddress as `0x${string}`);
+        const chunkAmounts = chunk.map(e => BigInt(Math.round(Number(e.salaryAmount) * 1e6)));
+        const chunkTotal   = chunkAmounts.reduce((a, b) => a + b, 0n);
+        const chunkHuman   = (Number(chunkTotal) / 1e6).toFixed(2);
+
+        setPayState('paying');
+        const ref = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+        const memoJson = JSON.stringify({
+          protocol: 'salden', type: 'batchPay', ref,
+          date: new Date().toISOString(),
+          remark: 'AI Agent — payroll run (user-confirmed)',
+          token: 'USDC', totalAmount: chunkHuman,
+          recipients: chunk.length, group, employer: walletAddress,
+          ...(chunks.length > 1 ? { batch: chunkIndex + 1, batchCount: chunks.length } : {}),
+        });
+        const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
+          .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
+
+        const batchData = encodeFunctionData({
+          abi: PAYROLL_BATCH_PAY_ABI,
+          functionName: 'batchPay',
+          args: [chunkAddrs, chunkAmounts, tokenAddr],
+        });
+
+        const hash = await universalWrite({
+          address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
+          functionName: 'memo',
+          args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
+        });
+
+        setPayState('confirming');
+        await waitForSuccessfulReceipt(publicClient, hash);
+        completedHashes.push(hash);
+        lastHash = hash;
+        setTxHash(hash);
+
+        if (sessionToken) {
+          fetch(`${API_BASE}/agent/spend/record`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+            body: JSON.stringify({ walletAddress, amount: Number(chunkHuman), txHash: hash }),
+          }).catch(() => {});
+        }
+
+        await saveTxRecord({
+          id: hash, hash, ref,
+          type: 'batchPay', status: 'success',
+          amount: chunkHuman, token: 'USDC',
+          remark: `AI Agent — payroll run (${group})`,
+          recipientCount: chunk.length,
+          timestamp: Date.now(),
+          receiptEmailStatus: receiptEmail ? 'pending' : null,
+          executedBy: 'ai_agent',
+        }, walletAddress);
+
+        if (receiptEmail) {
+          fetch(`${API_BASE}/payroll-receipt/send`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              txHash: hash, walletAddress, recipientEmail: receiptEmail,
+              recipientCount: chunk.length, amount: chunkHuman, token: 'USDC',
+              remark: `AI Agent — payroll run (${group})`,
+              ref, timestamp: Date.now(), executedBy: 'ai_agent',
+              employees: chunk.map(e => ({
+                fullName: e.fullName, department: e.department,
+                walletAddress: e.walletAddress,
+                salaryAmount: Number(e.salaryAmount).toFixed(2),
+                group: e.group,
+              })),
+            }),
+          }).then(async res => {
+            await saveTxRecord({
+              id: hash, hash, ref, type: 'batchPay', status: 'success',
+              amount: chunkHuman, token: 'USDC', remark: `AI Agent — payroll run (${group})`,
+              recipientCount: chunk.length, timestamp: Date.now(),
+              receiptEmailStatus: res.ok ? 'sent' : 'failed',
+              executedBy: 'ai_agent',
+            }, walletAddress);
+          }).catch(() => {});
+        }
       }
 
       setPayState('done');
-      onResolved('confirmed', hash);
+      onResolved('confirmed', lastHash);
     } catch (err) {
       executing.current = false;
       const raw = err instanceof Error ? err.message : '';
-      const msg = /reject|cancel|denied/i.test(raw)
+      const cancelled = /reject|cancel|denied/i.test(raw);
+      // A run split into multiple batches can fail partway through with
+      // some batches already confirmed on-chain — see the identical
+      // handling and reasoning in dashboard/page.tsx's handleExecutePayroll.
+      const partial = completedHashes.length > 0 && completedHashes.length < chunks.length;
+      const msg = cancelled
         ? 'Transaction cancelled.'
-        : friendlyErrorMessage(err, 'Payroll run failed. Please try again.');
+        : partial
+          ? `${completedHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice — only the remaining employees need to be run again.`
+          : friendlyErrorMessage(err, 'Payroll run failed. Please try again.');
       setError(msg);
       setPayState('error');
       onResolved('error', msg);
     }
   }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved]);
 
+  // See the identical comment on this pattern in UnlistedPaymentCard above —
+  // waits briefly for canWrite/publicClient to resolve before auto-firing,
+  // instead of permanently trusting whatever they were on this component's
+  // very first render. This is the specific card behind the repeated
+  // "payroll run failed — connect wallet first" reports.
+  const autoConfirmedRef = useRef(false);
   useEffect(() => {
-    if (autoConfirm) void handleConfirm();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConfirm]);
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    if (canWrite && publicClient) {
+      autoConfirmedRef.current = true;
+      void handleConfirm();
+      return;
+    }
+    const t = setTimeout(() => {
+      if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
 
   if (payState === 'done') {
     return (

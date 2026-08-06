@@ -27,8 +27,9 @@
  *      ChatInterface displayed directly. No activate button anywhere.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, ExternalLink, Copy, Loader2 } from 'lucide-react';
 import { useWalletClient, usePublicClient, useAccount, useChainId } from 'wagmi';
 import { AgentLayout }           from '@/components/agent/AgentLayout';
@@ -128,12 +129,12 @@ function SetupStep({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function AIAgentPage() {
+function AIAgentPageInner() {
   const { state, dispatch } = useApp();
   const { address } = useEffectiveAddress();
   const { isPremiumUser, payrollClone, registryClone } = state;
-  const { data: walletClient } = useWalletClient();
-  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcTestnet.id });
   // For the wrong-network guard below — see its comment for why this
   // needs to be its own check rather than relying on the "No wallet"
   // branch to catch it.
@@ -147,14 +148,25 @@ export default function AIAgentPage() {
   // possible prop change cleanly.
   const [resumeSessionId, setResumeSessionId] = useState<string | undefined>(undefined);
   const [chatInstanceKey, setChatInstanceKey] = useState<string>('default');
+  // Was previously read once via `new URLSearchParams(window.location.search)`
+  // inside a useEffect with an empty dependency array, so it only ever ran on
+  // this component's initial mount. That's fine when arriving fresh from
+  // /ai-agent/chat-history (a real navigation, so the page component mounts
+  // from scratch and picks up the new query string) — which is exactly why
+  // that entry point "worked". But the sidebar's own + New Chat button
+  // (AgentLayout.tsx) calls router.push('/ai-agent?new=...') from this same
+  // already-mounted page — the App Router updates the URL without
+  // remounting the component for a same-route query-only change, so the
+  // mount-only effect never re-ran and the chat never reset. useSearchParams
+  // is reactive to query-string changes on the same route, so depending on
+  // it directly here fixes both entry points consistently.
+  const searchParams = useSearchParams();
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const session = params.get('session');
-    const fresh   = params.get('new');
+    const session = searchParams.get('session');
+    const fresh   = searchParams.get('new');
     if (session) { setResumeSessionId(session); setChatInstanceKey(`session-${session}`); }
     else if (fresh) { setResumeSessionId(undefined); setChatInstanceKey(`new-${fresh}`); }
-  }, []);
+  }, [searchParams]);
 
   // registryClone was previously only ever populated by dashboard/page.tsx's
   // factory lookup — landing (or refreshing) directly on /ai-agent left it
@@ -956,5 +968,28 @@ export default function AIAgentPage() {
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </AgentLayout>
+  );
+}
+
+// useSearchParams() requires a Suspense boundary in Next.js App Router
+// (same reason/pattern as app/auth/otp/page.tsx) — the inner component reads
+// params; this outer export wraps it in Suspense.
+function AgentPageLoadingFallback() {
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#F8F9FA',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Loader2 size={24} color="#4F46E5" style={{ animation: 'spin 0.7s linear infinite' }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+export default function AIAgentPage() {
+  return (
+    <Suspense fallback={<AgentPageLoadingFallback />}>
+      <AIAgentPageInner />
+    </Suspense>
   );
 }

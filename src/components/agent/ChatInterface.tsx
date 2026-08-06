@@ -287,6 +287,21 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   const endRef      = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Tracks whether the person is currently scrolled near the bottom of the
+  // chat. The auto-scroll effect below used to fire unconditionally on
+  // every `messages`/`isLoading` change — including background updates like
+  // the tx-status poller's silent setMessages calls — which yanked the view
+  // back to the bottom even while someone was actively scrolled up reading
+  // earlier messages, making it impossible to read history. Defaults to
+  // true so the normal "stick to the latest message" behavior is unchanged
+  // on load and while the person hasn't scrolled away from the bottom.
+  const isNearBottomRef = useRef(true);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }, []);
 
   // Which local-storage session this conversation is being saved under.
   // Resumes the given sessionId if provided (from /ai-agent?session=<id>),
@@ -300,7 +315,10 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   const persistedLogKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => { setDailyCount(getDailyCount()); }, []);
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoading]);
+  useEffect(() => {
+    if (!isNearBottomRef.current) return;
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -553,7 +571,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       content: effectiveText, timestamp: nowTime(), proposedAt: Date.now(),
       attachment: attachment ? { fileName: attachment.fileName || 'file', mimeType: attachment.mimeType } : undefined,
     };
-    if (!silent) { setMessages(prev => [...prev, userMsg]); setInput(''); }
+    if (!silent) { isNearBottomRef.current = true; setMessages(prev => [...prev, userMsg]); setInput(''); }
     setIsLoading(true);
     setError(null);
 
@@ -732,7 +750,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       )}
 
       {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
+      <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
         {messages.length === 0 && (
           <div style={{ textAlign: 'center', padding: '32px 16px' }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>How can I help with payroll today?</div>
