@@ -64,6 +64,7 @@ import { verifySessionToken }         from '@/lib/agent/auth';
 import { checkAndConsumeRateLimit, GLOBAL_DAILY_LIMIT } from '@/lib/agent/rateLimiter';
 import { checkSpendLimit, recordProposedSpend } from '@/lib/agent/spendLimits';
 import { resolveAgentWallet, resolvePayrollClone } from '@/lib/agent/agentIdentity';
+import { getSchedulesForWallet } from '@/lib/agent/scheduleStore';
 import { extractSlotsFromHistory, formatSlotsForPrompt } from '@/lib/agent/slotMemory';
 import { getToolDeclarations, AUTONOMOUS_ONLY_TOOLS as AUTONOMOUS_ONLY_TOOL_NAMES } from '@/lib/agent/tools';
 import { getAgentMode }               from '@/lib/agent/agentMode';
@@ -219,10 +220,25 @@ const PAYROLL_KEYWORDS = [
   'faucet', 'drip', 'top up', 'topup', 'fund', 'refill',
 ];
 
-function isLikelyOffTopic(msg: string): boolean {
+function isLikelyOffTopic(msg: string, recentContext?: string): boolean {
   const lower = msg.toLowerCase();
   if (lower.length < 30) return false;
-  return !PAYROLL_KEYWORDS.some(kw => lower.includes(kw));
+  if (PAYROLL_KEYWORDS.some(kw => lower.includes(kw))) return false;
+  // A short, keyword-free message can still be clearly on-topic as a
+  // follow-up to an already-established conversation — e.g. "change it to
+  // 0xBe2e..." right after the agent showed a wallet address in response
+  // to "show me Ava's wallet address". Judged in isolation (the original
+  // behaviour), that follow-up contains no payroll keyword at all and got
+  // hard-rejected before the model — which has the actual conversational
+  // reasoning to recognise it as a continuation — ever saw it. Checking a
+  // short window of recent conversation alongside the current message
+  // lets a genuine follow-up through without turning this into a full
+  // model call; this is deliberately still a cheap pre-filter, not an
+  // attempt at true intent understanding — the system prompt's TOPIC
+  // RESTRICTION section is where that reasoning actually lives, for
+  // messages that make it past this filter.
+  if (recentContext && PAYROLL_KEYWORDS.some(kw => recentContext.toLowerCase().includes(kw))) return false;
+  return true;
 }
 
 // ── G6: Jailbreak pattern detection ───────────────────────────────────────────
@@ -438,7 +454,33 @@ Talk like a sharp, attentive colleague who actually read the message — not a s
 ═══════════════════════════════════════════════
 TOOLS — USE THEM, DON'T GUESS
 ═══════════════════════════════════════════════
-You have real tools: get_balance, check_ofac_compliance, get_transaction_status, request_faucet, propose_unlisted_payment, propose_add_employee, propose_payroll_run, execute_payment, execute_payroll_run, execute_edit_employee, propose_edit_employee, propose_remove_employee, propose_bulk_add_employees, execute_bulk_add_employees.
+You have real tools: get_balance, check_ofac_compliance, get_transaction_status, request_faucet, propose_unlisted_payment, propose_add_employee, propose_payroll_run, execute_payment, execute_payroll_run, execute_edit_employee, propose_edit_employee, propose_remove_employee, propose_bulk_add_employees, execute_bulk_add_employees, get_schedules, propose_schedule_payment, propose_cancel_schedule.
+
+═══════════════════════════════════════════════
+SCHEDULED PAYMENTS
+═══════════════════════════════════════════════
+get_schedules lists what's currently scheduled — always call it first if you don't already have a schedule's exact id from earlier in this same conversation; never fabricate an id or ask the user to type one themselves.
+
+propose_schedule_payment sets up a ONE-TIME future payment — it does not execute anything itself and needs no wallet signature to save (the signature happens later, automatically, when the agent actually runs it at the scheduled time). It does NOT support recurring/repeating payments yet. If the user asks for something repeating (weekly, monthly), say plainly that recurring setup isn't available via chat yet, and that a one-time schedule's own recurrence toggle on the Manage AI Agent page (sidebar → Manage AI Agent) handles that once the one-time schedule exists — don't imply propose_schedule_payment itself can do it.
+
+propose_cancel_schedule cancels one — always resolve which one via get_schedules first (by group/amount/date, matched against what the user described), never guess an id.
+
+If the user asks to do something with schedules that none of these three tools cover (e.g. editing an existing schedule's amount or date), say so plainly and point them to Manage AI Agent instead of attempting it with the wrong tool or pretending you did something you didn't.
+
+═══════════════════════════════════════════════
+ABOUT SALDEN — WHAT EXISTS AND WHERE
+═══════════════════════════════════════════════
+You're allowed — and expected — to answer questions about how Salden itself works, including things you have no tool for, by describing the actual page instead of guessing or refusing. Every page in the app, for when a real feature exists but isn't (or isn't yet) something you can do from chat:
+  • Dashboard — employee list, run payroll manually, add/import employees (including CSV), groups.
+  • Settings — company profile, invoice email, registry/payroll contract addresses. Settings → Contract Functions (premium only) — Add Agent, Add Token, Emergency Withdrawal on the payroll clone contract directly.
+  • Wallet — the employer's own personal wallet, separate from the AI Agent's wallet. Send, Swap, Bridge (cross-chain, external chains into Arc), and Deposit (QR/address; card and bank transfer are listed as coming soon, not live yet).
+  • AI Agent (this chat) — Agent Wallet (view the agent's own balance, separate from the employer's personal wallet) and Chat History (past sessions) are both in the sidebar here.
+  • Manage AI Agent (sidebar) — activate/deactivate the agent, and create, view, or cancel scheduled/recurring payments directly (the fuller UI equivalent of the schedule tools above).
+  • Compliance — OFAC/registry health checks.
+  • Transaction History — full past-transaction log (you have no tool that lists historical runs — always point here for that), plus Wallet Activity. Private Transactions is a placeholder, not a real feature yet — say so plainly if asked rather than describing it as available.
+  • Pricing — upgrading to Premium (deploys the employer's own payroll clone contract, which is what unlocks the AI Agent in the first place).
+
+When something is genuinely possible in Salden but you don't have a tool for it, say so plainly and name the actual page — don't pretend you did it, and don't refuse as if the topic itself were out of scope (see TOPIC RESTRICTION above). If you're unsure whether a capability exists at all, say that honestly rather than guessing either way.
 
 ═══════════════════════════════════════════════
 BULK EMPLOYEE DATA — UPLOADS AND PASTED TEXT
@@ -758,7 +800,11 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Off-topic early exit ──────────────────────────────────────────────────
-    if (isLikelyOffTopic(userText)) {
+    // Last 4 messages before this one (~2 exchange turns) — enough to catch
+    // a short follow-up to an on-topic exchange without scanning the whole
+    // conversation. See isLikelyOffTopic's comment for why this exists.
+    const recentContext = messages.slice(-5, -1).map(m => m.content ?? '').join(' ');
+    if (isLikelyOffTopic(userText, recentContext)) {
       return NextResponse.json({ response: "I can only help with payroll, payment, and Salden-related topics. Is there something about your payroll I can assist with?" });
     }
 
@@ -1459,6 +1505,91 @@ export async function POST(req: NextRequest) {
             action: `${name === 'execute_bulk_add_employees' ? 'Add' : 'Propose adding'} ${valid.length} employee${valid.length === 1 ? '' : 's'} from document`,
             status: 'QUEUED', timestamp: ts,
           });
+          proposeToolCalledThisTurn = true;
+          continue;
+        }
+
+        if (name === 'get_schedules') {
+          // Reads the server-side mirror (lib/agent/scheduleStore.ts) —
+          // kept in sync every time the client saves/loads a schedule (see
+          // that file's header comment). Read-only, executes immediately,
+          // no client event needed.
+          const schedules = await getSchedulesForWallet(walletAddress);
+          const summarised = schedules.map(s => ({
+            id: s.id, label: s.label, group: s.group ?? 'All Employees',
+            token: s.token, amount: s.amount, status: s.status,
+            recurrence: s.recurrence ?? 'one-time',
+            nextRunAt: s.nextRunAt ? new Date(s.nextRunAt).toISOString() : undefined,
+          }));
+          pushResponse({ ok: true, count: summarised.length, schedules: summarised });
+          actionLog.push({
+            action: 'List scheduled payments',
+            status: 'SUCCESS',
+            detail: `${summarised.length} schedule${summarised.length === 1 ? '' : 's'}`,
+            timestamp: ts,
+          });
+          continue;
+        }
+
+        if (name === 'propose_schedule_payment') {
+          const group = sanitiseField(String(args.group ?? ''), 60);
+          const whenISO = String(args.whenISO ?? '');
+          const token = String(args.token ?? 'USDC').toUpperCase() === 'EURC' ? 'EURC' : 'USDC';
+          if (!group || !whenISO) {
+            pushResponse({ ok: false, error: 'Missing group or whenISO.' });
+            actionLog.push({ action: 'Propose scheduled payment', status: 'FAILED', detail: 'Missing required field', timestamp: ts });
+            continue;
+          }
+          const groupExists = group === 'All Employees' || knownEmployees.some(e => (e.group ?? '').toLowerCase() === group.toLowerCase());
+          if (!groupExists) {
+            pushResponse({ ok: false, error: `"${group}" does not match any group in the database — ask the user to confirm the exact group name.` });
+            actionLog.push({ action: `Propose scheduled payment for "${group}"`, status: 'FAILED', detail: 'Group not found', timestamp: ts });
+            continue;
+          }
+          const whenMs = Date.parse(whenISO);
+          if (!Number.isFinite(whenMs) || whenMs <= Date.now()) {
+            pushResponse({ ok: false, error: 'whenISO must be a valid date/time in the future.' });
+            actionLog.push({ action: `Propose scheduled payment for "${group}"`, status: 'FAILED', detail: 'Invalid or past date', timestamp: ts });
+            continue;
+          }
+          // Saved client-side only (no wallet signature needed to save —
+          // see components/agent/AgentConfirmationCards.tsx's
+          // ScheduleConfirmationCard, which mirrors
+          // SetSchedulePaymentModal.tsx's exact logic); this tool only
+          // validates and queues the proposal card.
+          clientEvents.push({
+            type: 'schedule_payment_request', group, token, whenMs,
+            autoConfirm: Boolean(args.autoConfirm),
+          });
+          pushResponse({ ok: true, status: 'pending_user_confirmation' });
+          actionLog.push({ action: `Propose scheduled payment for "${group}"`, status: 'QUEUED', timestamp: ts });
+          proposeToolCalledThisTurn = true;
+          continue;
+        }
+
+        if (name === 'propose_cancel_schedule') {
+          const scheduleId = String(args.scheduleId ?? '');
+          if (!scheduleId) {
+            pushResponse({ ok: false, error: 'Missing scheduleId.' });
+            actionLog.push({ action: 'Propose cancel schedule', status: 'FAILED', detail: 'Missing scheduleId', timestamp: ts });
+            continue;
+          }
+          // Ownership + existence check server-side, same as
+          // app/api/agent/schedule/cancel/route.ts's own check — never
+          // show a confirmation card for a schedule id that isn't
+          // actually this wallet's.
+          const owned = (await getSchedulesForWallet(walletAddress)).find(s => s.id === scheduleId);
+          if (!owned) {
+            pushResponse({ ok: false, error: 'No schedule with that id was found for this account — call get_schedules again to get current ids.' });
+            actionLog.push({ action: 'Propose cancel schedule', status: 'FAILED', detail: 'Schedule not found', timestamp: ts });
+            continue;
+          }
+          clientEvents.push({
+            type: 'cancel_schedule_request', scheduleId, label: owned.label,
+            autoConfirm: Boolean(args.autoConfirm),
+          });
+          pushResponse({ ok: true, status: 'pending_user_confirmation' });
+          actionLog.push({ action: `Propose cancelling "${owned.label}"`, status: 'QUEUED', timestamp: ts });
           proposeToolCalledThisTurn = true;
           continue;
         }

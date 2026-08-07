@@ -32,9 +32,11 @@ import { generateSessionId, loadSessionMessages, saveSession } from '@/lib/chatS
 import { saveAgentLog } from '@/lib/db/indexeddb';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { txLink } from '@/lib/contracts/config';
+import { isCircleTxTerminal, isCircleTxSuccess } from '@/lib/circle/txState';
 import {
   UnlistedPaymentCard, AddEmployeeCard, PayrollRunCard,
   EditEmployeeCard, RemoveEmployeeCard, BulkAddEmployeesCard,
+  ScheduleConfirmationCard, CancelScheduleCard,
 } from '@/components/agent/AgentConfirmationCards';
 
 interface ActionLogEntry {
@@ -53,12 +55,20 @@ interface AgentEvent {
   type: 'faucet_request' | 'unlisted_payment_request' | 'add_employee_request' | 'payroll_run_request'
       | 'agent_executed_payment' | 'agent_executed_payroll_run'
       | 'edit_employee_request' | 'edit_employee_immediate' | 'remove_employee_request'
-      | 'bulk_add_employees_request' | 'bulk_add_employees_immediate';
+      | 'bulk_add_employees_request' | 'bulk_add_employees_immediate'
+      | 'schedule_payment_request' | 'cancel_schedule_request';
   address?: string; amount?: string; token?: string;
   fullName?: string; department?: string; group?: string; salary?: string;
   txHash?: string; pending?: boolean; recipients?: number; totalAmount?: string;
   currentAddress?: string; newAddress?: string;
   employeesJson?: string; skippedCount?: number;
+  /** schedule_payment_request only — epoch ms for when the one-time
+   *  payment should run. */
+  whenMs?: number;
+  /** cancel_schedule_request only — the schedule's id and human-readable
+   *  label (from get_schedules), so the card can show exactly what's
+   *  about to be cancelled without a second round trip. */
+  scheduleId?: string; label?: string;
   /** Circle's own transaction id for a pending agent_executed_* event —
    *  same purpose as ActionLogEntry.pendingTxId above. */
   transactionId?: string;
@@ -385,10 +395,10 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           );
           if (!res.ok) continue;
           const data = await res.json() as { state?: string; txHash?: string };
-          if (data.state !== 'CONFIRMED' && data.state !== 'FAILED') continue;
+          if (!isCircleTxTerminal(data.state)) continue;
           if (cancelled) return;
 
-          const resolvedStatus: ActionLogEntry['status'] = data.state === 'CONFIRMED' ? 'SUCCESS' : 'FAILED';
+          const resolvedStatus: ActionLogEntry['status'] = isCircleTxSuccess(data.state) ? 'SUCCESS' : 'FAILED';
           setMessages(prev => prev.map(m => ({
             ...m,
             actionLog: m.actionLog?.map(l => l.pendingTxId === txId
@@ -974,6 +984,57 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                           send(`[CONFIRMATION_EVENT] The user declined the proposed payroll run for "${ev.group}". Do not propose it again unless they ask.`, true);
                         } else {
                           send(`[CONFIRMATION_EVENT] The payroll run for "${ev.group}" failed before confirmation: ${detail}.`, true);
+                        }
+                      }}
+                    />
+                  );
+                }
+
+                if (ev.type === 'schedule_payment_request' && ev.group && ev.whenMs) {
+                  if (expired) return <ExpiredCard key={i} label="scheduled payment" />;
+                  return (
+                    <ScheduleConfirmationCard
+                      key={i}
+                      group={ev.group}
+                      token={ev.token ?? 'USDC'}
+                      whenMs={ev.whenMs}
+                      walletAddress={walletAddress}
+                      sessionToken={sessionTokenRef.current ?? undefined}
+                      autoConfirm={ev.autoConfirm}
+                      onResolved={(outcome, detail) => {
+                        markEventResolved(m.id, i);
+                        if (outcome === 'confirmed') {
+                          onDataChanged?.();
+                          send(`[CONFIRMATION_EVENT] The user confirmed the scheduled payment for "${ev.group}". It has been saved and will run automatically at the scheduled time.`, true);
+                        } else if (outcome === 'declined') {
+                          send(`[CONFIRMATION_EVENT] The user declined the proposed scheduled payment for "${ev.group}". Do not propose it again unless they ask.`, true);
+                        } else {
+                          send(`[CONFIRMATION_EVENT] Saving the scheduled payment for "${ev.group}" failed: ${detail}.`, true);
+                        }
+                      }}
+                    />
+                  );
+                }
+
+                if (ev.type === 'cancel_schedule_request' && ev.scheduleId) {
+                  if (expired) return <ExpiredCard key={i} label="schedule cancellation" />;
+                  return (
+                    <CancelScheduleCard
+                      key={i}
+                      scheduleId={ev.scheduleId}
+                      label={ev.label ?? 'this scheduled payment'}
+                      walletAddress={walletAddress}
+                      sessionToken={sessionTokenRef.current ?? undefined}
+                      autoConfirm={ev.autoConfirm}
+                      onResolved={(outcome, detail) => {
+                        markEventResolved(m.id, i);
+                        if (outcome === 'confirmed') {
+                          onDataChanged?.();
+                          send(`[CONFIRMATION_EVENT] The user confirmed cancelling "${ev.label}". It has been cancelled and will no longer run.`, true);
+                        } else if (outcome === 'declined') {
+                          send(`[CONFIRMATION_EVENT] The user declined cancelling "${ev.label}". Leave it as-is unless they ask again.`, true);
+                        } else {
+                          send(`[CONFIRMATION_EVENT] Cancelling "${ev.label}" failed: ${detail}.`, true);
                         }
                       }}
                     />

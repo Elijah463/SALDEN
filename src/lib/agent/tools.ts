@@ -268,6 +268,40 @@ export async function getToolDeclarations(mode: 'confirm' | 'autonomous' = 'conf
             required: ['employees'],
           },
         },
+        {
+          name: 'get_schedules',
+          description:
+            'Lists the employer\'s current scheduled/recurring payments (from Manage AI Agent). Read-only — executes immediately, no confirmation needed. Use this whenever the user asks what\'s scheduled, or as the first step before proposing a cancellation (you need the schedule\'s id, which this returns) — never guess or ask the user to type an id themselves when you can look it up.',
+          parameters: { type: T.OBJECT, properties: {} },
+        },
+        {
+          name: 'propose_schedule_payment',
+          description:
+            'Proposes a ONE-TIME future payroll payment for a specific date/time — shows the user a confirmation card; on confirm, this is saved (no wallet signature needed, it only takes effect when it actually runs) and executed autonomously by the agent at the scheduled time. Does NOT support recurring/repeating schedules yet — if the user wants something repeating (weekly, monthly, etc.), tell them Manage AI Agent → the payment\'s own toggle handles recurrence once a one-time schedule like this exists, or that recurring setup isn\'t available via chat yet. Requires the AI Agent to already be active (call get_balance or check agent status first if unsure) — if it isn\'t, tell the user to activate it from the AI Agent page first.',
+          parameters: {
+            type: T.OBJECT,
+            properties: {
+              group: { type: T.STRING, description: 'Employee group to pay, or "All Employees".' },
+              token: { type: T.STRING, description: 'USDC or EURC. Defaults to USDC if not specified.' },
+              whenISO: { type: T.STRING, description: 'ISO 8601 UTC datetime for when this should run — must be in the future. Resolve relative phrases ("next Friday at 9am", "in 3 days") against the current date/time given in your instructions.' },
+              autoConfirm: { type: T.BOOLEAN, description: 'true only if the user gave a fully explicit instruction (group, token if non-default, and a clear date/time) and clearly meant to schedule it now. false otherwise — shows the review card first.' },
+            },
+            required: ['group', 'whenISO'],
+          },
+        },
+        {
+          name: 'propose_cancel_schedule',
+          description:
+            'Proposes cancelling an existing scheduled/recurring payment — shows the user a confirmation card naming exactly what\'s being cancelled; nothing is cancelled until they confirm. Always call get_schedules first if you don\'t already have the exact scheduleId from this same conversation — never fabricate one.',
+          parameters: {
+            type: T.OBJECT,
+            properties: {
+              scheduleId: { type: T.STRING, description: 'The exact id from get_schedules — not the human-readable label.' },
+              autoConfirm: { type: T.BOOLEAN, description: 'true only if the user explicitly and unambiguously said to cancel this specific schedule. false if there was any ambiguity about which one they meant.' },
+            },
+            required: ['scheduleId'],
+          },
+        },
       ],
     },
   ];

@@ -42,6 +42,7 @@
  */
 
 import { getEntitySecretCiphertext, toUUIDv5 } from './entitySecret';
+import { isCircleTxTerminal } from './txState';
 
 const CIRCLE_API_BASE = 'https://api.circle.com/v1/w3s';
 
@@ -229,7 +230,7 @@ export async function pollTxStatus(
     const data = await res.json();
     const tx = data.data?.transaction;
 
-    if (tx.state === 'CONFIRMED' || tx.state === 'FAILED') {
+    if (isCircleTxTerminal(tx.state)) {
       return { id: tx.id, state: tx.state, txHash: tx.txHash };
     }
 

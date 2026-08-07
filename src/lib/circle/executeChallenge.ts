@@ -15,6 +15,8 @@
  *  5. Return the EVM wallet address
  */
 
+import { isCircleTxSuccess, isCircleTxFailure, CircleTxFailedError } from '@/lib/circle/txState';
+
 interface ChallengeParams {
   challengeId:   string;
   userToken:     string;
@@ -160,17 +162,21 @@ export async function executeCircleTransactionChallenge({
       if (!res.ok) continue;
       const status = await res.json() as { state?: string; txHash?: string };
 
-      if (status.state === 'CONFIRMED' && status.txHash) {
+      if (isCircleTxSuccess(status.state) && status.txHash) {
         return status.txHash as `0x${string}`;
       }
-      if (status.state === 'FAILED') {
-        throw new Error('Transaction reverted on-chain. No funds moved — check the block explorer for the exact reason.');
+      if (isCircleTxFailure(status.state)) {
+        throw new CircleTxFailedError(status.state);
       }
     } catch (err) {
       // A single failed poll (network blip) shouldn't abort the whole
-      // wait — only a genuine FAILED transaction state (thrown above)
-      // or exhausting MAX_POLLS should.
-      if ((err as Error).message?.includes('reverted on-chain')) throw err;
+      // wait — only a genuine terminal failure state (thrown above, as a
+      // CircleTxFailedError) or exhausting MAX_POLLS should. Checking
+      // instanceof here (rather than matching on the error message, the
+      // original approach) means this can't silently swallow a DENIED or
+      // CANCELLED failure just because its wording didn't happen to
+      // contain whatever substring was being matched.
+      if (err instanceof CircleTxFailedError) throw err;
     }
   }
 

@@ -38,6 +38,9 @@ import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
+import { saveAgentSchedule, deleteAgentSchedule, type AgentSchedule } from '@/lib/db/indexeddb';
+import { useAgentStatus } from '@/lib/useAgentStatus';
+import { ALL_EMPLOYEES_LABEL } from '@/lib/groups';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
@@ -1259,6 +1262,239 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
           confirmDisabled={targetEmployees.length === 0 || dupWallets.length > 0}
         />
       )}
+    </CardShell>
+  );
+}
+
+// ── Schedule payment confirmation card ─────────────────────────────────────────
+// Saves a ONE-TIME future payment locally (IndexedDB) plus a best-effort
+// server-side mirror sync — no wallet signature needed here at all; the
+// actual signature happens automatically later, when the agent runs the
+// payment at its scheduled time. Mirrors
+// components/agent/SetSchedulePaymentModal.tsx's handleSchedule() exactly,
+// since that's the already-proven, working manual-UI equivalent of this
+// same action.
+
+export interface ScheduleConfirmationCardProps {
+  group: string;
+  token: string;
+  whenMs: number;
+  walletAddress: string;
+  sessionToken?: string;
+  autoConfirm?: boolean;
+  onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
+}
+
+export function ScheduleConfirmationCard({
+  group, token, whenMs, walletAddress, sessionToken, autoConfirm, onResolved,
+}: ScheduleConfirmationCardProps) {
+  const { state } = useApp();
+  const { employees, payrollClone } = state;
+  const { agentInfo } = useAgentStatus();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const executing = useRef(false);
+
+  const targetEmployees = group === ALL_EMPLOYEES_LABEL || group === 'All Employees'
+    ? employees
+    : employees.filter(e => e.group === group);
+
+  const handleConfirm = useCallback(async () => {
+    if (executing.current) return;
+    executing.current = true;
+    setBusy(true); setError('');
+
+    if (targetEmployees.length === 0) {
+      executing.current = false; setBusy(false);
+      setError(`No employees found in "${group}".`);
+      onResolved('error', `No employees found in "${group}".`);
+      return;
+    }
+    if (targetEmployees.some(e => !Number.isFinite(Number(e.salaryAmount)) || Number(e.salaryAmount) <= 0)) {
+      executing.current = false; setBusy(false);
+      const msg = 'One or more employees are missing a valid salary amount.';
+      setError(msg); onResolved('error', msg);
+      return;
+    }
+    if (!agentInfo?.walletId || !agentInfo?.agentWallet) {
+      executing.current = false; setBusy(false);
+      const msg = 'Activate the AI Agent (from the AI Agent page) before scheduling autonomous payments.';
+      setError(msg); onResolved('error', msg);
+      return;
+    }
+    if (whenMs <= Date.now()) {
+      executing.current = false; setBusy(false);
+      const msg = 'That date/time has already passed.';
+      setError(msg); onResolved('error', msg);
+      return;
+    }
+
+    try {
+      const tokenAddress = token === 'USDC'
+        ? CONTRACTS.USDC
+        : Object.values(state.tokenRegistry ?? {}).find(t => t.symbol === 'EURC')?.address;
+      if (!tokenAddress) throw new Error('Token address not found.');
+
+      const schedule: AgentSchedule = {
+        id: crypto.randomUUID(),
+        walletAddress,
+        type: 'scheduled',
+        label: `${group} — ${targetEmployees.length} employee${targetEmployees.length === 1 ? '' : 's'} — ${token}`,
+        group: (group === ALL_EMPLOYEES_LABEL || group === 'All Employees') ? undefined : group,
+        employees: targetEmployees.map(e => e.walletAddress),
+        token,
+        amount: targetEmployees.reduce((s, e) => s + Number(e.salaryAmount), 0).toFixed(2),
+        nextRunAt: whenMs,
+        status: 'active',
+        createdAt: Date.now(),
+        runHistory: [],
+        resolvedPayments: targetEmployees.map(e => ({ address: e.walletAddress, amount: String(e.salaryAmount) })),
+        agentWalletId: agentInfo.walletId,
+        agentWalletAddress: agentInfo.agentWallet,
+        payrollCloneAddress: payrollClone ?? undefined,
+        tokenAddress,
+        tokenDecimals: 6,
+        recipientEmail: state.payrollSetup?.email || undefined,
+      };
+
+      await saveAgentSchedule(schedule);
+      if (sessionToken) {
+        fetch('/api/agent/schedule/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+          body: JSON.stringify({ walletAddress, schedules: [schedule] }),
+        }).catch(() => { /* self-heals next time Manage AI Agent loads */ });
+      }
+
+      setDone(true); setBusy(false);
+      onResolved('confirmed', schedule.id);
+    } catch (err) {
+      setBusy(false);
+      const msg = friendlyErrorMessage(err, 'Could not create schedule.');
+      setError(msg); onResolved('error', msg);
+    }
+  }, [targetEmployees, group, whenMs, token, agentInfo, walletAddress, sessionToken, payrollClone, state.tokenRegistry, state.payrollSetup, onResolved]);
+
+  // Same bounded-wait autoConfirm pattern as the other cards above —
+  // agentInfo (from useAgentStatus) can resolve a tick after this
+  // component's first render, same class of timing gap as
+  // useEffectiveAddress elsewhere in this file.
+  const autoConfirmedRef = useRef(false);
+  useEffect(() => {
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    if (agentInfo?.walletId) {
+      autoConfirmedRef.current = true;
+      void handleConfirm();
+      return;
+    }
+    const t = setTimeout(() => {
+      if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [autoConfirm, agentInfo?.walletId, handleConfirm]);
+
+  const handleDecline = useCallback(() => onResolved('declined'), [onResolved]);
+
+  if (done) {
+    return <CardShell tone="success" title="✓ PAYMENT SCHEDULED"><div>Scheduled for {new Date(whenMs).toLocaleString()} — {group}, {token}.</div></CardShell>;
+  }
+  if (error) {
+    return <CardShell tone="error" title="✗ COULD NOT SCHEDULE"><div>{error}</div></CardShell>;
+  }
+
+  const totalAmount = targetEmployees.reduce((s, e) => s + Number(e.salaryAmount || 0), 0);
+  return (
+    <CardShell tone="warn" title="⏱ CONFIRM SCHEDULED PAYMENT">
+      <div style={{ marginBottom: 4 }}>{group} — {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</div>
+      <div style={{ marginBottom: 4 }}>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} {token} total</div>
+      <div style={{ marginBottom: 4 }}>Runs: {new Date(whenMs).toLocaleString()}</div>
+      <div style={{ fontSize: 11, color: '#C7D2FE' }}>Saved now, signed automatically at the scheduled time — no signature needed to confirm this.</div>
+      <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Schedule" />
+    </CardShell>
+  );
+}
+
+// ── Cancel schedule confirmation card ──────────────────────────────────────────
+// Mirrors app/ai-agent/manage/page.tsx's handleCancelSchedule() exactly:
+// server-side removal (so the cron executor stops picking it up) plus a
+// local IndexedDB removal (so the Manage AI Agent page — whose own list is
+// sourced from local IndexedDB, not the server mirror — reflects it too).
+
+export interface CancelScheduleCardProps {
+  scheduleId: string;
+  label: string;
+  walletAddress: string;
+  sessionToken?: string;
+  autoConfirm?: boolean;
+  onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
+}
+
+export function CancelScheduleCard({
+  scheduleId, label, walletAddress, sessionToken, autoConfirm, onResolved,
+}: CancelScheduleCardProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const executing = useRef(false);
+
+  const handleConfirm = useCallback(async () => {
+    if (executing.current) return;
+    executing.current = true;
+    setBusy(true); setError('');
+
+    // Local removal is what the person actually sees and what matters for
+    // whether this counts as "done" — the server call is best-effort sync
+    // so the cron executor also stops picking it up, same tolerance as
+    // Manage AI Agent's own handleCancelSchedule (which shows a soft
+    // "cancelled locally" toast rather than a hard error in this exact
+    // situation, since local state re-pushes to the server automatically
+    // on the next Manage AI Agent visit either way).
+    let serverSynced = true;
+    if (sessionToken) {
+      try {
+        const res = await fetch('/api/agent/schedule/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+          body: JSON.stringify({ walletAddress, scheduleId }),
+        });
+        if (!res.ok) serverSynced = false;
+      } catch { serverSynced = false; }
+    } else {
+      serverSynced = false;
+    }
+
+    try {
+      await deleteAgentSchedule(scheduleId);
+      setDone(true); setBusy(false);
+      onResolved('confirmed', serverSynced ? scheduleId : `${scheduleId} — removed locally; will finish syncing next time Manage AI Agent loads`);
+    } catch (err) {
+      setBusy(false);
+      const msg = friendlyErrorMessage(err, 'Could not cancel schedule.');
+      setError(msg); onResolved('error', msg);
+    }
+  }, [scheduleId, walletAddress, sessionToken, onResolved]);
+
+  const autoConfirmedRef = useRef(false);
+  useEffect(() => {
+    if (!autoConfirm || autoConfirmedRef.current) return;
+    autoConfirmedRef.current = true;
+    void handleConfirm();
+  }, [autoConfirm, handleConfirm]);
+
+  const handleDecline = useCallback(() => onResolved('declined'), [onResolved]);
+
+  if (done) {
+    return <CardShell tone="success" title="✓ SCHEDULE CANCELLED"><div>"{label}" has been cancelled.</div></CardShell>;
+  }
+  if (error) {
+    return <CardShell tone="error" title="✗ COULD NOT CANCEL"><div>{error}</div></CardShell>;
+  }
+
+  return (
+    <CardShell tone="warn" title="⏱ CONFIRM CANCELLATION">
+      <div style={{ marginBottom: 8 }}>Cancel "{label}"? This cannot be undone — you'd need to schedule it again from scratch.</div>
+      <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Cancel Schedule" />
     </CardShell>
   );
 }

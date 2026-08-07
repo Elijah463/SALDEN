@@ -39,18 +39,30 @@ export interface MessageProps {
   attachment?: { fileName: string; mimeType: string };
 }
 
+// Keyed by the real Gemini function-calling tool names (see
+// lib/agent/tools.ts) — this previously listed names from an older,
+// pre-function-calling design (see that file's own header comment on what
+// replaced it) that never matched any real tool call, so every badge fell
+// through to the generic gear-icon fallback below regardless of which
+// tool actually ran.
 const TOOL_META: Record<string, { label: string; icon: string }> = {
-  run_payroll:          { label: "Ran Payroll",        icon: "💸" },
-  pay_individual:       { label: "Individual Payment", icon: "💰" },
-  get_employees:        { label: "Read Employees",     icon: "👥" },
-  edit_employee:        { label: "Edited Employee",    icon: "✏️"  },
-  remove_employee:      { label: "Removed Employee",   icon: "🗑️"  },
-  scan_document:        { label: "Scanned Document",   icon: "📄" },
-  run_compliance_check: { label: "Compliance Check",   icon: "🛡️"  },
-  check_balance:        { label: "Checked Balance",    icon: "💳" },
-  get_agent_status:     { label: "Agent Status",       icon: "🤖" },
-  get_run_history:      { label: "Run History",        icon: "📊" },
-  get_schedule:         { label: "Schedule",           icon: "📅" },
+  get_balance:                 { label: "Checked Balance",       icon: "💳" },
+  check_ofac_compliance:       { label: "Compliance Check",      icon: "🛡️"  },
+  get_transaction_status:      { label: "Checked Transaction",   icon: "🔍" },
+  request_faucet:              { label: "Faucet Request",        icon: "🚰" },
+  propose_unlisted_payment:    { label: "Proposed Payment",      icon: "💰" },
+  propose_add_employee:        { label: "Proposed Add Employee", icon: "👤" },
+  propose_payroll_run:         { label: "Proposed Payroll Run",  icon: "💸" },
+  execute_payment:             { label: "Sent Payment",          icon: "💰" },
+  execute_payroll_run:         { label: "Ran Payroll",           icon: "💸" },
+  execute_edit_employee:       { label: "Edited Employee",       icon: "✏️"  },
+  propose_edit_employee:       { label: "Proposed Edit",         icon: "✏️"  },
+  propose_remove_employee:     { label: "Proposed Removal",      icon: "🗑️"  },
+  propose_bulk_add_employees:  { label: "Proposed Bulk Add",     icon: "👥" },
+  execute_bulk_add_employees:  { label: "Bulk Added Employees",  icon: "👥" },
+  get_schedules:                { label: "Checked Schedules",     icon: "📅" },
+  propose_schedule_payment:     { label: "Proposed Schedule",     icon: "📅" },
+  propose_cancel_schedule:      { label: "Proposed Cancellation", icon: "📅" },
 };
 
 function ToolCallBadge({ call }: { call: ToolCallDisplay }) {

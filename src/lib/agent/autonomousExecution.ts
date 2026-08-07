@@ -51,6 +51,7 @@ import { encodeFunctionData, formatUnits, parseUnits, keccak256 } from 'viem';
 import { getServerPublicClient } from './chain';
 import { executeContractCall, pollTxStatus, type TxResponse } from '@/lib/circle/agent-wallet';
 import { requestFaucetDrip } from '@/lib/circle/faucet';
+import { isCircleTxSuccess } from '@/lib/circle/txState';
 import { ERC20_ABI, MEMO_ABI, MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 
 export interface AutonomousPayResult {
@@ -289,7 +290,7 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
         idempotencyKey:       `${params.idempotencyKeyBase}-approve`,
       });
       const confirmed = await pollWithBudget(approveTx.id, APPROVE_POLL_ATTEMPTS);
-      if (!confirmed || confirmed.state !== 'CONFIRMED') {
+      if (!confirmed || !isCircleTxSuccess(confirmed.state)) {
         return {
           ok: false, faucetAttempted,
           error: 'The agent wallet\'s spending approval hasn\'t confirmed on-chain yet. Please ask me to try the payment again in a moment.',

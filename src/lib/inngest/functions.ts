@@ -56,6 +56,7 @@ import { resolveAgentWallet, resolvePayrollClone } from '@/lib/agent/agentIdenti
 import { executeCheckOfacCompliance } from '@/lib/agent/toolExecutors';
 import { checkAndTopUpBalance, ALLOWANCE_CEILING_USDC } from '@/lib/agent/autonomousExecution';
 import { executeContractCall, getTxStatus } from '@/lib/circle/agent-wallet';
+import { isCircleTxTerminal, isCircleTxSuccess } from '@/lib/circle/txState';
 import { getServerPublicClient } from '@/lib/agent/chain';
 import { ERC20_ABI, MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
@@ -174,7 +175,7 @@ export const executeScheduledPayment = inngest.createFunction(
           }
         });
 
-        if (status.state === 'CONFIRMED' || status.state === 'FAILED') return status;
+        if (isCircleTxTerminal(status.state)) return status;
         if (i < maxAttempts - 1) await step.sleep(`sleep-${label}-tx-${i}`, POLL_SLEEP);
       }
       return null;
@@ -288,7 +289,7 @@ export const executeScheduledPayment = inngest.createFunction(
           });
 
           const approveResult = await pollForConfirmation('approve', approveTx.id, APPROVE_POLL_ATTEMPTS);
-          if (!approveResult || approveResult.state !== 'CONFIRMED') {
+          if (!approveResult || !isCircleTxSuccess(approveResult.state)) {
             await step.run('mark-failed-approve', async () => {
               await upsertSchedule(buildFailedRecord(schedule, approveResult?.txHash));
             });
