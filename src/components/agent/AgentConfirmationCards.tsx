@@ -983,6 +983,9 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
   const [txHash,   setTxHash]   = useState('');
+  // Tracks whether a receipt could even be attempted — see the comment
+  // right where this gets set, in handleConfirm below.
+  const [receiptSkipped, setReceiptSkipped] = useState(false);
   const executing = useRef(false);
 
   const targetEmployees = group === 'All Employees'
@@ -1056,6 +1059,17 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       }
 
       const receiptEmail = payrollSetup?.email ?? null;
+      // BUG FIX: payrollSetup.email is only ever populated by an explicit
+      // "Unlock your data" / "Sync now" click (see usePayrollSync.ts's
+      // header comment) — on a browser/device with no local cache yet for
+      // this wallet, it can genuinely still be empty here even though
+      // employees are already visible (e.g. freshly imported this same
+      // session). This used to run to completion in total silence: no
+      // receipt attempt, no error, nothing — which is exactly why
+      // "Payroll Receipt" showed as a blank row with no retry option in
+      // Transaction History instead of a "Failed" state. Surfaced in this
+      // card's own success message below instead of staying silent.
+      if (!receiptEmail) setReceiptSkipped(true);
       let lastHash: `0x${string}` = '0x0' as `0x${string}`;
 
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
@@ -1186,6 +1200,11 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
     return (
       <CardShell tone="success" title="✓ PAYROLL RUN COMPLETE">
         <div>Paid {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'} in &ldquo;{group}&rdquo;.</div>
+        {receiptSkipped && (
+          <div style={{ fontSize: 11, color: '#FDE68A', marginTop: 4 }}>
+            No invoice email on file — no receipt was sent. Add one in Settings to enable automatic receipts.
+          </div>
+        )}
         <a href={txLink(txHash)} target="_blank" rel="noreferrer" style={{ color: '#059669', fontSize: 12, fontWeight: 600 }}>
           View transaction →
         </a>

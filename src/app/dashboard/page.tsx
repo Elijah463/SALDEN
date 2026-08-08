@@ -930,7 +930,24 @@ export default function DashboardPage() {
         await waitForSuccessfulReceipt(publicClient, approveTx);
       }
 
+      // BUG FIX: payrollSetup.email is only ever populated by an explicit
+      // "Unlock your data" (or "Sync now") click — see usePayrollSync.ts's
+      // header comment for why it's deliberately never auto-loaded on
+      // mount. On a browser/device with no local cache yet for this
+      // wallet, payrollSetup — and therefore its .email — can genuinely
+      // still be empty at this point even though employees are already
+      // visible on screen (e.g. freshly imported in this same session,
+      // which doesn't require unlocking anything). Previously this ran to
+      // completion in total silence: no receipt attempt, no error, no
+      // indication anywhere that anything was skipped — which is exactly
+      // why "Payroll Receipt" showed as a blank row with no retry option
+      // in Transaction History instead of a "Failed" state. Surfacing
+      // this immediately, before the run starts, so it's not a surprise
+      // discovered only afterward.
       const receiptEmail = payrollSetup?.email ?? null;
+      if (!receiptEmail) {
+        addToast('No invoice email on file — this payroll run will proceed, but no receipt email will be sent. Add one in Settings to enable automatic receipts.', 'warning', 8000);
+      }
 
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
         const chunk       = chunks[chunkIndex];
