@@ -41,6 +41,7 @@ import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { saveAgentSchedule, deleteAgentSchedule, type AgentSchedule } from '@/lib/db/indexeddb';
 import { useAgentStatus } from '@/lib/useAgentStatus';
 import { ALL_EMPLOYEES_LABEL } from '@/lib/groups';
+import type { PayrollSyncStatus } from '@/lib/usePayrollSync';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 
@@ -116,6 +117,72 @@ function ActionButtons({
       </button>
     </div>
   );
+}
+
+// ── Shared hydration-awareness gate ─────────────────────────────────────────
+//
+// usePayrollSync.ts's status is the one authoritative signal for whether
+// state.employees/payrollSetup genuinely reflect this wallet's real data
+// yet. Several cards below (add/edit employee, payroll run, schedule
+// payment) read state.employees at confirm-time — on a fresh
+// browser/device, that data can still be mid-load (or waiting on an
+// explicit "Unlock my data" click) when an autoConfirm proposal fires
+// with no human reaction time to cover the gap. Two distinct failure
+// modes were possible before this existed:
+//   1. A false "not found"/"no employees" error that "self-corrected" a
+//      moment later once loading finished on a subsequent render — a
+//      confusing but otherwise harmless display bug (EditEmployeeCard).
+//   2. Actually proceeding with a still-empty state.employees and writing
+//      that incomplete snapshot to IPFS + anchoring it on-chain — silent
+//      data loss of every real employee not yet loaded into this session
+//      (AddEmployeeCard).
+// A plain `employees.length > 0` check or a short fixed timeout can't
+// tell these apart from "this is genuinely a brand-new company with zero
+// employees" — only the real hydration status can. This hook centralises
+// that logic once instead of every card re-deriving its own guess.
+const HYDRATION_SAFETY_VALVE_MS = 6000;
+
+interface HydrationGateResult {
+  /** True once it's safe to trust state.employees/payrollSetup as
+   *  genuinely settled — either it actually finished loading (or failed,
+   *  which is equally "settled" — nothing further is coming
+   *  automatically), the caller didn't pass a status at all (backward
+   *  compatible — treated as already settled so nothing regresses for
+   *  any call site that doesn't thread this prop through), or a bounded
+   *  safety-valve wait has elapsed so a genuinely stuck signal can never
+   *  hang a card forever. Deliberately does NOT become true purely from
+   *  the safety valve while status is 'needs-unlock' — see
+   *  blockedReason below for why that case needs a person, not a timer. */
+  ready: boolean;
+  /** Set only when hydrationStatus is 'needs-unlock' — there is real,
+   *  known unsynced data on IPFS that requires an explicit "Unlock my
+   *  data" click to load (see usePayrollSync.ts's header comment for why
+   *  that can't happen automatically). No amount of waiting resolves
+   *  this — only the person clicking Unlock does — so callers should
+   *  show this message and stop rather than retrying on a timer or
+   *  silently proceeding with whatever's currently in state. */
+  blockedReason: string | null;
+}
+
+function useHydrationGate(hydrationStatus: PayrollSyncStatus | undefined): HydrationGateResult {
+  const isTransient = hydrationStatus === 'idle' || hydrationStatus === 'checking' || hydrationStatus === 'loading';
+  const isBlocked   = hydrationStatus === 'needs-unlock';
+  const isSettled   = hydrationStatus === undefined || hydrationStatus === 'done' || hydrationStatus === 'error';
+
+  const [safetyValveElapsed, setSafetyValveElapsed] = useState(!isTransient);
+  useEffect(() => {
+    if (!isTransient) { setSafetyValveElapsed(true); return; }
+    setSafetyValveElapsed(false);
+    const t = setTimeout(() => setSafetyValveElapsed(true), HYDRATION_SAFETY_VALVE_MS);
+    return () => clearTimeout(t);
+  }, [isTransient]);
+
+  return {
+    ready: isSettled || (isTransient && safetyValveElapsed),
+    blockedReason: isBlocked
+      ? 'Your existing data hasn\'t been loaded on this device yet — click "Unlock my data" on the AI Agent page first, then try again.'
+      : null,
+  };
 }
 
 // ── Unlisted payment confirmation card ─────────────────────────────────────────
@@ -403,19 +470,26 @@ export interface AddEmployeeCardProps {
   walletAddress: string;
   /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
   autoConfirm?: boolean;
+  /** See useHydrationGate's comment above — without this, an autoConfirm
+   *  add could fire while state.employees is still mid-hydration and
+   *  silently overwrite the real employee list with just the one new
+   *  hire. Optional/backward-compatible — omitting it is treated as
+   *  "already settled," matching this card's original behavior. */
+  hydrationStatus?: PayrollSyncStatus;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
 type AddState = 'idle' | 'syncing' | 'anchoring' | 'done' | 'error' | 'declined';
 
 export function AddEmployeeCard({
-  address, fullName, department, group, salary, walletAddress, autoConfirm, onResolved,
+  address, fullName, department, group, salary, walletAddress, autoConfirm, hydrationStatus, onResolved,
 }: AddEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [addState, setAddState] = useState<AddState>('idle');
   const [error,    setError]    = useState('');
@@ -432,6 +506,27 @@ export function AddEmployeeCard({
     if (!canWrite || !publicClient) {
       executing.current = false;     // reset so user can retry after reconnecting wallet
       setError('Wallet not connected.'); setAddState('error'); return;
+    }
+    // BUG FIX: state.employees can still be mid-hydration on a fresh
+    // browser/device — writing [...employees, newEmployee] while it's
+    // still empty would anchor a database containing only this one new
+    // hire on-chain, silently discarding every real employee not yet
+    // loaded into this session. hydrationGate.blockedReason specifically
+    // means there's real known data waiting on an explicit "Unlock my
+    // data" click — retrying this exact click won't fix it, so fail with
+    // that specific guidance rather than the generic message below.
+    if (hydrationGate.blockedReason) {
+      executing.current = false;
+      setError(hydrationGate.blockedReason); setAddState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (!hydrationGate.ready) {
+      executing.current = false;
+      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      setError(msg); setAddState('error');
+      onResolved('error', msg);
+      return;
     }
 
     try {
@@ -508,16 +603,28 @@ export function AddEmployeeCard({
       setAddState('error');
       onResolved('error', msg);
     }
-  }, [canWrite, universalWrite, sign, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, fullName, address, group, salary, employees, dispatch, syncData, walletAddress, registryClone, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
 
-  // See the identical comment on this pattern in UnlistedPaymentCard above —
-  // waits briefly for canWrite/publicClient to resolve before auto-firing,
-  // instead of permanently trusting whatever they were on this component's
-  // very first render.
+  // See the identical comment on this pattern in UnlistedPaymentCard above
+  // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
+  // now — see useHydrationGate's comment above for why: this used to fire
+  // handleConfirm() the instant canWrite/publicClient were ready with no
+  // regard for whether state.employees had actually finished loading yet,
+  // risking silent data loss for an autoConfirm add (see the comment
+  // inside handleConfirm). blockedReason resolves as an error immediately
+  // rather than waiting, since a 'needs-unlock' status will never clear on
+  // its own — no amount of retrying fixes it, only a person clicking
+  // "Unlock my data" does.
   const autoConfirmedRef = useRef(false);
   useEffect(() => {
     if (!autoConfirm || autoConfirmedRef.current) return;
-    if (canWrite && publicClient) {
+    if (hydrationGate.blockedReason) {
+      autoConfirmedRef.current = true;
+      setError(hydrationGate.blockedReason); setAddState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (canWrite && publicClient && hydrationGate.ready) {
       autoConfirmedRef.current = true;
       void handleConfirm();
       return;
@@ -526,7 +633,7 @@ export function AddEmployeeCard({
       if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
     }, 1200);
     return () => clearTimeout(t);
-  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
+  }, [autoConfirm, canWrite, publicClient, hydrationGate.ready, hydrationGate.blockedReason, handleConfirm]);
 
   if (addState === 'done') {
     return (
@@ -585,17 +692,20 @@ export interface EditEmployeeCardProps {
    *  instructions). The underlying sign+sync+anchor flow is identical
    *  either way; only whether a human has to click "confirm" differs. */
   autoConfirm?:   boolean;
+  /** See useHydrationGate's comment above. */
+  hydrationStatus?: PayrollSyncStatus;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
 export function EditEmployeeCard({
-  currentAddress, fullName, department, group, salary, newAddress, walletAddress, autoConfirm, onResolved,
+  currentAddress, fullName, department, group, salary, newAddress, walletAddress, autoConfirm, hydrationStatus, onResolved,
 }: EditEmployeeCardProps) {
   const { state, dispatch, syncData } = useApp();
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [editState, setEditState] = useState<AddState>('idle');
   const [error,     setError]     = useState('');
@@ -614,6 +724,26 @@ export function EditEmployeeCard({
     if (!canWrite || !publicClient) {
       executing.current = false;
       setError('Wallet not connected.'); setEditState('error'); return;
+    }
+    // BUG FIX: employees can still be mid-hydration (loaded async from
+    // IPFS/cache — see usePayrollSync.ts) here — checked BEFORE !existing
+    // below specifically so a genuinely-existing employee that just
+    // hasn't loaded yet is reported as "still loading", never as a false
+    // "not found". blockedReason (a real 'needs-unlock' status) gets its
+    // own specific message since retrying this click can't fix it — only
+    // clicking "Unlock my data" can.
+    if (hydrationGate.blockedReason) {
+      executing.current = false;
+      setError(hydrationGate.blockedReason); setEditState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (!hydrationGate.ready) {
+      executing.current = false;
+      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      setError(msg); setEditState('error');
+      onResolved('error', msg);
+      return;
     }
     if (!existing) {
       executing.current = false;
@@ -666,18 +796,28 @@ export function EditEmployeeCard({
       setEditState('error');
       onResolved('error', msg);
     }
-  }, [canWrite, universalWrite, sign, publicClient, existing, fullName, department, group, salary, newAddress, currentAddress, employees, dispatch, syncData, walletAddress, registryClone, onResolved]);
+  }, [canWrite, universalWrite, sign, publicClient, existing, fullName, department, group, salary, newAddress, currentAddress, employees, dispatch, syncData, walletAddress, registryClone, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
 
-  // See the identical comment on this pattern in UnlistedPaymentCard above —
-  // waits briefly for canWrite/publicClient to resolve before auto-firing,
-  // instead of permanently trusting whatever they were on this component's
-  // very first render. This is the specific card behind the repeated
-  // "update failed — connect wallet first" reports when editing an employee
-  // and proposing the resulting on-chain update.
+  // See the identical comment on this pattern in UnlistedPaymentCard above
+  // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
+  // now — this is the specific card behind both the repeated "update
+  // failed — connect wallet first" reports AND the false "EMPLOYEE NOT
+  // FOUND" that "self-corrected" a moment later — see useHydrationGate's
+  // comment above and handleConfirm's identical guard for the full
+  // reasoning. blockedReason resolves as an error immediately (updating
+  // this card's own local state, not just onResolved, so the card itself
+  // displays the real reason) rather than waiting, since a 'needs-unlock'
+  // status never clears on its own.
   const autoConfirmedRef = useRef(false);
   useEffect(() => {
     if (!autoConfirm || autoConfirmedRef.current) return;
-    if (canWrite && publicClient) {
+    if (hydrationGate.blockedReason) {
+      autoConfirmedRef.current = true;
+      setError(hydrationGate.blockedReason); setEditState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (canWrite && publicClient && hydrationGate.ready) {
       autoConfirmedRef.current = true;
       void handleConfirm();
       return;
@@ -686,7 +826,7 @@ export function EditEmployeeCard({
       if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
     }, 1200);
     return () => clearTimeout(t);
-  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
+  }, [autoConfirm, canWrite, publicClient, hydrationGate.ready, hydrationGate.blockedReason, handleConfirm]);
 
   if (editState === 'done') {
     return (
@@ -702,6 +842,12 @@ export function EditEmployeeCard({
     return <CardShell tone="error" title="✗ UPDATE FAILED"><div>{error}</div></CardShell>;
   }
   if (!existing) {
+    if (hydrationGate.blockedReason) {
+      return <CardShell tone="warn" title="⏸ DATA NOT LOADED"><div>{hydrationGate.blockedReason}</div></CardShell>;
+    }
+    if (!hydrationGate.ready) {
+      return <CardShell tone="warn" title="⏳ LOADING"><div>Loading employee data…</div></CardShell>;
+    }
     return <CardShell tone="error" title="✗ EMPLOYEE NOT FOUND"><div>No employee matches that address anymore.</div></CardShell>;
   }
 
@@ -970,15 +1116,18 @@ export interface PayrollRunCardProps {
   sessionToken?: string;
   /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
   autoConfirm?: boolean;
+  /** See useHydrationGate's comment above. */
+  hydrationStatus?: PayrollSyncStatus;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
-export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm, onResolved }: PayrollRunCardProps) {
+export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm, hydrationStatus, onResolved }: PayrollRunCardProps) {
   const { state, saveTxRecord } = useApp();
   const { employees, payrollClone, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
@@ -1005,6 +1154,25 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
     if (!canWrite || !publicClient) {
       executing.current = false;
       setError(walletRequiredMessage(loginMethod)); setPayState('error'); return;
+    }
+    // BUG FIX: checked BEFORE targetEmployees.length === 0 below —
+    // employees can still be mid-hydration here (see
+    // useHydrationGate's comment above), which would otherwise make a
+    // group that genuinely has people in it look empty and misreport
+    // "no employees found". blockedReason (a real 'needs-unlock' status)
+    // gets its own message since retrying this click won't fix it.
+    if (hydrationGate.blockedReason) {
+      executing.current = false;
+      setError(hydrationGate.blockedReason); setPayState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (!hydrationGate.ready) {
+      executing.current = false;
+      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      setError(msg); setPayState('error');
+      onResolved('error', msg);
+      return;
     }
     if (targetEmployees.length === 0) {
       executing.current = false;
@@ -1175,17 +1343,27 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       setPayState('error');
       onResolved('error', msg);
     }
-  }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved]);
+  }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
 
-  // See the identical comment on this pattern in UnlistedPaymentCard above —
-  // waits briefly for canWrite/publicClient to resolve before auto-firing,
-  // instead of permanently trusting whatever they were on this component's
-  // very first render. This is the specific card behind the repeated
-  // "payroll run failed — connect wallet first" reports.
+  // See the identical comment on this pattern in UnlistedPaymentCard above
+  // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
+  // now — this is the specific card behind both the repeated "payroll run
+  // failed — connect wallet first" reports AND the false "No employees
+  // found" that could fire while employees was still mid-hydration — see
+  // useHydrationGate's comment above and handleConfirm's identical guard.
+  // blockedReason resolves as an error immediately (updating this card's
+  // own local state, not just onResolved) rather than waiting, since a
+  // 'needs-unlock' status never clears on its own.
   const autoConfirmedRef = useRef(false);
   useEffect(() => {
     if (!autoConfirm || autoConfirmedRef.current) return;
-    if (canWrite && publicClient) {
+    if (hydrationGate.blockedReason) {
+      autoConfirmedRef.current = true;
+      setError(hydrationGate.blockedReason); setPayState('error');
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (canWrite && publicClient && hydrationGate.ready) {
       autoConfirmedRef.current = true;
       void handleConfirm();
       return;
@@ -1194,7 +1372,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
     }, 1200);
     return () => clearTimeout(t);
-  }, [autoConfirm, canWrite, publicClient, handleConfirm]);
+  }, [autoConfirm, canWrite, publicClient, hydrationGate.ready, hydrationGate.blockedReason, handleConfirm]);
 
   if (payState === 'done') {
     return (
@@ -1202,7 +1380,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         <div>Paid {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'} in &ldquo;{group}&rdquo;.</div>
         {receiptSkipped && (
           <div style={{ fontSize: 11, color: '#FDE68A', marginTop: 4 }}>
-            No invoice email on file — no receipt was sent. Add one in Settings to enable automatic receipts.
+            No payroll receipt email on file — no receipt was sent. Add one in Settings to enable automatic receipts.
           </div>
         )}
         <a href={txLink(txHash)} target="_blank" rel="noreferrer" style={{ color: '#059669', fontSize: 12, fontWeight: 600 }}>
@@ -1226,6 +1404,21 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         <div>{error}</div>
       </CardShell>
     );
+  }
+
+  // Same reasoning as EditEmployeeCard's identical check — without this,
+  // a manually-confirmed (non-autoConfirm) card could briefly show "0
+  // employees, $0.00 total" for a group that genuinely has people in it,
+  // while employees is still mid-hydration. handleConfirm's own guard
+  // above already prevents anything unsafe from actually executing during
+  // this window — this only fixes what gets displayed in the meantime.
+  if (payState === 'idle' && targetEmployees.length === 0) {
+    if (hydrationGate.blockedReason) {
+      return <CardShell tone="warn" title="⏸ DATA NOT LOADED"><div>{hydrationGate.blockedReason}</div></CardShell>;
+    }
+    if (!hydrationGate.ready) {
+      return <CardShell tone="warn" title="⏳ LOADING"><div>Loading employee data…</div></CardShell>;
+    }
   }
 
   const busy = payState === 'approving' || payState === 'paying' || payState === 'confirming';
@@ -1301,15 +1494,18 @@ export interface ScheduleConfirmationCardProps {
   walletAddress: string;
   sessionToken?: string;
   autoConfirm?: boolean;
+  /** See useHydrationGate's comment above. */
+  hydrationStatus?: PayrollSyncStatus;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
 }
 
 export function ScheduleConfirmationCard({
-  group, token, whenMs, walletAddress, sessionToken, autoConfirm, onResolved,
+  group, token, whenMs, walletAddress, sessionToken, autoConfirm, hydrationStatus, onResolved,
 }: ScheduleConfirmationCardProps) {
   const { state } = useApp();
   const { employees, payrollClone } = state;
   const { agentInfo } = useAgentStatus();
+  const hydrationGate = useHydrationGate(hydrationStatus);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
@@ -1324,6 +1520,22 @@ export function ScheduleConfirmationCard({
     executing.current = true;
     setBusy(true); setError('');
 
+    // BUG FIX: checked BEFORE targetEmployees.length === 0 below — same
+    // reasoning as PayrollRunCard's identical guard. employees can still
+    // be mid-hydration here, which would otherwise make a group that
+    // genuinely has people in it look empty.
+    if (hydrationGate.blockedReason) {
+      executing.current = false; setBusy(false);
+      setError(hydrationGate.blockedReason);
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (!hydrationGate.ready) {
+      executing.current = false; setBusy(false);
+      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      setError(msg); onResolved('error', msg);
+      return;
+    }
     if (targetEmployees.length === 0) {
       executing.current = false; setBusy(false);
       setError(`No employees found in "${group}".`);
@@ -1393,16 +1605,27 @@ export function ScheduleConfirmationCard({
       const msg = friendlyErrorMessage(err, 'Could not create schedule.');
       setError(msg); onResolved('error', msg);
     }
-  }, [targetEmployees, group, whenMs, token, agentInfo, walletAddress, sessionToken, payrollClone, state.tokenRegistry, state.payrollSetup, onResolved]);
+  }, [targetEmployees, group, whenMs, token, agentInfo, walletAddress, sessionToken, payrollClone, state.tokenRegistry, state.payrollSetup, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
 
   // Same bounded-wait autoConfirm pattern as the other cards above —
   // agentInfo (from useAgentStatus) can resolve a tick after this
   // component's first render, same class of timing gap as
-  // useEffectiveAddress elsewhere in this file.
+  // useEffectiveAddress elsewhere in this file. Also gated on
+  // hydrationGate.ready now — see useHydrationGate's comment above and
+  // handleConfirm's identical guard for the full reasoning. blockedReason
+  // resolves as an error immediately (updating this card's own local
+  // state) rather than waiting, since a 'needs-unlock' status never
+  // clears on its own.
   const autoConfirmedRef = useRef(false);
   useEffect(() => {
     if (!autoConfirm || autoConfirmedRef.current) return;
-    if (agentInfo?.walletId) {
+    if (hydrationGate.blockedReason) {
+      autoConfirmedRef.current = true;
+      setError(hydrationGate.blockedReason);
+      onResolved('error', hydrationGate.blockedReason);
+      return;
+    }
+    if (agentInfo?.walletId && hydrationGate.ready) {
       autoConfirmedRef.current = true;
       void handleConfirm();
       return;
@@ -1411,7 +1634,7 @@ export function ScheduleConfirmationCard({
       if (!autoConfirmedRef.current) { autoConfirmedRef.current = true; void handleConfirm(); }
     }, 1200);
     return () => clearTimeout(t);
-  }, [autoConfirm, agentInfo?.walletId, handleConfirm]);
+  }, [autoConfirm, agentInfo?.walletId, hydrationGate.ready, hydrationGate.blockedReason, handleConfirm]);
 
   const handleDecline = useCallback(() => onResolved('declined'), [onResolved]);
 
@@ -1420,6 +1643,21 @@ export function ScheduleConfirmationCard({
   }
   if (error) {
     return <CardShell tone="error" title="✗ COULD NOT SCHEDULE"><div>{error}</div></CardShell>;
+  }
+
+  // Same reasoning as PayrollRunCard's identical check — without this, a
+  // manually-confirmed card could briefly show "0 employees" for a group
+  // that genuinely has people in it while employees is still
+  // mid-hydration. handleConfirm's own guard above already prevents
+  // anything unsafe from executing during this window — this only fixes
+  // what gets displayed in the meantime.
+  if (!busy && targetEmployees.length === 0) {
+    if (hydrationGate.blockedReason) {
+      return <CardShell tone="warn" title="⏸ DATA NOT LOADED"><div>{hydrationGate.blockedReason}</div></CardShell>;
+    }
+    if (!hydrationGate.ready) {
+      return <CardShell tone="warn" title="⏳ LOADING"><div>Loading employee data…</div></CardShell>;
+    }
   }
 
   const totalAmount = targetEmployees.reduce((s, e) => s + Number(e.salaryAmount || 0), 0);

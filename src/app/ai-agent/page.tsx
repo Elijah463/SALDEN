@@ -31,7 +31,9 @@ import { useState, useEffect, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { CheckCircle2, ExternalLink, Copy, Loader2 } from 'lucide-react';
-import { useWalletClient, usePublicClient, useAccount, useChainId } from 'wagmi';
+import { usePublicClient, useAccount, useChainId } from 'wagmi';
+import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
+import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { AgentLayout }           from '@/components/agent/AgentLayout';
 import { NetworkGuard }          from '@/components/shared/NetworkGuard';
 import ChatInterface             from '@/components/agent/ChatInterface';
@@ -133,8 +135,21 @@ function AIAgentPageInner() {
   const { state, dispatch } = useApp();
   const { address } = useEffectiveAddress();
   const { isPremiumUser, payrollClone, registryClone } = state;
-  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  // BUG FIX: grantPayrollAgent/grantRegistryAgent below used to call
+  // walletClient.writeContract(...) directly — wagmi's raw wallet client
+  // (via useWalletClient()), which is ONLY ever populated for an external
+  // wallet connected through wagmi's own connectors. Circle/social-login
+  // users never connect through wagmi at all, so that client is
+  // permanently undefined for them — meaning both functions' guard fired
+  // immediately and silently for every social-login user, with no error,
+  // no feedback, nothing — exactly "the button doesn't do anything when
+  // clicked." useUniversalWrite is this app's one shared abstraction that
+  // correctly branches between external wallets and Circle's
+  // challenge-based signing, same as every other on-chain write in the
+  // app already uses — replaces the need for useWalletClient() here
+  // entirely.
+  const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   // For the wrong-network guard below — see its comment for why this
   // needs to be its own check rather than relying on the "No wallet"
   // branch to catch it.
@@ -308,7 +323,7 @@ function AIAgentPageInner() {
   // ── Step 1: SaldenMultiTokenPayroll.addAgent(agentWallet) ─────────────────
   // Called by the Employer (owner). Grants batchPay / withdraw / addSupportedToken.
   const grantPayrollAgent = useCallback(async () => {
-    if (!walletClient || !publicClient || !activateResult) return;
+    if (!canWrite || !publicClient || !activateResult) return;
 
     const agentAddr = activateResult.agentInfo.agentWallet as `0x${string}`;
     const cloneAddr = (
@@ -319,16 +334,16 @@ function AIAgentPageInner() {
 
     setStep1Status('active'); setStep1Error('');
     try {
-      // Wallet popup will show:
+      // Wallet popup (external) or PIN challenge (Circle) will show:
       // "Call addAgent on your Salden Payroll contract to allow the AI Agent
       //  to execute payroll on your behalf"
-      const hash = await walletClient.writeContract({
+      const hash = await universalWrite({
         address: cloneAddr,
         abi:     PAYROLL_ADD_AGENT_ABI,
         functionName: 'addAgent',
         args: [agentAddr],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       setStep1Hash(hash);
       setStep1Status('done');
     } catch (err) {
@@ -340,13 +355,13 @@ function AIAgentPageInner() {
       );
       setStep1Status('failed');
     }
-  }, [walletClient, publicClient, activateResult, effectiveClone]);
+  }, [canWrite, universalWrite, publicClient, activateResult, effectiveClone]);
 
   // ── Step 2: SaldenRegistry.addAgent(agentWallet) ─────────────────────────
   // Called by hrAdmin. Grants updateCID so the agent can update the
   // employee database pointer after writes.
   const grantRegistryAgent = useCallback(async () => {
-    if (!walletClient || !publicClient || !activateResult) return;
+    if (!canWrite || !publicClient || !activateResult) return;
 
     const agentAddr = activateResult.agentInfo.agentWallet as `0x${string}`;
     const regAddr   = (
@@ -357,16 +372,16 @@ function AIAgentPageInner() {
 
     setStep2Status('active'); setStep2Error('');
     try {
-      // Wallet popup will show:
+      // Wallet popup (external) or PIN challenge (Circle) will show:
       // "Call addAgent on your Salden Registry contract to allow the AI Agent
       //  to update the employee database on-chain on your behalf"
-      const hash = await walletClient.writeContract({
+      const hash = await universalWrite({
         address: regAddr,
         abi:     REGISTRY_ADD_AGENT_ABI,
         functionName: 'addAgent',
         args: [agentAddr],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForSuccessfulReceipt(publicClient, hash);
       setStep2Hash(hash);
       setStep2Status('done');
     } catch (err) {
@@ -378,7 +393,7 @@ function AIAgentPageInner() {
       );
       setStep2Status('failed');
     }
-  }, [walletClient, publicClient, activateResult, effectiveRegistry]);
+  }, [canWrite, universalWrite, publicClient, activateResult, effectiveRegistry]);
 
   const bothDone = step1Status === 'done' && step2Status === 'done';
 
@@ -963,6 +978,7 @@ function AIAgentPageInner() {
             agentActive={status === 'active'}
             agentWalletId={agentInfo?.walletId}
             sessionId={resumeSessionId}
+            hydrationStatus={payrollSync.status}
           />
         </div>
       </div>

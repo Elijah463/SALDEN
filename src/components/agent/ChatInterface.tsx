@@ -33,6 +33,7 @@ import { saveAgentLog } from '@/lib/db/indexeddb';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { txLink } from '@/lib/contracts/config';
 import { isCircleTxTerminal, isCircleTxSuccess } from '@/lib/circle/txState';
+import type { PayrollSyncStatus } from '@/lib/usePayrollSync';
 import {
   UnlistedPaymentCard, AddEmployeeCard, PayrollRunCard,
   EditEmployeeCard, RemoveEmployeeCard, BulkAddEmployeesCard,
@@ -121,6 +122,19 @@ interface ChatInterfaceProps {
   /** Resume a previously-saved conversation (from /ai-agent?session=<id>,
    *  see chat-history/page.tsx). Omit for a fresh conversation. */
   sessionId?:     string;
+  /** usePayrollSync's status from the parent page — the authoritative
+   *  signal for whether state.employees (and payrollSetup) actually
+   *  reflect this wallet's real, fully-hydrated data yet, as opposed to
+   *  still being mid-load or empty because loading hasn't started.
+   *  Threaded down to confirmation cards that read state.employees at
+   *  confirm-time (add/edit employee, payroll run, schedule payment) so
+   *  they can wait for a genuine "settled" signal instead of each
+   *  guessing independently — see AgentConfirmationCards.tsx's
+   *  hydrationStatus comments for the full reasoning and why a plain
+   *  employees.length check or a fixed timeout isn't reliable enough on
+   *  its own. Optional and defaults to treating hydration as settled if
+   *  omitted, so nothing regresses for any caller that doesn't pass it. */
+  hydrationStatus?: PayrollSyncStatus;
 }
 
 const API_BASE       = process.env.NEXT_PUBLIC_API_URL ?? '/api';
@@ -280,7 +294,7 @@ function UsageBanner({ count }: { count: number }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId }: ChatInterfaceProps) {
+export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId, hydrationStatus }: ChatInterfaceProps) {
   const { state } = useApp();
   const { employees, tokenRegistry, payrollClone, payrollSetup } = state;
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
@@ -845,6 +859,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       department={ev.department ?? ''} group={ev.group ?? ''} salary={ev.salary ?? '0'}
                       walletAddress={walletAddress}
                       autoConfirm={ev.autoConfirm}
+                      hydrationStatus={hydrationStatus}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -870,6 +885,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       salary={ev.salary} newAddress={ev.newAddress}
                       walletAddress={walletAddress}
                       autoConfirm={ev.autoConfirm}
+                      hydrationStatus={hydrationStatus}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -894,6 +910,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       salary={ev.salary} newAddress={ev.newAddress}
                       walletAddress={walletAddress}
                       autoConfirm
+                      hydrationStatus={hydrationStatus}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') onDataChanged?.();
@@ -975,6 +992,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       walletAddress={walletAddress}
                       sessionToken={sessionTokenRef.current ?? undefined}
                       autoConfirm={ev.autoConfirm}
+                      hydrationStatus={hydrationStatus}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {
@@ -1001,6 +1019,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       walletAddress={walletAddress}
                       sessionToken={sessionTokenRef.current ?? undefined}
                       autoConfirm={ev.autoConfirm}
+                      hydrationStatus={hydrationStatus}
                       onResolved={(outcome, detail) => {
                         markEventResolved(m.id, i);
                         if (outcome === 'confirmed') {

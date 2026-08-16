@@ -946,7 +946,7 @@ export default function DashboardPage() {
       // discovered only afterward.
       const receiptEmail = payrollSetup?.email ?? null;
       if (!receiptEmail) {
-        addToast('No invoice email on file — this payroll run will proceed, but no receipt email will be sent. Add one in Settings to enable automatic receipts.', 'warning', 8000);
+        addToast('No payroll receipt email on file — this payroll run will proceed, but no receipt email will be sent. Add one in Settings to enable automatic receipts.', 'warning', 8000);
       }
 
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
