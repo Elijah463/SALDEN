@@ -31,10 +31,15 @@
  * that particular table — confirmed instead via LineaScan's own token tag
  * ("Circle: USDC Token") on the contract.
  *
- * Result:
- *   result.state    — 'complete' | 'error' | 'pending'
- *   result.steps    — step-by-step trace of the bridge execution
- *   result.txHash   — source chain tx hash
+ * Result (per Circle's official App Kit SDK reference —
+ * docs.arc.network/app-kit/references/sdk-reference):
+ *   result.state    — 'pending' | 'success' | 'error'
+ *   result.steps    — step-by-step trace of the bridge execution (BridgeStep[])
+ *   result.destination.recipientAddress / .useForwarder — echoed destination info
+ *
+ * NOTE: BridgeResult has no top-level txHash/transactionHash field. The
+ * source-chain tx hash (when one exists — see the forwarder-only note above)
+ * lives on the individual BridgeStep entries in `result.steps[].txHash`.
  */
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
@@ -345,6 +350,9 @@ export default function BridgePage() {
   const [bridgeSteps,   setBridgeSteps]   = useState<BridgeStep[]>([]);
   const [error,         setError]         = useState('');
   const [successTx,     setSuccessTx]     = useState<string | null>(null);
+  // Prefer the SDK's own BridgeStep.explorerUrl (already resolved for the
+  // right chain/format) over hand-building one from fromChain.explorerBase.
+  const [successExplorerUrl, setSuccessExplorerUrl] = useState<string>('');
 
   const fromChain = useMemo(() => chainByKey(fromKey), [fromKey]);
   const toChain   = useMemo(() => chainByKey(toKey), [toKey]);
@@ -476,30 +484,47 @@ export default function BridgePage() {
         amount,
       });
 
-      // Map SDK result steps to our display steps
-      const sdkSteps = (result as { steps?: Array<{ name?: string; state?: string }> }).steps ?? [];
+      // Map SDK result steps to our display steps.
+      // BridgeStep.state is 'pending' | 'success' | 'error' | 'noop' — the
+      // SDK never returns 'complete'. (docs.arc.network/app-kit/references/sdk-reference)
+      type SdkBridgeStep = { name?: string; state?: string; txHash?: string; explorerUrl?: string };
+      const sdkSteps = (result as { steps?: SdkBridgeStep[] }).steps ?? [];
+      const toDisplayState = (s?: string): BridgeStep['state'] =>
+        s === 'success' || s === 'noop' ? 'done' : s === 'error' ? 'error' : 'active';
+
+      let sourceTxHash = '';
+      let sourceExplorerUrl = '';
       for (const sdkStep of sdkSteps) {
         const name = (sdkStep.name ?? '').toLowerCase();
         if (name.includes('approv')) {
-          setStep('approve', sdkStep.state === 'complete' ? 'done' : sdkStep.state === 'error' ? 'error' : 'active');
+          setStep('approve', toDisplayState(sdkStep.state));
         } else if (name.includes('burn') || name.includes('deposit')) {
-          setStep('burn', sdkStep.state === 'complete' ? 'done' : sdkStep.state === 'error' ? 'error' : 'active');
+          setStep('burn', toDisplayState(sdkStep.state));
+          // The burn step is the on-chain transaction on the SOURCE chain —
+          // the one successTx / fromChain.explorerBase below is meant to link to.
+          if (sdkStep.txHash) { sourceTxHash = sdkStep.txHash; sourceExplorerUrl = sdkStep.explorerUrl ?? ''; }
         } else if (name.includes('attest') || name.includes('orbit')) {
-          setStep('attest', sdkStep.state === 'complete' ? 'done' : sdkStep.state === 'error' ? 'error' : 'active');
+          setStep('attest', toDisplayState(sdkStep.state));
         } else if (name.includes('mint') || name.includes('receive')) {
-          setStep('mint', sdkStep.state === 'complete' ? 'done' : sdkStep.state === 'error' ? 'error' : 'active');
+          setStep('mint', toDisplayState(sdkStep.state));
         }
       }
-
-      // Mark all done on success
-      const finalState = (result as { state?: string }).state;
-      if (finalState === 'complete') {
-        setBridgeSteps(INITIAL_STEPS.map(s => ({ ...s, state: 'done' as const })));
+      // Fall back to the approve step's hash only if burn never produced one
+      // (e.g. a batched EIP-5792 call where approve+burn share a tx).
+      if (!sourceTxHash) {
+        const approveStep = sdkSteps.find(s => (s.name ?? '').toLowerCase().includes('approv'));
+        if (approveStep?.txHash) { sourceTxHash = approveStep.txHash; sourceExplorerUrl = approveStep.explorerUrl ?? ''; }
       }
 
-      const txHash = (result as { txHash?: string; transactionHash?: string })
-        .txHash ?? (result as { transactionHash?: string }).transactionHash ?? '';
-      setSuccessTx(txHash);
+      // Mark everything done once the SDK reports overall success.
+      const finalState = (result as { state?: string }).state;
+      if (finalState === 'success') {
+        setBridgeSteps(prev => prev.map(s => s.state === 'error' ? s : { ...s, state: 'done' as const }));
+      }
+
+      setSuccessTx(sourceTxHash);
+      setSuccessExplorerUrl(sourceExplorerUrl);
+      const txHash = sourceTxHash;
 
       // Local-only wallet activity record — see swap page for the same
       // pattern/rationale (never synced anywhere, by product decision).
@@ -520,29 +545,26 @@ export default function BridgePage() {
         setError('Transaction cancelled.');
         setBridgeSteps([]);
       } else if (/action\s+native\.\w+\s+is not supported/i.test(msg)) {
-        // Known @circle-fin/app-kit (1.0.1) limitation, not a real problem
-        // with this transaction. Arc's native gas token IS USDC — dual
-        // representation, 18-decimal "native" balance and a 6-decimal
-        // ERC-20 at 0x3600...0000, same underlying asset (confirmed
-        // against docs.arc.network's deployment guide). Circle's own
-        // swap-kit skill explicitly tells developers to special-case
-        // native == USDC on Arc themselves because the SDK doesn't do it
-        // automatically for every capability yet; Bridge's internal
-        // native-balance preflight appears to be one of the capabilities
-        // that doesn't have that special case, so it throws trying to
-        // check a "native" balance action that isn't wired up for Arc.
+        // ROOT CAUSE (fixed in package.json, see comment there): this was
+        // @circle-fin/adapter-viem-v2 pinned at 1.0.1 — its first-ever
+        // release — while Circle had already shipped the native-gas-balance
+        // capability this preflight needs in later 1.x versions (confirmed
+        // current published version: 1.11.2). It was never a genuine,
+        // unfixable SDK gap; the fix had already shipped upstream, this
+        // project's dependency pin just hadn't picked it up. Now bumped to
+        // ^1.11.2 — after `npm install`, this branch should no longer fire
+        // in normal operation. It's left in place only as a safety net
+        // (e.g. a stale local node_modules that hasn't reinstalled yet).
+        //
         // We already verify the user has enough USDC ourselves (the
-        // `insufficientBalance` check that gates the Bridge button, from
-        // a real on-chain read) — on Arc that IS the native-gas check —
-        // so this specific failure carries no new information about the
-        // user's funds. Rather than show the raw SDK internals, say so
-        // plainly and point at the one thing that would actually help:
-        // upgrading past app-kit 1.0.1 once Circle ships an Arc-aware fix
-        // (last published version at the time of writing), or moving to
-        // @circle-fin/bridge-kit directly (actively released, currently
-        // 1.8.3, vs. app-kit's unchanged 1.0.1 wrapping it).
+        // `insufficientBalance` check that gates the Bridge button, from a
+        // real on-chain read) — on Arc that IS the native-gas check — so
+        // this failure carries no new information about the user's funds,
+        // and we don't want to imply it's an unresolvable, wait-it-out
+        // Circle-side limitation.
+        console.error('[bridge] adapter capability check failed — verify node_modules has @circle-fin/adapter-viem-v2 >=1.11.2 installed:', err);
         setError(
-          'Circle\u2019s bridge SDK hit a known limitation checking Arc\u2019s gas balance (Arc uses USDC as its native gas token, and this SDK version doesn\u2019t yet special-case that for bridging). Your USDC balance is fine — this isn\u2019t a funds issue. Please try again in a moment, and if it persists this needs an SDK update on our end rather than a change on your side.'
+          'Something went wrong confirming your Arc gas balance. Your USDC balance is fine — this isn\u2019t a funds issue. Please try again; if it keeps happening, let us know.'
         );
         setBridgeSteps(prev =>
           prev.map(s => s.state === 'active' ? { ...s, state: 'error' } : s)
@@ -565,7 +587,7 @@ export default function BridgePage() {
 
   // ── Fee / time estimate (kit.estimateBridge) ─────────────────────────────
   // Debounced so we don't fire a new estimate on every keystroke.
-  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null; seconds: number | null } | null>(null);
+  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null } | null>(null);
   const [estimateLoading, setEstimateLoading] = useState(false);
 
   useEffect(() => {
@@ -578,18 +600,19 @@ export default function BridgePage() {
     const t = setTimeout(async () => {
       try {
         const kit = await getAppKit();
-        const est = await (kit as unknown as { estimateBridge: (p: unknown) => Promise<unknown> }).estimateBridge({
-          from: { adapter, chain: fromKey } as unknown,
-          to:   { chain: toKey, recipientAddress: address, useForwarder: true } as unknown,
+        const est = await kit.estimateBridge({
+          from: { adapter, chain: fromKey } as unknown as Parameters<typeof kit.bridge>[0]['from'],
+          to:   { chain: toKey, recipientAddress: address, useForwarder: true } as Parameters<typeof kit.bridge>[0]['to'],
           amount,
         });
         if (cancelled) return;
-        const e = est as { fees?: Array<{ amount?: string | number }>; duration?: number; estimatedDuration?: number; executionDuration?: number };
-        const feeUsdc = Array.isArray(e.fees) && e.fees.length
-          ? e.fees.reduce((sum, f) => sum + (Number(f.amount) || 0), 0)
+        // Real EstimateResult shape has no duration field — sum the fees
+        // array (kit/provider/forwarder entries) for a total USDC fee.
+        const fees = est.fees ?? [];
+        const feeUsdc = fees.length
+          ? fees.reduce((sum, f) => sum + (f.amount != null ? Number(f.amount) || 0 : 0), 0)
           : null;
-        const seconds = e.duration ?? e.estimatedDuration ?? e.executionDuration ?? null;
-        setEstimate({ feeUsdc, seconds });
+        setEstimate({ feeUsdc });
       } catch {
         if (!cancelled) setEstimate(null);
       } finally {
@@ -743,12 +766,6 @@ export default function BridgePage() {
                   {estimateLoading ? '…' : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
                 </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 12, color: '#94A3B8' }}>Estimated time</span>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
-                  {estimateLoading ? '…' : estimate?.seconds != null ? `~${estimate.seconds} secs` : '—'}
-                </span>
-              </div>
             </div>
           )}
 
@@ -798,7 +815,7 @@ export default function BridgePage() {
                 Funds will arrive on {toChain.name} shortly — no action needed on your end.
               </p>
               {successTx && (
-                <a href={`${fromChain.explorerBase}/tx/${successTx}`} target="_blank" rel="noreferrer" style={{
+                <a href={successExplorerUrl || `${fromChain.explorerBase}/tx/${successTx}`} target="_blank" rel="noreferrer" style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
                   color: '#4F46E5', textDecoration: 'none', fontWeight: 600,
                 }}>
