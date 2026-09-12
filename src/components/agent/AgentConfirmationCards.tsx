@@ -29,11 +29,12 @@ import {
   PAYROLL_BATCH_PAY_ABI,
   REGISTRY_UPDATE_CID_ABI,
 } from '@/lib/contracts/agentAbis';
-import { MEMO_ABI, MEMO_CONTRACT_ADDRESS, ERC20_ABI } from '@/lib/contracts/abis';
+import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { findDuplicateWallets } from '@/lib/validation';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useTokenApproval } from '@/lib/approvals/useTokenApproval';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
 import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
@@ -216,7 +217,7 @@ export function UnlistedPaymentCard({
   const { loginMethod } = useEffectiveAddress();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
-
+  const { ensureApproval, invalidateApproval } = useTokenApproval();
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
   const [txHash,   setTxHash]   = useState('');
@@ -267,22 +268,11 @@ export function UnlistedPaymentCard({
       const amountUnits = BigInt(Math.round(Number(amount) * tokenScale));
       const contractAddr = payrollClone as `0x${string}`;
 
-      // ── Allowance check + approval (mirrors dashboard/page.tsx) ────────────
+      // Allowance check + approval — see lib/approvals/useTokenApproval.ts
+      // for the unified cache-check-then-approve flow shared across every
+      // approval call site in the app.
       setPayState('approving');
-      const allowance = await publicClient.readContract({
-        address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
-        args: [walletAddress as `0x${string}`, contractAddr],
-      }) as bigint;
-
-      if (allowance < amountUnits) {
-        const approveTx = await universalWrite({
-          address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
-          args: [contractAddr, amountUnits],
-          // Clear description shown in Rabby / MetaMask before signing:
-          // "Allow Salden to spend up to <amount> <token> for this payment"
-        });
-        await waitForSuccessfulReceipt(publicClient, approveTx);
-      }
+      await ensureApproval({ token: tokenAddr, spender: contractAddr, amount: amountUnits });
 
       setPayState('paying');
       const ref = 'SLD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -375,6 +365,20 @@ export function UnlistedPaymentCard({
     } catch (err) {
       executing.current = false;  // allow retry if the user wants to try again
       const raw = err instanceof Error ? err.message : '';
+      // Allowance-related revert. This call goes through the memo() relay
+      // contract (MEMO_ABI), which wraps every underlying failure as
+      // MemoFailed(bytes returnData) rather than exposing TransferFromFailed
+      // directly (confirmed against MEMO_ABI's own error definitions) — so
+      // this checks for MemoFailed, not TransferFromFailed. Since this call
+      // site only ever executes a payment, any MemoFailed here plausibly
+      // means the underlying transfer failed, and clearing the cache on it
+      // is safe either way: worst case is one unnecessary future
+      // re-approval, never anything unsafe. See
+      // lib/approvals/approvalCache.ts's header for why this can happen
+      // but is never a fund-safety issue.
+      if (/MemoFailed/i.test(raw)) {
+        void invalidateApproval(tokenEntry?.address as `0x${string}`, payrollClone as `0x${string}`);
+      }
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
         : /insufficient|balance/i.test(raw)
@@ -386,7 +390,7 @@ export function UnlistedPaymentCard({
       setPayState('error');
       onResolved('error', msg);
     }
-  }, [canWrite, universalWrite, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
+  }, [canWrite, universalWrite, ensureApproval, invalidateApproval, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
 
   // Previously fired handleConfirm() exactly once on mount, keyed only to
   // [autoConfirm] — if canWrite/publicClient hadn't resolved yet on that
@@ -1127,6 +1131,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   const { loginMethod } = useEffectiveAddress();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const { ensureApproval, invalidateApproval } = useTokenApproval();
   const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [payState, setPayState] = useState<PayState>('idle');
@@ -1210,21 +1215,12 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         (sum, e) => sum + BigInt(Math.round(Number(e.salaryAmount) * 1e6)), 0n,
       );
 
-      setPayState('approving');
-      const allowance = await publicClient.readContract({
-        address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
-        args: [walletAddress as `0x${string}`, contractAddr],
-      }) as bigint;
-
       // One approval for the FULL total covers every batch below — ERC-20
       // allowance persists across multiple sequential transferFrom calls.
-      if (allowance < amountUnits) {
-        const approveTx = await universalWrite({
-          address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
-          args: [contractAddr, amountUnits],
-        });
-        await waitForSuccessfulReceipt(publicClient, approveTx);
-      }
+      // See lib/approvals/useTokenApproval.ts for the unified cache-check-
+      // then-approve flow shared across every approval call site.
+      setPayState('approving');
+      await ensureApproval({ token: tokenAddr, spender: contractAddr, amount: amountUnits });
 
       const receiptEmail = payrollSetup?.email ?? null;
       // BUG FIX: payrollSetup.email is only ever populated by an explicit
@@ -1334,6 +1330,14 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       // some batches already confirmed on-chain — see the identical
       // handling and reasoning in dashboard/page.tsx's handleExecutePayroll.
       const partial = completedHashes.length > 0 && completedHashes.length < chunks.length;
+      // Same allowance-cache invalidation as UnlistedPaymentCard above —
+      // checks for MemoFailed (not TransferFromFailed — see that
+      // component's comment for why), and only when NOT partial (a
+      // partial failure means the allowance was genuinely fine for at
+      // least the first batch).
+      if (!partial && /MemoFailed/i.test(raw)) {
+        void invalidateApproval(CONTRACTS.USDC as `0x${string}`, contractAddr);
+      }
       const msg = cancelled
         ? 'Transaction cancelled.'
         : partial
@@ -1343,7 +1347,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       setPayState('error');
       onResolved('error', msg);
     }
-  }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
+  }, [canWrite, publicClient, loginMethod, targetEmployees, dupWallets, group, payrollClone, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, hydrationGate.ready, hydrationGate.blockedReason, ensureApproval, invalidateApproval]);
 
   // See the identical comment on this pattern in UnlistedPaymentCard above
   // for the canWrite/publicClient wait. Also gated on hydrationGate.ready

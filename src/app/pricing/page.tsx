@@ -19,11 +19,12 @@ import { AppLayout }          from '@/components/layout/AppLayout';
 import { NetworkGuard }       from '@/components/shared/NetworkGuard';
 import { useApp }             from '@/context/AppContext';
 import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
-import { MULTI_TOKEN_FACTORY_ABI, ERC20_ABI } from '@/lib/contracts/abis';
+import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useTokenApproval } from '@/lib/approvals/useTokenApproval';
 import { useCloneAccess } from '@/lib/useCloneAccess';
 import { writeCloneCache } from '@/lib/cloneCache';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
@@ -51,6 +52,7 @@ type DeployStep = 'idle' | 'approving' | 'deploying' | 'done' | 'error';
 export default function PricingPage() {
   const { address, loginMethod } = useEffectiveAddress();
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const { ensureApproval, invalidateApproval } = useTokenApproval();
   const publicClient     = usePublicClient({ chainId: arcTestnet.id });
   const { state, dispatch, addToast } = useApp();
   const { isPremiumUser } = state;
@@ -92,18 +94,12 @@ export default function PricingPage() {
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
       }) as bigint;
 
-      const allowance = await publicClient.readContract({
-        address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'allowance',
-        args: [address, CONTRACTS.MULTI_TOKEN_FACTORY],
-      }) as bigint;
-
-      if (allowance < deployFee) {
-        const approveTx = await universalWrite({
-          address: CONTRACTS.USDC, abi: ERC20_ABI, functionName: 'approve',
-          args: [CONTRACTS.MULTI_TOKEN_FACTORY, deployFee],
-        });
-        await waitForSuccessfulReceipt(publicClient, approveTx);
-      }
+      // See lib/approvals/useTokenApproval.ts — checks the unified approval
+      // cache first and only prompts (and waits for on-chain confirmation
+      // of) a fresh approve if the cached amount is short.
+      await ensureApproval({
+        token: CONTRACTS.USDC as `0x${string}`, spender: CONTRACTS.MULTI_TOKEN_FACTORY as `0x${string}`, amount: deployFee,
+      });
 
       setStep('deploying');
       const deployTx = await universalWrite({
@@ -143,6 +139,15 @@ export default function PricingPage() {
           }
         }
       } catch { /* fall through to showing the original error below */ }
+
+      // If this revert is allowance-related (TransferFromFailed), the
+      // approval cache believed more was approved on-chain than actually
+      // was — clear it so the next attempt honestly re-checks instead of
+      // skipping the approve again. See lib/approvals/approvalCache.ts's
+      // header for why the cache can be wrong here but never unsafe.
+      if (/TransferFromFailed/i.test(String(err))) {
+        void invalidateApproval(CONTRACTS.USDC as `0x${string}`, CONTRACTS.MULTI_TOKEN_FACTORY as `0x${string}`);
+      }
 
       setErrMsg(friendlyErrorMessage(err, 'Transaction failed.'));
       setStep('error');

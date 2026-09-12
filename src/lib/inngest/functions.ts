@@ -57,8 +57,9 @@ import { executeCheckOfacCompliance } from '@/lib/agent/toolExecutors';
 import { checkAndTopUpBalance, ALLOWANCE_CEILING_USDC } from '@/lib/agent/autonomousExecution';
 import { executeContractCall, getTxStatus } from '@/lib/circle/agent-wallet';
 import { isCircleTxTerminal, isCircleTxSuccess } from '@/lib/circle/txState';
-import { getServerPublicClient } from '@/lib/agent/chain';
-import { ERC20_ABI, MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
+import { MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
+import { getCachedApproval, setCachedApproval } from '@/lib/approvals/approvalCache';
+import { arcTestnet } from '@/lib/contracts/config';
 import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
 import { track } from '@/lib/analytics';
 
@@ -264,25 +265,30 @@ export const executeScheduledPayment = inngest.createFunction(
 
       // ── Allowance + approve (batchPay path only) ──────────────────────────
       if (!isSingleTransfer) {
+        // Consults the same unified approval cache every other approval
+        // flow in the app now uses (lib/approvals/approvalCache.ts) instead
+        // of a live on-chain read — the agent wallet's address is a
+        // distinct cache key from any human user's wallet, so this can't
+        // collide with a different flow's cached entry. Still wrapped in
+        // its own step.run so a mid-function crash/retry doesn't need to
+        // repeat the (cheap, side-effect-free) cache read from scratch —
+        // consistent with the rest of this workflow's step boundaries.
         const allowanceStr = await step.run('read-allowance', async () => {
-          const publicClient = getServerPublicClient();
-          const allowance = await publicClient.readContract({
-            address:      schedule.tokenAddress! as `0x${string}`,
-            abi:          ERC20_ABI,
-            functionName: 'allowance',
-            args:         [agent.address as `0x${string}`, payrollCloneAddress as `0x${string}`],
-          }) as bigint;
-          return allowance.toString();
+          const cached = await getCachedApproval(
+            arcTestnet.id, agent.address, schedule.tokenAddress!, payrollCloneAddress,
+          );
+          return cached.amount.toString();
         });
         const allowance = BigInt(allowanceStr);
 
         if (allowance < totalNeeded) {
+          const ceilingAmount = parseUnits(ALLOWANCE_CEILING_USDC, decimals);
           const approveTx = await step.run('submit-approve-tx', async () => {
             const tx = await executeContractCall({
               walletId:             agent.walletId,
               contractAddress:      schedule.tokenAddress!,
               abiFunctionSignature: 'approve(address,uint256)',
-              abiParameters:        [payrollCloneAddress, parseUnits(ALLOWANCE_CEILING_USDC, decimals).toString()],
+              abiParameters:        [payrollCloneAddress, ceilingAmount.toString()],
               idempotencyKey:       `${idempotencyKeyBase}-approve`,
             });
             return { id: tx.id, txHash: tx.txHash };
@@ -298,6 +304,18 @@ export const executeScheduledPayment = inngest.createFunction(
               reason: approveResult?.state === 'FAILED' ? ('approve-reverted' as const) : ('approve-timed-out' as const),
             };
           }
+
+          // Only cache once actually confirmed on-chain (the poll above
+          // succeeded) — see lib/approvals/approvalCache.ts's header on why
+          // caching an amount that never lands would make the next
+          // scheduled run wrongly skip an approve it still needs. Its own
+          // step.run so a crash right after this point doesn't re-submit a
+          // second approve tx on retry — Inngest just replays the already-
+          // memoized 'submit-approve-tx' result and re-runs this cheap
+          // write instead.
+          await step.run('cache-approval', async () => {
+            await setCachedApproval(arcTestnet.id, agent.address, schedule.tokenAddress!, payrollCloneAddress, ceilingAmount);
+          });
         }
       }
 

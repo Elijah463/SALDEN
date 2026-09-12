@@ -90,8 +90,9 @@ interface BridgeChainConfig {
 // USDC uses 6 decimals on every one of these chains (Circle's own
 // "6-decimal rule" — the only exception anywhere is Arc's *native gas*
 // representation, which is a separate 18-decimal value never used for
-// ERC-20 balance/transfer calls; see arcTestnet's own definition).
-const USDC_DECIMALS = 6;
+// ERC-20 balance/transfer calls; see arcTestnet's own definition). Relied
+// on directly below via the hardcoded 1_000_000n divisor rather than a
+// named constant, since every other bridge chain uses the same rule.
 
 const BRIDGE_CHAINS: BridgeChainConfig[] = [
   { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet,      explorerBase: ARCSCAN_BASE },
@@ -106,6 +107,32 @@ function chainByKey(key: AppKitChain): BridgeChainConfig {
   return BRIDGE_CHAINS.find(c => c.key === key)!;
 }
 
+// Small, self-contained "..." replacement for in-progress fee/time
+// estimates — bouncing dots read as "actively fetching" rather than a
+// static ellipsis, which on a slow estimate call could look frozen/stuck.
+// Keyframes are scoped to this component's own <style> tag rather than
+// added to a shared global stylesheet, so this can't collide with or
+// depend on anything else in the app.
+function BouncingDots() {
+  return (
+    <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', height: 12, verticalAlign: 'middle' }}>
+      {[0, 1, 2].map(i => (
+        <span key={i} style={{
+          width: 4, height: 4, borderRadius: '50%', background: '#94A3B8',
+          animation: 'saldenBridgeDotBounce 1.1s ease-in-out infinite',
+          animationDelay: `${i * 0.15}s`,
+        }} />
+      ))}
+      <style>{`
+        @keyframes saldenBridgeDotBounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+          40%           { transform: translateY(-4px); opacity: 1; }
+        }
+      `}</style>
+    </span>
+  );
+}
+
 // Standalone read-only clients, independent of the app's wagmi config
 // (which only registers Arc Testnet, since that's the only chain the rest
 // of the app ever needs a *connected wallet* on) — these are only used for
@@ -113,16 +140,22 @@ function chainByKey(key: AppKitChain): BridgeChainConfig {
 const publicClients = new Map<AppKitChain, ReturnType<typeof createPublicClient>>();
 function clientFor(chain: BridgeChainConfig) {
   if (!publicClients.has(chain.key)) {
-    // Arc Testnet specifically is routed through our own /api/rpc proxy —
-    // same reasoning as Web3Provider.tsx's transport config: Arc's public
-    // RPC intermittently rate-limits, and going through our own domain
-    // gets this the same retry + short-TTL de-dup as every other Arc read
-    // in the app. The other bridge chains (Sepolia, Base Sepolia, etc.)
-    // are untouched — they're different networks with no reported issue
-    // and no reason to route through an Arc-specific proxy.
+    // BUG FIX: every one of these five non-Arc chains was previously read
+    // directly from the browser via a bare http() transport — no proxy, no
+    // retry, no CORS-shaped-429 protection. Since Ethereum Sepolia is the
+    // DEFAULT "to" chain, that meant the destination balance showed a
+    // permanent "—" for basically every visitor on page load, right next
+    // to Arc's own balance display working fine (Arc's already had a
+    // proxy). See app/api/bridge/rpc/route.ts's header for the full root
+    // cause — it's the exact same rate-limit-wearing-a-CORS-mask issue
+    // app/api/rpc/route.ts's header documents for Arc, just never
+    // extended to these chains until now.
+    const appUrl = typeof window !== 'undefined'
+      ? ''
+      : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz').replace(/\/$/, '');
     const transport = chain.key === 'Arc_Testnet'
-      ? http(typeof window !== 'undefined' ? '/api/rpc' : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz').replace(/\/$/, '') + '/api/rpc')
-      : http();
+      ? http(typeof window !== 'undefined' ? '/api/rpc' : appUrl + '/api/rpc')
+      : http(`${appUrl}/api/bridge/rpc?chain=${chain.key}`);
     publicClients.set(chain.key, createPublicClient({ chain: chain.viemChain, transport }));
   }
   return publicClients.get(chain.key)!;
@@ -195,6 +228,31 @@ function BridgeStepList({ steps }: { steps: BridgeStep[] }) {
       ))}
     </div>
   );
+}
+
+// Collapses the real internal step-by-step state (approve/burn/attest/mint
+// — driven by setStep() and the SDK's own step names exactly as before;
+// none of that changed) into the 2-item list the UI actually shows:
+// "Approve" then a single "Bridging" that covers burn+attest+mint. Purely
+// a display-time transform — bridgeSteps itself, and everything that
+// derives from the SDK result to populate it, is untouched.
+function toDisplaySteps(steps: BridgeStep[]): BridgeStep[] {
+  const approve = steps.find(s => s.key === 'approve');
+  const rest    = steps.filter(s => s.key !== 'approve');
+
+  let bridgingState: BridgeStep['state'] = 'pending';
+  if (rest.some(s => s.state === 'error')) {
+    bridgingState = 'error';
+  } else if (rest.length > 0 && rest.every(s => s.state === 'done')) {
+    bridgingState = 'done';
+  } else if (approve?.state === 'done' || rest.some(s => s.state === 'active' || s.state === 'done')) {
+    bridgingState = 'active';
+  }
+
+  return [
+    { key: 'approve',  label: 'Approve',  state: approve?.state ?? 'pending' },
+    { key: 'bridging', label: 'Bridging', state: bridgingState },
+  ];
 }
 
 // ── Chain badge + selector ────────────────────────────────────────────────────
@@ -368,7 +426,8 @@ export default function BridgePage() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!address) { setToBalance(null); return; }
+    setToBalance(null); // clear immediately — otherwise the FROM chain's old value could briefly show mislabeled as the new TO chain's balance
+    if (!address) return;
     setToBalanceLoading(true);
     fetchUsdcBalance(toChain, address as `0x${string}`).then(b => {
       if (!cancelled) { setToBalance(b); setToBalanceLoading(false); }
@@ -378,7 +437,8 @@ export default function BridgePage() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!address) { setBalance(null); return; }
+    setBalance(null); // same reasoning as the TO-chain effect above
+    if (!address) return;
     setBalanceLoading(true);
     fetchUsdcBalance(fromChain, address as `0x${string}`).then(b => {
       if (!cancelled) { setBalance(b); setBalanceLoading(false); }
@@ -587,7 +647,7 @@ export default function BridgePage() {
 
   // ── Fee / time estimate (kit.estimateBridge) ─────────────────────────────
   // Debounced so we don't fire a new estimate on every keystroke.
-  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null } | null>(null);
+  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null; timeLabel: string | null } | null>(null);
   const [estimateLoading, setEstimateLoading] = useState(false);
 
   useEffect(() => {
@@ -612,7 +672,24 @@ export default function BridgePage() {
         const feeUsdc = fees.length
           ? fees.reduce((sum, f) => sum + (f.amount != null ? Number(f.amount) || 0 : 0), 0)
           : null;
-        setEstimate({ feeUsdc });
+        // There's no duration field to read, but there IS a real, honest
+        // signal for which CCTP v2 mode this transfer will run in: the
+        // 'provider' fee entry is CCTP v2's own protocol fee, which per
+        // Circle's own Bridge Kit documentation is non-zero (1–14 bps)
+        // ONLY under Fast Transfer and exactly 0 under Standard Transfer.
+        // Each mode has a publicly documented real timing range — Fast
+        // Transfer settles in ~8–20 seconds regardless of source chain
+        // (Circle's CCTP V2 launch announcement); Standard Transfer waits
+        // for the source chain's own block finality, which varies by
+        // chain (seconds to low minutes on L2s, materially longer from
+        // Ethereum) — so rather than fabricate one number for every chain,
+        // we say plainly that it depends on the source chain.
+        const providerFee = fees.find(f => f.type === 'provider');
+        const isFast = !!providerFee && providerFee.amount != null && Number(providerFee.amount) > 0;
+        const timeLabel = isFast
+          ? '~8–20 seconds (Fast Transfer)'
+          : 'A few minutes — depends on the source chain\u2019s finality time';
+        setEstimate({ feeUsdc, timeLabel });
       } catch {
         if (!cancelled) setEstimate(null);
       } finally {
@@ -763,7 +840,13 @@ export default function BridgePage() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, color: '#94A3B8' }}>Fees</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
-                  {estimateLoading ? '…' : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
+                  {estimateLoading ? <BouncingDots /> : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, color: '#94A3B8' }}>Estimated time</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
+                  {estimateLoading ? <BouncingDots /> : estimate?.timeLabel ?? '—'}
                 </span>
               </div>
             </div>
@@ -800,31 +883,37 @@ export default function BridgePage() {
 
           {bridgeSteps.length > 0 && (
             <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, padding: 18, marginTop: 16 }}>
-              <BridgeStepList steps={bridgeSteps} />
+              <BridgeStepList steps={toDisplaySteps(bridgeSteps)} />
             </div>
           )}
 
-          {successTx && !bridging && (
-            <div style={{
-              background: '#F0FDFA', border: '1px solid #99F6E4', borderRadius: 16,
-              padding: 18, marginTop: 16, textAlign: 'center',
-            }}>
-              <CheckCircle2 size={28} color="#14B8A6" style={{ margin: '0 auto 10px' }} />
-              <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', marginBottom: 4 }}>Bridge submitted</p>
-              <p style={{ fontSize: 12, color: '#64748B', marginBottom: 10 }}>
-                Funds will arrive on {toChain.name} shortly — no action needed on your end.
-              </p>
-              {successTx && (
-                <a href={successExplorerUrl || `${fromChain.explorerBase}/tx/${successTx}`} target="_blank" rel="noreferrer" style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
-                  color: '#4F46E5', textDecoration: 'none', fontWeight: 600,
-                }}>
-                  View transaction <ExternalLink size={11} />
-                </a>
-              )}
-            </div>
-          )}
         </div>
+
+        {/* Success modal — matches Swap's exact modal pattern (same overlay,
+            card, close button, and icon styling) rather than this page's
+            previous one-off bottom-of-page block, per the request to make
+            every page's success state look and feel consistent. */}
+        {successTx && !bridging && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <div style={{ background: '#fff', borderRadius: 20, padding: 32, maxWidth: 380, width: '100%', textAlign: 'center', position: 'relative' }}>
+              <button onClick={() => { setSuccessTx(null); setSuccessExplorerUrl(''); setAmount(''); setBridgeSteps([]); }}
+                style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
+                <X size={20} />
+              </button>
+              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+                <CheckCircle2 size={32} color="#fff" fill="#059669" />
+              </div>
+              <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Bridged successfully</h3>
+              <p style={{ fontSize: 14, color: '#64748B', marginBottom: 16 }}>
+                Funds will arrive on {toChain.name} shortly.
+              </p>
+              <a href={successExplorerUrl || `${fromChain.explorerBase}/tx/${successTx}`} target="_blank" rel="noreferrer"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#4F46E5', fontWeight: 600, textDecoration: 'none' }}>
+                View transaction <ExternalLink size={13} />
+              </a>
+            </div>
+          </div>
+        )}
       </AppLayout>
     </NetworkGuard>
   );

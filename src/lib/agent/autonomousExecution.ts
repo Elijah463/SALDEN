@@ -53,6 +53,8 @@ import { executeContractCall, pollTxStatus, type TxResponse } from '@/lib/circle
 import { requestFaucetDrip } from '@/lib/circle/faucet';
 import { isCircleTxSuccess } from '@/lib/circle/txState';
 import { ERC20_ABI, MEMO_ABI, MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
+import { getCachedApproval, setCachedApproval } from '@/lib/approvals/approvalCache';
+import { arcTestnet } from '@/lib/contracts/config';
 
 export interface AutonomousPayResult {
   ok:              boolean;
@@ -249,7 +251,6 @@ export async function executeAutonomousTransfer(params: {
 }
 
 export async function executeAutonomousBatchPay(params: AutonomousPayParams): Promise<AutonomousPayResult> {
-  const publicClient = getServerPublicClient();
   const totalNeeded = params.amounts.reduce((sum, a) => sum + a, 0n);
 
   if (totalNeeded <= 0n || params.employees.length === 0) {
@@ -268,25 +269,24 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
 
   // ── 2. Allowance check — batchPay pulls via transferFrom(msg.sender, ...),
   //    so the AGENT wallet (not the employer) must approve the payroll
-  //    contract directly. ──────────────────────────────────────────────────
-  let allowance: bigint;
-  try {
-    allowance = await publicClient.readContract({
-      address: params.tokenAddress as `0x${string}`, abi: ERC20_ABI,
-      functionName: 'allowance',
-      args: [params.agentWalletAddress as `0x${string}`, params.payrollCloneAddress as `0x${string}`],
-    }) as bigint;
-  } catch {
-    return { ok: false, error: 'Could not read the agent wallet\'s token allowance.', faucetAttempted };
-  }
+  //    contract directly. Uses the same unified approval cache every other
+  //    approval flow in the app now uses (lib/approvals/approvalCache.ts)
+  //    instead of a live on-chain read — this agent wallet's own address is
+  //    naturally a distinct cache key from any human user's wallet, so
+  //    there's no risk of this colliding with a different flow's entry. ──
+  const cachedApproval = await getCachedApproval(
+    arcTestnet.id, params.agentWalletAddress, params.tokenAddress, params.payrollCloneAddress,
+  );
+  const allowance = cachedApproval.amount;
 
   if (allowance < totalNeeded) {
     try {
+      const ceilingAmount = parseUnits(ALLOWANCE_CEILING_USDC, params.tokenDecimals);
       const approveTx = await executeContractCall({
         walletId:             params.agentWalletId,
         contractAddress:      params.tokenAddress,
         abiFunctionSignature: 'approve(address,uint256)',
-        abiParameters:        [params.payrollCloneAddress, parseUnits(ALLOWANCE_CEILING_USDC, params.tokenDecimals).toString()],
+        abiParameters:        [params.payrollCloneAddress, ceilingAmount.toString()],
         idempotencyKey:       `${params.idempotencyKeyBase}-approve`,
       });
       const confirmed = await pollWithBudget(approveTx.id, APPROVE_POLL_ATTEMPTS);
@@ -296,6 +296,11 @@ export async function executeAutonomousBatchPay(params: AutonomousPayParams): Pr
           error: 'The agent wallet\'s spending approval hasn\'t confirmed on-chain yet. Please ask me to try the payment again in a moment.',
         };
       }
+      // Only cache once actually confirmed on-chain — see
+      // lib/approvals/approvalCache.ts's header on why caching an amount
+      // that never lands would make the next payment wrongly skip an
+      // approve it still needs.
+      await setCachedApproval(arcTestnet.id, params.agentWalletAddress, params.tokenAddress, params.payrollCloneAddress, ceilingAmount);
     } catch (err) {
       return { ok: false, faucetAttempted, error: `Failed to approve the payroll contract to spend from the agent wallet: ${(err as Error).message}` };
     }

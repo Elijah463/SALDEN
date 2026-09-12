@@ -36,6 +36,7 @@ import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
+import { useTokenApproval } from '@/lib/approvals/useTokenApproval';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
 import { MEMO_ABI, MEMO_CONTRACT_ADDRESS } from '@/lib/contracts/abis';
 import { Button }         from '@/components/shared/Button';
@@ -60,7 +61,6 @@ import {
   MULTI_TOKEN_PAYROLL_ABI,
   REGISTRY_FACTORY_ABI,
   REGISTRY_ABI,
-  ERC20_ABI,
 } from '@/lib/contracts/abis';
 import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
 
@@ -530,6 +530,7 @@ export default function DashboardPage() {
   const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
   const publicClient              = usePublicClient({ chainId: arcTestnet.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
+  const { ensureApproval, invalidateApproval } = useTokenApproval();
   const sign                      = useCachedSignMessage();
 
   const {
@@ -912,23 +913,13 @@ export default function DashboardPage() {
       setExecuteStatus(`Checking ${tokenSymbol} allowance…`);
       setExecuteProgress({ current: 0, total: chunks.length });
 
-      const allowance = await publicClient.readContract({
-        address: tokenAddr, abi: ERC20_ABI, functionName: 'allowance',
-        args: [address as `0x${string}`, contractAddr],
-      }) as bigint;
-
       // One approval for the FULL total covers every batch below — ERC-20
       // allowance persists across multiple sequential transferFrom calls,
-      // so there's no need to re-approve per batch.
-      if (allowance < totalAmount) {
-        setExecuteStatus(`Approving ${tokenSymbol} transfer…`);
-        const approveTx = await universalWrite({
-          address: tokenAddr, abi: ERC20_ABI, functionName: 'approve',
-          args: [contractAddr, totalAmount],
-        }, setExecuteStatus);
-        setExecuteStatus('Waiting for approval confirmation…');
-        await waitForSuccessfulReceipt(publicClient, approveTx);
-      }
+      // so there's no need to re-approve per batch. See
+      // lib/approvals/useTokenApproval.ts for the unified cache-check-then-
+      // approve flow (only prompts a fresh on-chain approve if the cached
+      // amount is short).
+      await ensureApproval({ token: tokenAddr, spender: contractAddr, amount: totalAmount, onStatusChange: setExecuteStatus });
 
       // BUG FIX: payrollSetup.email is only ever populated by an explicit
       // "Unlock your data" (or "Sync now") click — see usePayrollSync.ts's
@@ -1109,6 +1100,16 @@ export default function DashboardPage() {
       // what previously made an already-successful batch look like nothing
       // had happened, risking a duplicate payment if retried from scratch.
       const partial = completedTxHashes.length > 0 && completedTxHashes.length < chunks.length;
+      // If this looks allowance-related (TransferFromFailed) and NOT a
+      // partial multi-batch failure (a partial failure means some batches
+      // already succeeded, so the allowance genuinely was fine — this is
+      // specifically for the case where the cache believed more was
+      // approved on-chain than actually was, and the very first batch
+      // failed because of it). Clears the cache entry so the next attempt
+      // honestly re-checks instead of repeating the same wrong skip.
+      if (!partial && /TransferFromFailed/i.test(msg)) {
+        void invalidateApproval(tokenAddr, contractAddr);
+      }
       const friendly = cancelled
         ? 'Transaction cancelled.'
         : partial

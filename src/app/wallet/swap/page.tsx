@@ -43,6 +43,7 @@ import { AppLayout }           from '@/components/layout/AppLayout';
 import { NetworkGuard }        from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite }   from '@/lib/circle/useUniversalWrite';
+import { useTokenApproval }    from '@/lib/approvals/useTokenApproval';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { txLink, arcTestnet }  from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
@@ -58,7 +59,8 @@ type SwapStep = 'approve' | 'swap' | 'confirm' | '';
 export default function SwapPage() {
   const router = useRouter();
   const { address, isConnected } = useEffectiveAddress();
-  const { writeContract: universalWrite, sendTransaction, canWrite } = useUniversalWrite();
+  const { sendTransaction, canWrite } = useUniversalWrite();
+  const { ensureApproval } = useTokenApproval();
   const publicClient = usePublicClient({ chainId: arcTestnet.id });
 
   const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(TOKENS[0]);
@@ -140,38 +142,18 @@ export default function SwapPage() {
     try {
       const rawAmount = toRawAmount(amountIn, effTokenIn.decimals);
 
-      // Approve LI.FI's contract to spend tokenIn, if not already approved
-      // for at least this amount.
+      // Approve LI.FI's contract to spend tokenIn, if the unified
+      // approval cache doesn't already show enough approved — see
+      // lib/approvals/useTokenApproval.ts for the full flow (cache check,
+      // approve-if-short, wait for on-chain confirmation before caching
+      // the new amount so this can't move on before the allowance is
+      // actually live — the same race that used to make the swap below
+      // intermittently revert with TRANSFER_FROM_FAILED if it ran too
+      // soon after a freshly-broadcast approve).
       setSwapStep('approve');
-      const allowance = await publicClient.readContract({
-        address: effTokenIn.address, abi: ERC20_ABI, functionName: 'allowance',
-        args: [address as `0x${string}`, quote.estimate.approvalAddress],
-      }) as bigint;
-
-      if (allowance < rawAmount) {
-        const approveTxHash = await universalWrite({
-          address: effTokenIn.address, abi: ERC20_ABI, functionName: 'approve',
-          args: [quote.estimate.approvalAddress, rawAmount],
-        });
-        // BUG FIX: the swap transaction right below depends on this
-        // allowance actually being live on-chain. Previously we moved on
-        // the instant the approve tx was *broadcast*, not once it was
-        // *mined* — so the swap's internal transferFrom would run against
-        // an allowance that was still 0 (approve still pending in the
-        // mempool), reverting with TRANSFER_FROM_FAILED. That's also why
-        // clicking Swap a second time "just worked": by then the approve
-        // from the first attempt had finally landed. Waiting for the
-        // receipt here closes that race for good.
-        //
-        // Uses waitForSuccessfulReceipt (bounded ~45s timeout) rather than
-        // calling publicClient.waitForTransactionReceipt directly — Arc's
-        // public RPC intermittently rate-limits, and the raw viem call has
-        // no such bound (its default can run for minutes), which is
-        // exactly what was showing up as "stuck on Approve forever, but a
-        // refresh shows it already went through": the approve had already
-        // landed on-chain, this wait just never found out.
-        await waitForSuccessfulReceipt(publicClient, approveTxHash);
-      }
+      await ensureApproval({
+        token: effTokenIn.address, spender: quote.estimate.approvalAddress, amount: rawAmount,
+      });
 
       // Execute the swap — LI.FI's own pre-built, already-encoded transaction
       setSwapStep('swap');
@@ -205,7 +187,7 @@ export default function SwapPage() {
       setSwapping(false);
       setSwapStep('');
     }
-  }, [effTokenIn, effTokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, universalWrite, sendTransaction]);
+  }, [effTokenIn, effTokenOut, amountIn, amountOut, quote, canWrite, address, publicClient, ensureApproval, sendTransaction]);
 
   const insufficientBalance = !!amountIn && !!balanceIn && parseFloat(amountIn) > parseFloat(balanceIn.replace(/,/g, ''));
   const canSwap = !!effTokenIn && !!effTokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite && !insufficientBalance;
