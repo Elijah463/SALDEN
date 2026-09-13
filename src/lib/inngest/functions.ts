@@ -211,6 +211,18 @@ export const executeScheduledPayment = inngest.createFunction(
         });
         return { scheduleId: schedule.id, ok: false, reason: 'no-payroll-clone' as const };
       }
+      // Reaching here means either isSingleTransfer is true, or
+      // payrollCloneAddress is non-null — the guard just above is the only
+      // place that returns early for the one case where neither holds.
+      // Everything below that branches on `!isSingleTransfer` only ever
+      // runs in the second case, so this is a genuinely proven non-null
+      // value. TypeScript can't trace that relationship between two
+      // separately-computed values this far through the function (or
+      // through the step.run closures further down), which is what
+      // Vercel's build was correctly catching — but this `as` is backed by
+      // the runtime check directly above it, not a bare assertion. Used in
+      // place of payrollCloneAddress everywhere below.
+      const spenderAddress = payrollCloneAddress as `0x${string}`;
 
       // ── Compliance / OFAC screening — fails CLOSED on error ──────────────
       // Every recipient must come back explicitly "not sanctioned". If the
@@ -275,7 +287,7 @@ export const executeScheduledPayment = inngest.createFunction(
         // consistent with the rest of this workflow's step boundaries.
         const allowanceStr = await step.run('read-allowance', async () => {
           const cached = await getCachedApproval(
-            arcTestnet.id, agent.address, schedule.tokenAddress!, payrollCloneAddress,
+            arcTestnet.id, agent.address, schedule.tokenAddress!, spenderAddress,
           );
           return cached.amount.toString();
         });
@@ -288,7 +300,7 @@ export const executeScheduledPayment = inngest.createFunction(
               walletId:             agent.walletId,
               contractAddress:      schedule.tokenAddress!,
               abiFunctionSignature: 'approve(address,uint256)',
-              abiParameters:        [payrollCloneAddress, ceilingAmount.toString()],
+              abiParameters:        [spenderAddress, ceilingAmount.toString()],
               idempotencyKey:       `${idempotencyKeyBase}-approve`,
             });
             return { id: tx.id, txHash: tx.txHash };
@@ -314,7 +326,7 @@ export const executeScheduledPayment = inngest.createFunction(
           // memoized 'submit-approve-tx' result and re-runs this cheap
           // write instead.
           await step.run('cache-approval', async () => {
-            await setCachedApproval(arcTestnet.id, agent.address, schedule.tokenAddress!, payrollCloneAddress, ceilingAmount);
+            await setCachedApproval(arcTestnet.id, agent.address, schedule.tokenAddress!, spenderAddress, ceilingAmount);
           });
         }
       }
@@ -348,7 +360,7 @@ export const executeScheduledPayment = inngest.createFunction(
               walletId:             agent.walletId,
               contractAddress:      MEMO_CONTRACT_ADDRESS,
               abiFunctionSignature: 'memo(address,bytes,bytes32,bytes)',
-              abiParameters:        [payrollCloneAddress, batchData, keccak256(memoHex), memoHex],
+              abiParameters:        [spenderAddress, batchData, keccak256(memoHex), memoHex],
               idempotencyKey:       `${idempotencyKeyBase}-pay`,
             });
             return { id: tx.id, txHash: tx.txHash };
