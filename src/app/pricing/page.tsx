@@ -84,6 +84,7 @@ export default function PricingPage() {
   // shown until the read completes (or if it fails).
   const [priceUsdc, setPriceUsdc] = useState<number>(1.99);
   useEffect(() => {
+    if (!publicClient) return;
     let cancelled = false;
     (async () => {
       try {
