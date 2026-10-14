@@ -50,12 +50,19 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as { walletAddress?: string; amount?: number; grossPayrollTotal?: number };
     const { walletAddress, amount, grossPayrollTotal } = body;
-    const proBlock = await requirePro(walletAddress);
-    if (proBlock) return proBlock;
 
+    // BUG FIX: this validation used to run AFTER requirePro(walletAddress)
+    // below, which both let requirePro be called with a possibly-undefined
+    // address (a type error TypeScript now correctly flags) and meant an
+    // unauthenticated request with a missing walletAddress would hit the
+    // Pro-tier check before ever getting a clean 400 for the actual
+    // missing field.
     if (!walletAddress || typeof amount !== 'number' || typeof grossPayrollTotal !== 'number') {
       return NextResponse.json({ error: 'walletAddress, amount, and grossPayrollTotal are required.' }, { status: 400 });
     }
+
+    const proBlock = await requirePro(walletAddress);
+    if (proBlock) return proBlock;
 
     const session = getSession(req, walletAddress);
     if (!session.ok) {
