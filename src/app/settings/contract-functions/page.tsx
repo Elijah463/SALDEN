@@ -274,7 +274,7 @@ export default function ContractFunctionsPage() {
         <Card title="Tokens" who="Owner or agent can add a token. Only the owner can remove one, and only once its balance is zero. USDC can never be removed.">
           {tokens.length === 0 && <p style={{ fontSize: 13, color: '#64748B', margin: 0 }}>Loading tokens...</p>}
           {tokens.map(t => {
-            const reg = tokenRegistry.find(r => r.address.toLowerCase() === t.address.toLowerCase());
+            const reg = Object.values(tokenRegistry).find(r => r.address.toLowerCase() === t.address.toLowerCase());
             const isUsdc = t.address.toLowerCase() === CONTRACTS.USDC.toLowerCase();
             return (
               <div key={t.address} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px', borderRadius: 10, border: '1px solid #E2E8F0', background: '#F8F9FA' }}>
@@ -318,7 +318,7 @@ export default function ContractFunctionsPage() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <select style={{ ...inputStyle, flex: 1, minWidth: 200 }} value={withdrawToken} onChange={e => setWithdrawToken(e.target.value)}>
               <option value="">Choose a token</option>
-              {tokens.map(t => <option key={t.address} value={t.address}>{tokenRegistry.find(r => r.address.toLowerCase() === t.address.toLowerCase())?.symbol ?? truncAddr(t.address)}</option>)}
+              {tokens.map(t => <option key={t.address} value={t.address}>{Object.values(tokenRegistry).find(r => r.address.toLowerCase() === t.address.toLowerCase())?.symbol ?? truncAddr(t.address)}</option>)}
             </select>
             <Button variant="primary" disabled={!withdrawToken || busy !== null}
               onClick={() => run('Withdrawal', 'withdraw', [withdrawToken], () => setWithdrawToken(''))}>
