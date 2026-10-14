@@ -22,9 +22,12 @@
  */
 
 import { kvGetStrict, kvSet, kvAvailable } from '@/lib/kv';
+import { arcChain } from '@/lib/contracts/config';
 
+// Scoped by chain ID: a "granted" flag recorded on a testnet says nothing about this
+// network, and trusting it would skip the on-chain permission steps here.
 function kvKey(walletAddress: string): string {
-  return `agentPermissionsGranted:${walletAddress.toLowerCase()}`;
+  return `agentPermissionsGranted:${arcChain.id}:${walletAddress.toLowerCase()}`;
 }
 
 /** True only once both on-chain grants have been confirmed and recorded.

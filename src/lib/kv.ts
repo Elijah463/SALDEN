@@ -198,3 +198,48 @@ export async function kvGetStrict<T>(key: string): Promise<T | null> {
   if (data.result == null) return null;
   return JSON.parse(data.result) as T;
 }
+
+/**
+ * Lists keys matching a glob pattern (Redis SCAN). Used only by the one-off admin purge,
+ * never on a request path. Throws if the store is not configured or a request fails, so the
+ * caller can report that instead of reporting an empty result. Stops after `maxKeys`.
+ */
+export async function kvScanKeys(pattern: string, maxKeys = 5000): Promise<string[]> {
+  if (!kvAvailable()) throw new Error('KV store is not configured');
+  const found: string[] = [];
+  let cursor = '0';
+  for (let i = 0; i < 500; i++) {
+    const res = await fetch(restUrl() as string, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(['SCAN', cursor, 'MATCH', pattern, 'COUNT', 500]),
+      cache: 'no-store',
+    });
+    if (!res.ok) throw new Error(`KV scan failed (${res.status})`);
+    const data = await res.json() as { result?: [string | number, string[]] };
+    if (!data.result) throw new Error('KV scan returned no result');
+    cursor = String(data.result[0]);
+    found.push(...data.result[1]);
+    if (found.length >= maxKeys) return Array.from(new Set(found)).slice(0, maxKeys);
+    if (cursor === '0') break;
+  }
+  return Array.from(new Set(found));
+}
+
+/** Deletes many keys in chunks. Returns how many keys the store reported deleting. Throws on failure. */
+export async function kvDeleteMany(keys: string[]): Promise<number> {
+  if (!kvAvailable()) throw new Error('KV store is not configured');
+  let deleted = 0;
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = keys.slice(i, i + 100);
+    const res = await fetch(restUrl() as string, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(['DEL', ...chunk]),
+    });
+    if (!res.ok) throw new Error(`KV delete failed (${res.status})`);
+    const data = await res.json() as { result?: number };
+    deleted += Number(data.result ?? 0);
+  }
+  return deleted;
+}

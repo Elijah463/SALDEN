@@ -16,12 +16,18 @@
  * stateless design (this file is the one piece of state that design
  * intentionally didn't have, and needs, specifically for this).
  *
- * Backed by lib/kv.ts (with an in-memory fallback) rather than a bare Map
- * like rateLimiter.ts, because this is a genuine security control, not
- * just a UX throttle: under-counting attempts across serverless instances
- * would materially weaken the brute-force protection this exists to
- * provide, whereas rateLimiter.ts under-counting just makes a UX-only
- * limit slightly more generous.
+ * Backed by lib/kv.ts when a KV store is attached, because this is a genuine
+ * security control: counting attempts across serverless instances is what makes
+ * the brute-force protection strong.
+ *
+ * ── Why there is now an in-memory fallback ──────────────────────────────
+ * This used to FAIL CLOSED: if KV was not attached to the Vercel project (or
+ * a KV call errored), every verify-otp request was refused, so every login
+ * showed "Too many incorrect attempts" on the very first try. That is what
+ * hit the mainnet deployment, which has no KV store attached. It now falls
+ * back to a per-instance counter (same approach as rateLimiter.ts). The cap
+ * still applies on every instance; it is just not shared between instances.
+ * Attach a KV store to get the strict, shared version.
  */
 
 import crypto from 'crypto';
@@ -41,15 +47,37 @@ export interface OtpAttemptCheck {
   attemptsRemaining: number;
 }
 
+// ── In-memory fallback (used only when KV is missing or errors) ─────────────
+interface LocalCounter { count: number; resetAt: number }
+const _local = new Map<string, LocalCounter>();
+
+function pruneLocal(now: number): void {
+  if (_local.size < 2000) return;
+  for (const [k, v] of _local) if (v.resetAt <= now) _local.delete(k);
+}
+
+function bumpLocal(key: string): number {
+  const now = Date.now();
+  pruneLocal(now);
+  const existing = _local.get(key);
+  if (!existing || existing.resetAt <= now) {
+    _local.set(key, { count: 1, resetAt: now + WINDOW_SECONDS * 1000 });
+    return 1;
+  }
+  existing.count += 1;
+  return existing.count;
+}
+
 /**
  * Call this ONCE per verify-otp request, before checking the submitted code, so
- * even a request that errors later still consumed an attempt. The counter lives
- * in KV so every instance shares it. If the counter cannot be updated, the attempt
- * is refused. Guessing must never get more tries because a store is unreachable.
+ * even a request that errors later still consumed an attempt. Uses the shared KV
+ * counter when available; otherwise (no KV attached, or the call failed) it counts
+ * in this instance's memory, so a missing store never locks every user out.
  */
 export async function checkAndConsumeOtpAttempt(token: string): Promise<OtpAttemptCheck> {
-  if (!kvAvailable()) return { allowed: false, attemptsRemaining: 0 };
-  const count = await kvIncr(keyFor(token), WINDOW_SECONDS);
-  if (count === null) return { allowed: false, attemptsRemaining: 0 };
+  const key = keyFor(token);
+  let count: number | null = null;
+  if (kvAvailable()) count = await kvIncr(key, WINDOW_SECONDS);
+  if (count === null) count = bumpLocal(key);
   return { allowed: count <= MAX_ATTEMPTS, attemptsRemaining: Math.max(0, MAX_ATTEMPTS - count) };
 }

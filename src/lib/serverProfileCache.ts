@@ -27,14 +27,17 @@
  */
 
 import { kvGet, kvSet } from '@/lib/kv';
+import { arcChain } from '@/lib/contracts/config';
 
 export interface CachedProfile {
   companyName?: string;
   email?:       string;
 }
 
+// Scoped by chain ID so profile data cached under a previous network is never served on
+// this one (see serverCloneCache.ts).
 function cacheKey(address: string): string {
-  return `profile:${address.toLowerCase()}`;
+  return `profile:${arcChain.id}:${address.toLowerCase()}`;
 }
 
 // 30 days, same rationale as serverCloneCache.ts's TTL, long enough that a

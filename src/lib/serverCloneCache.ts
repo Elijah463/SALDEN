@@ -37,14 +37,18 @@
  */
 
 import { kvGet, kvSet } from '@/lib/kv';
+import { arcChain } from '@/lib/contracts/config';
 
 export interface CachedClones {
   registryClone?: string;
   payrollClone?:  string;
 }
 
+// Scoped by chain ID. Keys used to be just `clones:<address>`, so entries written while the
+// app pointed at a testnet were still served after switching to mainnet. Old unscoped keys
+// are simply never read again; app/api/admin/purge-legacy-cache deletes them.
 function cacheKey(address: string): string {
-  return `clones:${address.toLowerCase()}`;
+  return `clones:${arcChain.id}:${address.toLowerCase()}`;
 }
 
 // 30 days, comfortably long since these values never change once set, but

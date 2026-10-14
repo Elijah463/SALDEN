@@ -77,14 +77,31 @@ export async function isProWallet(address: string): Promise<boolean> {
   return (await getProStatus(address)).active;
 }
 
-/** Counts one free-tier message in the current fixed window. Fails closed. */
+// Per-instance fallback counter, used only when no KV store is attached or a KV call
+// fails. Without it, free chat was refused outright on every message.
+const _freeLocal = new Map<string, number>();
+
+function bumpFreeLocal(key: string): number {
+  if (_freeLocal.size > 5000) _freeLocal.clear(); // buckets rotate every few hours; a reset only grants a fresh allowance
+  const next = (_freeLocal.get(key) ?? 0) + 1;
+  _freeLocal.set(key, next);
+  return next;
+}
+
+/**
+ * Counts one free-tier message in the current fixed window. Uses the shared KV counter
+ * when available, otherwise a per-instance counter (so the allowance is approximate
+ * across serverless instances until a KV store is attached).
+ */
 export async function consumeFreeMessage(address: string): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
   const nowSec = Math.floor(Date.now() / 1000);
   const bucket = Math.floor(nowSec / FREE_WINDOW_SECONDS);
   const retryAfterSeconds = (bucket + 1) * FREE_WINDOW_SECONDS - nowSec;
-  if (!kvAvailable()) return { allowed: false, retryAfterSeconds };
-  const count = await kvIncr(`agent:free:${address.toLowerCase()}:${bucket}`, FREE_WINDOW_SECONDS * 2);
-  if (count === null || count > FREE_MESSAGE_LIMIT) return { allowed: false, retryAfterSeconds };
+  const key = `agent:free:${address.toLowerCase()}:${bucket}`;
+  let count: number | null = null;
+  if (kvAvailable()) count = await kvIncr(key, FREE_WINDOW_SECONDS * 2);
+  if (count === null) count = bumpFreeLocal(key);
+  if (count > FREE_MESSAGE_LIMIT) return { allowed: false, retryAfterSeconds };
   return { allowed: true };
 }
 

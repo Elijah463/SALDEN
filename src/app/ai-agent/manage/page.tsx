@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import {
@@ -20,6 +21,7 @@ import { NetworkGuard } from '@/components/shared/NetworkGuard';
 import { SetSchedulePaymentModal } from '@/components/agent/SetSchedulePaymentModal';
 import { RecurringPaymentModal } from '@/components/agent/RecurringPaymentModal';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
+import { useCloneAccess } from '@/lib/useCloneAccess';
 import {
   getAgentLogs, type AgentLog,
   getAgentSchedules, saveAgentSchedule, deleteAgentSchedule, type AgentSchedule,
@@ -51,7 +53,18 @@ export default function ManageAgentPage() {
   const { address } = useEffectiveAddress();
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
   const { getToken } = useAgentSession();
-  const { groups, isPremiumUser } = state;
+  const { groups, isPremiumUser, proExpiresAt } = state;
+
+  // Resolves the payroll clone and live Salden Pro status on a direct visit or refresh
+  // (same hook the AI Agent page uses), so a Pro wallet is not mistaken for a free one
+  // while that on-chain read is still in flight.
+  useCloneAccess();
+  const [proCheckSettled, setProCheckSettled] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setProCheckSettled(true), 3000);
+    return () => clearTimeout(t);
+  }, []);
+  const proStatusKnown = proExpiresAt !== null || proCheckSettled;
 
   const [logs,         setLogs]         = useState<AgentLog[]>([]);
   const [schedules,    setSchedules]    = useState<AgentSchedule[]>([]);
@@ -64,10 +77,6 @@ export default function ManageAgentPage() {
   const [recurringTarget,    setRecurringTarget]    = useState<AgentSchedule | null>(null);
   const [cancelTarget,       setCancelTarget]       = useState<AgentSchedule | null>(null);
   const [cancelling,         setCancelling]         = useState(false);
-
-  useEffect(() => {
-    if (!isPremiumUser) router.replace('/ai-agent');
-  }, [isPremiumUser, router]);
 
   // Load schedules from IndexedDB (source of truth for the UI) and push a
   // heartbeat to the server's in-memory store (see scheduleStore.ts for why
@@ -155,6 +164,47 @@ export default function ManageAgentPage() {
   const successCount = logs.filter(l => l.status === 'success').length;
   const failedCount  = logs.filter(l => l.status === 'failed').length;
   const activeScheds = schedules.filter(s => s.status === 'active').length;
+
+  // Free wallets used to be bounced back to /ai-agent with no explanation. They now see
+  // why: managing the agent needs a deployed Salden payroll clone with an active Pro plan.
+  if (!isPremiumUser) {
+    return (
+      <NetworkGuard>
+      <AgentLayout title="Manage AI Agent">
+        {!proStatusKnown ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '80px 20px' }}>
+            <Loader2 size={28} color="#4F46E5" style={{ animation: 'spin 0.8s linear infinite' }} />
+          </div>
+        ) : (
+          <div style={{
+            background: '#fff', border: '1px solid #E2E8F0',
+            borderRadius: 20, padding: 36, textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>🏭</div>
+            <h3 style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+              No Payroll Contract Found
+            </h3>
+            <p style={{
+              fontSize: 14, color: '#64748B', lineHeight: 1.7,
+              maxWidth: 360, margin: '0 auto 20px',
+            }}>
+              The AI Agent requires a deployed Salden payroll clone.
+              Complete your payroll setup on the dashboard first.
+            </p>
+            <Link href="/dashboard" style={{
+              display: 'inline-block', padding: '11px 24px', borderRadius: 10,
+              background: '#14B8A6', color: '#fff', fontSize: 14, fontWeight: 700,
+              textDecoration: 'none',
+            }}>
+              Go to Dashboard →
+            </Link>
+          </div>
+        )}
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </AgentLayout>
+      </NetworkGuard>
+    );
+  }
 
   return (
     <NetworkGuard>

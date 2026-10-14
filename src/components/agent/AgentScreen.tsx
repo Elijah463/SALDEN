@@ -620,8 +620,13 @@ export function AgentScreen({ mode }: { mode: 'chat' | 'activation' }) {
     );
   }
 
-  // ── No clone deployed yet ─────────────────────────────────────────────────
-  if (!effectiveClone) {
+  // ── No clone deployed yet (activation only) ───────────────────────────────
+  // BUG FIX: this used to have no mode guard, so /ai-agent (mode="chat") showed this
+  // card to every wallet without a payroll clone and never reached the chat. The chat
+  // is open to every signed-in wallet (free wallets get a message allowance and no
+  // tools, enforced server-side in /api/agent/chat), so only the activation flow,
+  // which really does need a deployed clone, is gated here.
+  if (mode === 'activation' && !effectiveClone) {
     return (
       <AgentLayout title="AI Agent">
         <div style={{

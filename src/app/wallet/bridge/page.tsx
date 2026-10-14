@@ -653,11 +653,25 @@ export default function BridgePage() {
 
   // ── Fee / time estimate (kit.estimateBridge) ─────────────────────────────
   // Debounced so we don't fire a new estimate on every keystroke.
-  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null; timeLabel: string | null } | null>(null);
+  //
+  // BUG FIX ("bridge quotes show nothing"): a failed estimateBridge() used to be swallowed
+  // by an empty catch that set the estimate to null, and the card below only renders when an
+  // estimate exists, so any failure looked identical to "no quote feature". Now:
+  //   - the call is retried once (a first call can fail on a transient RPC/provider hiccup),
+  //   - it has a timeout so the card can never sit on bouncing dots forever,
+  //   - a final failure is logged with the real error and shown as "Quote unavailable"
+  //     with a Retry button, instead of silently hiding the card,
+  //   - the adapter is read through a ref, so a re-created adapter object (wagmi can hand
+  //     back a new connector client on any re-render) no longer cancels and restarts the
+  //     debounce on every change.
+  const [estimate,        setEstimate]        = useState<{ feeUsdc: number | null; timeLabel: string | null; unavailable?: boolean } | null>(null);
   const [estimateLoading, setEstimateLoading] = useState(false);
+  const [quoteNonce,      setQuoteNonce]      = useState(0);
+  const adapterRef = useRef(adapter);
+  adapterRef.current = adapter;
 
   useEffect(() => {
-    if (!amount || parseFloat(amount) <= 0 || !adapter || !isAdapterReady || !address) {
+    if (!amount || parseFloat(amount) <= 0 || !isAdapterReady || !address) {
       setEstimate(null);
       setEstimateLoading(false);
       return;
@@ -665,46 +679,64 @@ export default function BridgePage() {
     let cancelled = false;
     setEstimateLoading(true);
     const t = setTimeout(async () => {
+      const ESTIMATE_TIMEOUT_MS = 20_000;
+      let lastErr: unknown = null;
       try {
-        const kit = await getAppKit();
-        const est = await kit.estimateBridge({
-          from: { adapter, chain: fromKey } as unknown as Parameters<typeof kit.bridge>[0]['from'],
-          to:   { chain: toKey, recipientAddress: address, useForwarder: true } as Parameters<typeof kit.bridge>[0]['to'],
-          amount,
-        });
-        if (cancelled) return;
-        // Real EstimateResult shape has no duration field, sum the fees
-        // array (kit/provider/forwarder entries) for a total USDC fee.
-        const fees = est.fees ?? [];
-        const feeUsdc = fees.length
-          ? fees.reduce((sum, f) => sum + (f.amount != null ? Number(f.amount) || 0 : 0), 0)
-          : null;
-        // There's no duration field to read, but there IS a real, honest
-        // signal for which CCTP v2 mode this transfer will run in: the
-        // 'provider' fee entry is CCTP v2's own protocol fee, which per
-        // Circle's own Bridge Kit documentation is non-zero (1–14 bps)
-        // ONLY under Fast Transfer and exactly 0 under Standard Transfer.
-        // Each mode has a publicly documented real timing range, Fast
-        // Transfer settles in ~8–20 seconds regardless of source chain
-        // (Circle's CCTP V2 launch announcement); Standard Transfer waits
-        // for the source chain's own block finality, which varies by
-        // chain (seconds to low minutes on L2s, materially longer from
-        // Ethereum), so rather than fabricate one number for every chain
-        // we say plainly that it depends on the source chain.
-        const providerFee = fees.find(f => f.type === 'provider');
-        const isFast = !!providerFee && providerFee.amount != null && Number(providerFee.amount) > 0;
-        const timeLabel = isFast
-          ? '~8–20 seconds (Fast Transfer)'
-          : 'A few minutes, depends on the source chain\u2019s finality time';
-        setEstimate({ feeUsdc, timeLabel });
-      } catch {
-        if (!cancelled) setEstimate(null);
+        for (let attempt = 1; attempt <= 2 && !cancelled; attempt++) {
+          try {
+            const kit = await getAppKit();
+            const currentAdapter = adapterRef.current;
+            if (!currentAdapter) throw new Error('Wallet adapter is not ready');
+            const est = await Promise.race([
+              kit.estimateBridge({
+                from: { adapter: currentAdapter, chain: fromKey } as unknown as Parameters<typeof kit.bridge>[0]['from'],
+                to:   { chain: toKey, recipientAddress: address, useForwarder: true } as Parameters<typeof kit.bridge>[0]['to'],
+                amount,
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Quote request timed out')), ESTIMATE_TIMEOUT_MS)),
+            ]);
+            if (cancelled) return;
+            // Real EstimateResult shape has no duration field, sum the fees
+            // array (kit/provider/forwarder entries) for a total USDC fee.
+            const fees = est.fees ?? [];
+            const feeUsdc = fees.length
+              ? fees.reduce((sum, f) => sum + (f.amount != null ? Number(f.amount) || 0 : 0), 0)
+              : null;
+            // There's no duration field to read, but there IS a real, honest
+            // signal for which CCTP v2 mode this transfer will run in: the
+            // 'provider' fee entry is CCTP v2's own protocol fee, which per
+            // Circle's own Bridge Kit documentation is non-zero (1–14 bps)
+            // ONLY under Fast Transfer and exactly 0 under Standard Transfer.
+            // Each mode has a publicly documented real timing range, Fast
+            // Transfer settles in ~8–20 seconds regardless of source chain
+            // (Circle's CCTP V2 launch announcement); Standard Transfer waits
+            // for the source chain's own block finality, which varies by
+            // chain (seconds to low minutes on L2s, materially longer from
+            // Ethereum), so rather than fabricate one number for every chain
+            // we say plainly that it depends on the source chain.
+            const providerFee = fees.find(f => f.type === 'provider');
+            const isFast = !!providerFee && providerFee.amount != null && Number(providerFee.amount) > 0;
+            const timeLabel = isFast
+              ? '~8–20 seconds (Fast Transfer)'
+              : 'A few minutes, depends on the source chain\u2019s finality time';
+            setEstimate({ feeUsdc, timeLabel });
+            return;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < 2 && !cancelled) await new Promise(r => setTimeout(r, 800));
+          }
+        }
+        if (!cancelled) {
+          console.error('[bridge] estimateBridge failed:', lastErr);
+          setEstimate({ feeUsdc: null, timeLabel: null, unavailable: true });
+        }
       } finally {
         if (!cancelled) setEstimateLoading(false);
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [amount, adapter, isAdapterReady, address, fromKey, toKey]);
+  }, [amount, isAdapterReady, address, fromKey, toKey, quoteNonce]);
 
   return (
     <NetworkGuard>
@@ -847,7 +879,15 @@ export default function BridgePage() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, color: '#94A3B8' }}>Fees</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
-                  {estimateLoading ? <BouncingDots /> : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
+                  {estimateLoading ? <BouncingDots /> : estimate?.unavailable ? (
+                    <>
+                      Quote unavailable{' '}
+                      <button
+                        onClick={() => setQuoteNonce(n => n + 1)}
+                        style={{ background: 'none', border: 'none', padding: 0, color: '#4F46E5', fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+                      >Retry</button>
+                    </>
+                  ) : estimate?.feeUsdc != null ? `${estimate.feeUsdc.toFixed(4)} USDC` : 'No provider fee'}
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

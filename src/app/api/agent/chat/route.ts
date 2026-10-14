@@ -69,6 +69,7 @@ import { extractSlotsFromHistory, formatSlotsForPrompt } from '@/lib/agent/slotM
 import { getToolDeclarations, AUTONOMOUS_ONLY_TOOLS as AUTONOMOUS_ONLY_TOOL_NAMES } from '@/lib/agent/tools';
 import { getAgentMode }               from '@/lib/agent/agentMode';
 import { isProWallet, consumeFreeMessage, FREE_MESSAGE_LIMIT } from '@/lib/agent/tier';
+import { requiresToolAccess, UPGRADE_REQUIRED_MESSAGE } from '@/lib/agent/actionIntent';
 import {
   executeGetBalance, executeGetTransactionStatus, executeCheckOfacCompliance,
 } from '@/lib/agent/toolExecutors';
@@ -877,6 +878,14 @@ async function handleChat(req: NextRequest, emit: StatusEmit): Promise<Response>
     // Free wallets get a small message allowance and no tool access.
     const pro = await isProWallet(walletAddress);
     if (!pro) {
+      // Deterministic gate, decided before any model call: a free wallet that asks the
+      // agent to DO something (pay, run payroll, edit employees, schedule, swap, look up
+      // its own balance...) gets the fixed upgrade message. It does not rely on the model
+      // obeying the system prompt, and it does not use up a free chat message.
+      const lastRaw = Array.isArray(messages) && messages.length > 0 ? messages[messages.length - 1] : null;
+      if (lastRaw && lastRaw.role === 'user' && requiresToolAccess(normaliseInput(String(lastRaw.content ?? '')))) {
+        return NextResponse.json({ response: UPGRADE_REQUIRED_MESSAGE, upgradeRequired: true });
+      }
       const quota = await consumeFreeMessage(walletAddress);
       if (!quota.allowed) {
         return NextResponse.json({
