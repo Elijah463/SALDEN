@@ -283,7 +283,7 @@ export default function ContractFunctionsPage() {
                   <div style={{ fontSize: 12, color: '#64748B' }}>Balance: {formatUnits(t.balance, t.decimals)}</div>
                 </div>
                 {!isUsdc && confirmRemove !== t.address && (
-                  <Button variant="secondary" disabled={!isOwner || t.balance !== 0n || busy !== null}
+                  <Button variant="outline" disabled={!isOwner || t.balance !== 0n || busy !== null}
                     onClick={() => setConfirmRemove(t.address)}>
                     {t.balance === 0n ? 'Remove' : 'Withdraw first'}
                   </Button>
@@ -291,7 +291,7 @@ export default function ContractFunctionsPage() {
                 {confirmRemove === t.address && (
                   <div style={{ display: 'flex', gap: 8 }}>
                     <Button variant="danger" disabled={busy !== null} onClick={() => removeTokenOnChain(t.address)}>Confirm remove</Button>
-                    <Button variant="secondary" onClick={() => setConfirmRemove(null)}>Cancel</Button>
+                    <Button variant="outline" onClick={() => setConfirmRemove(null)}>Cancel</Button>
                   </div>
                 )}
               </div>
