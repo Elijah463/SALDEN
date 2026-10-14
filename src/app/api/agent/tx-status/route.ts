@@ -7,22 +7,21 @@
  * Closes the actual root cause of "the transaction succeeded on-chain but
  * the chat interface stayed stuck on 'QUEUED' forever": executeAutonomousTransfer/
  * executeAutonomousBatchPay (lib/agent/autonomousExecution.ts) only poll for
- * confirmation for a few seconds before the chat response has to return —
- * a transaction that's still SENT (not yet CONFIRMED) at that point comes
+ * confirmation for a few seconds before the chat response has to return, * a transaction that's still SENT (not yet CONFIRMED) at that point comes
  * back as `pending: true`, and the resulting ActionLogEntry/AgentEvent is
  * rendered with a static 'QUEUED' status. Nothing was ever polling that
  * entry again afterward, even though the transaction typically confirms a
- * few seconds later — the UI just never found out.
+ * few seconds later, the UI just never found out.
  *
  * This route lets the CLIENT (components/agent/ChatInterface.tsx) keep
  * checking a specific pending transaction after the chat turn has already
- * finished, using Circle's own getTxStatus() (agent-wallet.ts) — the same
+ * finished, using Circle's own getTxStatus() (agent-wallet.ts), the same
  * one-shot status check already used server-side, just re-exposed for a
  * client that's polling on its own schedule instead of blocking a single
  * request.
  *
  * Requires a valid session token bound to the employer wallet (same
- * pattern as the other protected /api/agent/* routes) — a Circle
+ * pattern as the other protected /api/agent/* routes), a Circle
  * transaction id is opaque, but there's no reason to make tx state
  * checkable by anyone who guesses/observes one.
  */
@@ -41,7 +40,7 @@ export async function GET(req: NextRequest) {
     const authHeader = req.headers.get('authorization');
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
     const session = verifySessionToken(token, wallet);
-    if (!session.ok) return NextResponse.json({ error: session.error }, { status: 401 });
+    if (session.ok === false) return NextResponse.json({ error: session.error }, { status: 401 });
 
     const status = await getTxStatus(id);
     return NextResponse.json({ state: status.state, txHash: status.txHash });

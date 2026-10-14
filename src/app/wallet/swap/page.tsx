@@ -2,20 +2,20 @@
 /**
  * @file app/wallet/swap/page.tsx
  *
- * Real swap powered by LI.FI (quote + actual on-chain execution) — Circle
+ * Real swap powered by LI.FI (quote + actual on-chain execution), Circle
  * App Kit's kit.swap() has been replaced here after confirmation it wasn't
  * working, and it also only ever worked for external wallets (Circle's
  * swap adapter needs a standard EIP-1193 provider, which a Circle
  * social-login session doesn't expose). LI.FI's flow works for both
  * wallet types, since execution here is just approve + a single
- * transaction — routed through useUniversalWrite the same way every other
+ * transaction, routed through useUniversalWrite the same way every other
  * on-chain write in this app is, rather than a wallet-type-specific SDK
  * call.
  *
- * This page is deliberately just an orchestrator — the actual logic lives in:
- *   - lib/swap/tokens.ts       — token config, raw-amount conversion
- *   - lib/swap/useSwapQuote.ts — debounced live LI.FI quote fetching
- *   - components/wallet/SwapUI.tsx — token icon/selector/input box, step progress
+ * This page is deliberately just an orchestrator, the actual logic lives in:
+ *   - lib/swap/tokens.ts, token config, raw-amount conversion
+ *   - lib/swap/useSwapQuote.ts, debounced live LI.FI quote fetching
+ *   - components/wallet/SwapUI.tsx, token icon/selector/input box, step progress
  * so a bug in any one of quote-fetching / token config / UI rendering /
  * execution has one obvious, small place to look instead of hunting
  * through one large file.
@@ -24,28 +24,29 @@
  *   1. User selects tokenIn + tokenOut + amount
  *   2. useSwapQuote (debounced) → GET /api/lifi/quote → live estimated
  *      amountOut + the actual transactionRequest to execute (LI.FI API
- *      key stays server-side in that route — never exposed here)
+ *      key stays server-side in that route, never exposed here)
  *   3. On Swap: approve tokenIn for quote.estimate.approvalAddress if the
  *      current allowance is insufficient, then send
  *      quote.transactionRequest via useUniversalWrite.sendTransaction
  *   4. Real tx hash shown with ArcScan link once mined
  *
- * Supported tokens on Arc Testnet: USDC, EURC, cirBTC
+ * Supported tokens on Arc Network: USDC, EURC, cirBTC
  */
 
 import { useState, useCallback, useEffect } from 'react';
 import { useRouter }           from 'next/navigation';
 import { usePublicClient }     from 'wagmi';
 import {
-  ArrowLeft, ArrowDown, Loader2, ExternalLink, CheckCircle2, X, AlertTriangle,
+  ArrowLeft, ArrowDown, Loader2, ExternalLink, X, AlertTriangle,
 } from 'lucide-react';
 import { AppLayout }           from '@/components/layout/AppLayout';
 import { NetworkGuard }        from '@/components/shared/NetworkGuard';
+import { SuccessCheck }        from '@/components/shared/SuccessCheck';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useUniversalWrite }   from '@/lib/circle/useUniversalWrite';
 import { useTokenApproval }    from '@/lib/approvals/useTokenApproval';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
-import { txLink, arcTestnet }  from '@/lib/contracts/config';
+import { txLink, arcChain }  from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { TOKENS, toRawAmount, fromRawAmount, type TokenMeta } from '@/lib/swap/tokens';
 import { saveWalletActivity } from '@/lib/db/indexeddb';
@@ -61,7 +62,7 @@ export default function SwapPage() {
   const { address, isConnected } = useEffectiveAddress();
   const { sendTransaction, canWrite } = useUniversalWrite();
   const { ensureApproval } = useTokenApproval();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   const [tokenIn,   setTokenIn]   = useState<TokenMeta | null>(TOKENS[0]);
   const [tokenOut,  setTokenOut]  = useState<TokenMeta | null>(null);
@@ -79,7 +80,7 @@ export default function SwapPage() {
 
   const { quote, amountOut, quoting, quoteError } = useSwapQuote(effTokenIn, effTokenOut, amountIn, address);
 
-  // ── Wallet balances for both tokens — mirrors the Bridge page's balance
+  // ── Wallet balances for both tokens, mirrors the Bridge page's balance
   //    display, shown for both From and To here (Bridge only shows From) ──
   const [balanceIn,         setBalanceIn]         = useState<string | null>(null);
   const [balanceInLoading,  setBalanceInLoading]  = useState(false);
@@ -88,8 +89,8 @@ export default function SwapPage() {
 
   const fetchTokenBalance = useCallback(async (token: TokenMeta | null): Promise<string | null> => {
     if (!token || !address || !publicClient || !token.address) return null;
-    // A transient RPC hiccup used to permanently show "—" until something
-    // else happened to re-trigger this effect (a manual refresh) — this
+    // A transient RPC hiccup used to permanently show ", " until something
+    // else happened to re-trigger this effect (a manual refresh), this
     // retries a couple of times first, since that's the exact behavior
     // "refresh always fixes it" describes: not a real absence of balance,
     // just a one-shot read that occasionally needs asking again.
@@ -143,11 +144,11 @@ export default function SwapPage() {
       const rawAmount = toRawAmount(amountIn, effTokenIn.decimals);
 
       // Approve LI.FI's contract to spend tokenIn, if the unified
-      // approval cache doesn't already show enough approved — see
+      // approval cache doesn't already show enough approved, see
       // lib/approvals/useTokenApproval.ts for the full flow (cache check,
       // approve-if-short, wait for on-chain confirmation before caching
       // the new amount so this can't move on before the allowance is
-      // actually live — the same race that used to make the swap below
+      // actually live, the same race that used to make the swap below
       // intermittently revert with TRANSFER_FROM_FAILED if it ran too
       // soon after a freshly-broadcast approve).
       setSwapStep('approve');
@@ -155,7 +156,7 @@ export default function SwapPage() {
         token: effTokenIn.address, spender: quote.estimate.approvalAddress, amount: rawAmount,
       });
 
-      // Execute the swap — LI.FI's own pre-built, already-encoded transaction
+      // Execute the swap, LI.FI's own pre-built, already-encoded transaction
       setSwapStep('swap');
       const value = quote.transactionRequest.value ? BigInt(quote.transactionRequest.value) : undefined;
       const txHash = await sendTransaction({
@@ -163,15 +164,14 @@ export default function SwapPage() {
       });
 
       setSwapStep('confirm');
-      // Same reasoning as the approve wait above — bounded, and reports a
+      // Same reasoning as the approve wait above, bounded, and reports a
       // clear timeout/revert message instead of an indefinite hang.
       await waitForSuccessfulReceipt(publicClient, txHash);
 
       setLastReceivedAmount(amountOut);
       setSuccessTx(txHash);
 
-      // Local-only wallet activity record (Swap/Bridge/Deposit history) —
-      // deliberately never synced anywhere, matching product intent that
+      // Local-only wallet activity record (Swap/Bridge/Deposit history), // deliberately never synced anywhere, matching product intent that
       // this activity type doesn't need to follow the user across devices.
       if (address && effTokenIn && effTokenOut) {
         void saveWalletActivity({
@@ -192,7 +192,7 @@ export default function SwapPage() {
   const insufficientBalance = !!amountIn && !!balanceIn && parseFloat(amountIn) > parseFloat(balanceIn.replace(/,/g, ''));
   const canSwap = !!effTokenIn && !!effTokenOut && !!amountIn && parseFloat(amountIn) > 0 && !!quote && !swapping && !quoting && canWrite && !insufficientBalance;
 
-  // ── Quote panel figures — all derived straight from the live LI.FI quote ──
+  // ── Quote panel figures, all derived straight from the live LI.FI quote ──
   let priceLabel: string | null = null;
   let feesLabel:  string | null = null;
   let timeLabel:  string | null = null;
@@ -350,8 +350,8 @@ export default function SwapPage() {
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <CheckCircle2 size={32} color="#fff" fill="#059669" />
+              <div style={{ marginBottom: 16 }}>
+                <SuccessCheck size={56} />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Swap Successful</h3>
               {lastReceivedAmount && (

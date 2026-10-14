@@ -1,6 +1,6 @@
 /**
  * @file lib/contracts/abis.ts
- * Smart contract ABIs extracted from deployed contracts on Arc Testnet.
+ * Smart contract ABIs extracted from deployed contracts on Arc Network.
  */
 
 // ─── SaldenEnterprisePayroll ABI (shared contract, free plan) ─────────────────
@@ -46,12 +46,12 @@ export const ENTERPRISE_PAYROLL_ABI = [
     "name": "BatchPaid",
     "type": "event"
   },
-  // Custom errors — verified 1:1 against SaldenEnterprisePayroll.sol's own
+  // Custom errors, verified 1:1 against SaldenEnterprisePayroll.sol's own
   // `error` declarations. Without these, viem has no way to decode a
   // revert's 4-byte selector, so batchPay()/withdraw() failures on the
   // free-tier shared contract show as "execution reverted for an unknown
   // reason" instead of the real cause (this is the same class of bug
-  // fixed on the premium factory — see MULTI_TOKEN_FACTORY_ABI below).
+  // fixed on the premium factory, see MULTI_TOKEN_FACTORY_ABI below).
   { "inputs": [], "name": "ZeroAddress", "type": "error" },
   { "inputs": [], "name": "ZeroAmount", "type": "error" },
   { "inputs": [], "name": "ArrayLengthMismatch", "type": "error" },
@@ -60,7 +60,7 @@ export const ENTERPRISE_PAYROLL_ABI = [
   { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
   { "inputs": [], "name": "ETHNotAccepted", "type": "error" },
   // Bubbled up from Solady's SafeTransferLib, which SaldenEnterprisePayroll
-  // uses internally for its USDC transfers — selectors are global (keyed
+  // uses internally for its USDC transfers, selectors are global (keyed
   // by the error's signature, not which contract "owns" it), so these
   // need to be here too or a transfer failure inside batchPay/withdraw
   // still can't be decoded even though the errors above are present.
@@ -70,6 +70,13 @@ export const ENTERPRISE_PAYROLL_ABI = [
 
 // ─── SaldenMultiTokenPayroll ABI (premium clone) ──────────────────────────────
 export const MULTI_TOKEN_PAYROLL_ABI = [
+  {
+    "inputs": [{ "internalType": "address", "name": "token", "type": "address" }],
+    "name": "removeSupportedToken",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
   {
     "inputs": [{ "internalType": "address", "name": "initialOwner", "type": "address" }],
     "name": "initialize",
@@ -237,9 +244,9 @@ export const MULTI_TOKEN_PAYROLL_ABI = [
     "name": "TokenAdded",
     "type": "event"
   },
-  // Custom errors — this ABI previously had NONE, meaning every revert from
+  // Custom errors, this ABI previously had NONE, meaning every revert from
   // batchPay/addAgent/removeAgent/addSupportedToken/withdraw/emergencyWithdraw
-  // on the premium clone (including every one the AI agent's tool calls hit —
+  // on the premium clone (including every one the AI agent's tool calls hit,
   // see lib/agent/toolExecutors.ts) showed as "execution reverted for an
   // unknown reason" instead of the real cause. Verified 1:1 against
   // SaldenMultiTokenPayrollFactory.sol's SaldenMultiTokenPayroll contract
@@ -258,11 +265,62 @@ export const MULTI_TOKEN_PAYROLL_ABI = [
   { "inputs": [], "name": "TokenAlreadySupported", "type": "error" },
   { "inputs": [], "name": "TokenNotSupported", "type": "error" },
   { "inputs": [], "name": "TransferFailed", "type": "error" },
-  { "inputs": [], "name": "TransferFromFailed", "type": "error" }
+  { "inputs": [], "name": "TransferFromFailed", "type": "error" },
+  // V1 audit-fix errors (see SaldenMultiTokenPayrollFactory.sol). Needed here so
+  // viem can decode these reverts into a readable message instead of raw hex.
+  { "inputs": [], "name": "RenounceDisabled", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "expiredAt", "type": "uint256" }], "name": "SubscriptionExpired", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "expected", "type": "uint256" }, { "internalType": "uint256", "name": "received", "type": "uint256" }], "name": "ShortPull", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "account", "type": "address" }], "name": "NotAContract", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "token", "type": "address" }], "name": "NotERC20", "type": "error" },
+  { "inputs": [], "name": "UnauthorisedFactory", "type": "error" },
+  { "inputs": [], "name": "OwnershipTransferDisabled", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "to", "type": "address" }, { "internalType": "uint256", "name": "expected", "type": "uint256" }, { "internalType": "uint256", "name": "received", "type": "uint256" }], "name": "ShortPayment", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "balance", "type": "uint256" }], "name": "TokenHasBalance", "type": "error" },
+  { "inputs": [], "name": "CannotRemoveUsdc", "type": "error" },
+  // Standard OpenZeppelin v5 errors from this contract's base contracts. These fire
+  // on ordinary, expected situations (wrong caller, paused contract), so decoding
+  // them matters as much as the contract's own custom errors.
+  { "inputs": [{ "internalType": "address", "name": "account", "type": "address" }], "name": "OwnableUnauthorizedAccount", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "owner", "type": "address" }], "name": "OwnableInvalidOwner", "type": "error" },
+  { "inputs": [], "name": "EnforcedPause", "type": "error" },
+  { "inputs": [], "name": "ExpectedPause", "type": "error" },
+  { "inputs": [], "name": "ReentrancyGuardReentrantCall", "type": "error" },
+  { "inputs": [], "name": "InvalidInitialization", "type": "error" },
+  { "inputs": [], "name": "NotInitializing", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "token", "type": "address" }], "name": "SafeERC20FailedOperation", "type": "error" }
 ] as const;
 
 // ─── SaldenMultiTokenPayrollFactory ABI ───────────────────────────────────────
 export const MULTI_TOKEN_FACTORY_ABI = [
+  {
+    "inputs": [{ "internalType": "address", "name": "clone", "type": "address" }],
+    "name": "proExpiry",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "clone", "type": "address" }],
+    "name": "isProActive",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "clone", "type": "address" }],
+    "name": "isClone",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "clone", "type": "address" }],
+    "name": "renewPro",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
   {
     "inputs": [],
     "name": "deployPayroll",
@@ -315,7 +373,7 @@ export const MULTI_TOKEN_FACTORY_ABI = [
     "name": "NewPayrollCreated",
     "type": "event"
   },
-  // Custom errors — without these, viem can't decode a revert's 4-byte
+  // Custom errors, without these, viem can't decode a revert's 4-byte
   // selector into a readable message, so any of these show as a generic
   // "execution reverted for an unknown reason" instead of the real cause.
   { "inputs": [], "name": "ZeroAddress", "type": "error" },
@@ -323,20 +381,29 @@ export const MULTI_TOKEN_FACTORY_ABI = [
   { "inputs": [], "name": "NoFundsToWithdraw", "type": "error" },
   { "inputs": [{ "internalType": "uint256", "name": "provided", "type": "uint256" }, { "internalType": "uint256", "name": "max", "type": "uint256" }], "name": "FeeTooHigh", "type": "error" },
   { "inputs": [], "name": "ETHNotAccepted", "type": "error" },
-  // These three were the actual missing piece behind the reported
-  // "execution reverted for an unknown reason" on deployPayroll():
-  // `deployPayroll()` collects the USDC fee via Solady's
-  // `SafeTransferLib.safeTransferFrom` (reverts `TransferFromFailed()` on
-  // insufficient balance/allowance — verified against Solady's
-  // SafeTransferLib.sol source) and deploys the clone via
-  // `LibClone.clone()` (reverts `DeploymentFailed()` — verified against
-  // Solady's LibClone.sol). Neither was in this ABI, so even though
-  // `AlreadyDeployed` above WAS already defined, viem had no way to tell
-  // "you already have a clone" apart from "you don't have enough USDC" —
-  // both looked identically like an undecodable revert.
-  { "inputs": [], "name": "TransferFromFailed", "type": "error" },
-  { "inputs": [], "name": "ApproveFailed", "type": "error" },
-  { "inputs": [], "name": "DeploymentFailed", "type": "error" }
+  // V1 (beacon + UUPS) errors. This factory deploys clones with OpenZeppelin's
+  // BeaconProxy and collects fees with SafeERC20, not Solady's LibClone or
+  // SafeTransferLib, so its revert errors are OpenZeppelin's, not Solady's.
+  { "inputs": [{ "internalType": "address", "name": "account", "type": "address" }], "name": "NotAClone", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "account", "type": "address" }], "name": "NotAContract", "type": "error" },
+  { "inputs": [], "name": "NotCloneOwner", "type": "error" },
+  { "inputs": [], "name": "RenounceDisabled", "type": "error" },
+  { "inputs": [{ "internalType": "uint8", "name": "decimals", "type": "uint8" }], "name": "InvalidUsdc", "type": "error" },
+  { "inputs": [], "name": "NoPendingUpgrade", "type": "error" },
+  { "inputs": [{ "internalType": "uint256", "name": "readyAt", "type": "uint256" }], "name": "UpgradeNotReady", "type": "error" },
+  // Standard OpenZeppelin v5 errors from this contract's base contracts. These fire
+  // on ordinary, expected situations (wrong caller, an upgrade call from a context
+  // that isn't the proxy), so decoding them matters as much as the contract's own
+  // custom errors.
+  { "inputs": [{ "internalType": "address", "name": "account", "type": "address" }], "name": "OwnableUnauthorizedAccount", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "owner", "type": "address" }], "name": "OwnableInvalidOwner", "type": "error" },
+  { "inputs": [], "name": "ReentrancyGuardReentrantCall", "type": "error" },
+  { "inputs": [], "name": "InvalidInitialization", "type": "error" },
+  { "inputs": [], "name": "NotInitializing", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "token", "type": "address" }], "name": "SafeERC20FailedOperation", "type": "error" },
+  { "inputs": [], "name": "UUPSUnauthorizedCallContext", "type": "error" },
+  { "inputs": [{ "internalType": "bytes32", "name": "slot", "type": "bytes32" }], "name": "UUPSUnsupportedProxiableUUID", "type": "error" },
+  { "inputs": [{ "internalType": "address", "name": "implementation", "type": "address" }], "name": "ERC1967InvalidImplementation", "type": "error" }
 ] as const;
 
 // ─── SaldenRegistryFactory ABI ────────────────────────────────────────────────
@@ -364,13 +431,13 @@ export const REGISTRY_FACTORY_ABI = [
     "name": "RegistryCreated",
     "type": "event"
   },
-  // Custom errors — this ABI had NONE, so createRegistry() failures (same
+  // Custom errors, this ABI had NONE, so createRegistry() failures (same
   // "already have one" / "deployment failed" class of bug as the payroll
   // factory above) were equally undecodable. `RegistryAlreadyExists`
   // verified against SaldenRegistryFactory.sol directly; `FailedDeployment`
   // is OpenZeppelin v5.1+'s shared Clones/Create2 failure error (this
-  // factory uses OZ's `Clones.clone()`, not Solady's LibClone — confirmed
-  // via the import in SaldenRegistryFactory.sol — so it needs OZ's error
+  // factory uses OZ's `Clones.clone()`, not Solady's LibClone, confirmed
+  // via the import in SaldenRegistryFactory.sol, so it needs OZ's error
   // name, not Solady's `DeploymentFailed`).
   { "inputs": [{ "internalType": "address", "name": "registry", "type": "address" }], "name": "RegistryAlreadyExists", "type": "error" },
   { "inputs": [], "name": "FailedDeployment", "type": "error" }
@@ -448,7 +515,7 @@ export const REGISTRY_ABI = [
     "stateMutability": "nonpayable",
     "type": "function"
   },
-  // Custom errors — verified 1:1 against SaldenRegistry.sol. Same class
+  // Custom errors, verified 1:1 against SaldenRegistry.sol. Same class
   // of bug as MULTI_TOKEN_PAYROLL_ABI above: this had none, so any
   // revert from setCID/addAgent/removeAgent/proposeAdminTransfer/
   // acceptAdminTransfer showed as an undecodable "unknown reason".
@@ -529,16 +596,16 @@ export const ERC20_ABI = [
 ] as const;
 
 // ─── Arc Memo Contract ABI ─────────────────────────────────────────────────────
-// Predeployed on Arc Testnet: 0x5294E9927c3306DcBaDb03fe70b92e01cCede505
+// Predeployed on Arc Network: 0x5294E9927c3306DcBaDb03fe70b92e01cCede505
 // Used to attach structured JSON memos to any contract call.
-// Arc's predeployed Memo contract (0x5294...) — verified against the real
-// contract ABI on the Arc Testnet block explorer. The function is `memo`,
-// NOT `callWithMemo` — an earlier version of this file had the wrong
+// Arc's predeployed Memo contract (0x5294...), verified against the real
+// contract ABI on the Arc Network block explorer. The function is `memo`,
+// NOT `callWithMemo`, an earlier version of this file had the wrong
 // function name and parameter shape entirely (a nonexistent function
 // selector), which reverted on every single call. See the `memo`
 // signature below: `memoId` is a caller-chosen bytes32 (this codebase
-// derives it as keccak256 of the memo bytes — see callers), and the
-// actual memo payload goes in `memoData`, not a trailing `value` param —
+// derives it as keccak256 of the memo bytes, see callers), and the
+// actual memo payload goes in `memoData`, not a trailing `value` param,
 // this function is nonpayable.
 export const MEMO_ABI = [
   {

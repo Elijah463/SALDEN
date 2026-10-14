@@ -1,12 +1,12 @@
 'use client';
 /**
  * @file components/agent/SetSchedulePaymentModal.tsx
- * "Set Schedule Payments" modal — lets the user schedule a future payroll
+ * "Set Schedule Payments" modal, lets the user schedule a future payroll
  * run (all employees or a specific group) in USDC (EURC shown but
- * disabled — "Soon"), for an exact UTC date/time.
+ * disabled, "Soon"), for an exact UTC date/time.
  *
  * Resolves the actual recipient list + amounts HERE, client-side, at
- * creation time — this is the only point in the whole flow where the
+ * creation time, this is the only point in the whole flow where the
  * decrypted employee list is available (see AgentSchedule.resolvedPayments
  * doc comment in lib/db/indexeddb.ts for why the cron executor can't do
  * this itself).
@@ -30,14 +30,14 @@ interface SetSchedulePaymentModalProps {
 }
 
 async function syncScheduleToServer(walletAddress: string, schedule: AgentSchedule, token: string | null) {
-  if (!token) return; // best-effort — IndexedDB save already succeeded; the manage page's own load-time sync is the primary self-heal mechanism
+  if (!token) return; // best-effort, IndexedDB save already succeeded; the manage page's own load-time sync is the primary self-heal mechanism
   try {
     await fetch('/api/agent/schedule/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ walletAddress, schedules: [schedule] }),
     });
-  } catch { /* self-heals next time the manage page loads — see scheduleStore.ts */ }
+  } catch { /* self-heals next time the manage page loads, see scheduleStore.ts */ }
 }
 
 // ── Compact date/time sub-modal ──────────────────────────────────────────────
@@ -197,7 +197,7 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
         id: crypto.randomUUID(),
         walletAddress,
         type: 'scheduled',
-        label: `${target} — ${targets.length} employee${targets.length === 1 ? '' : 's'} — ${token}`,
+        label: `${target}, ${targets.length} employee${targets.length === 1 ? '' : 's'}, ${token}`,
         group: target === ALL_EMPLOYEES_LABEL ? undefined : target,
         employees: targets.map(e => e.walletAddress),
         token,
@@ -213,7 +213,7 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
         tokenAddress,
         tokenDecimals: 6,
         // Snapshotted now because payrollSetup is only ever decrypted
-        // client-side — the server-side executor has no way to live-fetch
+        // client-side, the server-side executor has no way to live-fetch
         // it later (see AgentSchedule.recipientEmail doc comment). Left
         // undefined (not empty string) when unset so downstream email
         // logic can do a plain truthiness check.
@@ -259,7 +259,7 @@ export function SetSchedulePaymentModal({ open, onClose, walletAddress, sessionT
             fontSize: 13, marginTop: 4, marginBottom: 14, background: '#fff',
           }}>
             <option value="USDC">USDC</option>
-            <option value="EURC" disabled>EURC — Soon</option>
+            <option value="EURC" disabled>EURC, Soon</option>
           </select>
 
           <label style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Date &amp; Time</label>

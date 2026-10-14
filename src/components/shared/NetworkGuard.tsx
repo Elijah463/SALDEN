@@ -1,12 +1,12 @@
 'use client';
 /**
  * @file components/shared/NetworkGuard.tsx
- * Forces external wallet users onto Arc Testnet.
+ * Forces external wallet users onto Arc Network.
  * Circle social login users are already on the correct chain by design.
  */
 
 import { useAccount, useChainId, useSwitchChain } from 'wagmi';
-import { arcTestnet } from '@/lib/contracts/config';
+import { arcChain } from '@/lib/contracts/config';
 import { AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
 
 interface NetworkGuardProps { children: React.ReactNode; }
@@ -14,13 +14,13 @@ interface NetworkGuardProps { children: React.ReactNode; }
 export function NetworkGuard({ children }: NetworkGuardProps) {
   const { isConnected }            = useAccount();
   const chainId                    = useChainId();
-  // Bug fix: removed redundant `switching` local state — isPending from useSwitchChain
+  // Bug fix: removed redundant `switching` local state, isPending from useSwitchChain
   // is the single source of truth; having both caused stale/conflicting states.
   const { switchChain, isPending } = useSwitchChain();
 
   // Only enforce for externally connected wallets
   if (!isConnected) return <>{children}</>;
-  if (chainId === arcTestnet.id) return <>{children}</>;
+  if (chainId === arcChain.id) return <>{children}</>;
 
   return (
     <div style={{ minHeight: '100vh', background: '#F8F9FA', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -35,11 +35,11 @@ export function NetworkGuard({ children }: NetworkGuardProps) {
         </div>
         <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 10 }}>Wrong Network</h2>
         <p style={{ fontSize: 14, color: '#64748B', lineHeight: 1.65, marginBottom: 28 }}>
-          Salden runs on <strong style={{ color: '#0F172A' }}>Arc Testnet</strong>.
+          Salden runs on <strong style={{ color: '#0F172A' }}>Arc Network</strong>.
           Your wallet is connected to a different network. Switch to continue.
         </p>
         <button
-          onClick={() => switchChain({ chainId: arcTestnet.id })}
+          onClick={() => switchChain({ chainId: arcChain.id })}
           disabled={isPending}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 10,
@@ -52,10 +52,10 @@ export function NetworkGuard({ children }: NetworkGuardProps) {
         >
           {isPending
             ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Switching…</>
-            : <>Switch to Arc Testnet <ArrowRight size={16} /></>
+            : <>Switch to Arc Network <ArrowRight size={16} /></>
           }
         </button>
-        <p style={{ marginTop: 16, fontSize: 12, color: '#94A3B8' }}>Arc Testnet — Chain ID: {arcTestnet.id}</p>
+        <p style={{ marginTop: 16, fontSize: 12, color: '#94A3B8' }}>Arc Network, Chain ID: {arcChain.id}</p>
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>

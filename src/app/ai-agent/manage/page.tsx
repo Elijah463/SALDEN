@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file app/ai-agent/manage/page.tsx
- * Manage AI Agent — view recurring/scheduled payments, success/failed history,
+ * Manage AI Agent, view recurring/scheduled payments, success/failed history
  * active/past schedules (filterable by group or individual), full agent logs.
  */
 
@@ -86,7 +86,7 @@ export default function ManageAgentPage() {
           body: JSON.stringify({ walletAddress: address, schedules: local }),
         });
       } catch {
-        /* best-effort heartbeat — schedules still work locally; next visit retries */
+        /* best-effort heartbeat, schedules still work locally; next visit retries */
       }
     }
   }, [address, canWrite, universalSignMessage, getToken]);
@@ -124,7 +124,7 @@ export default function ManageAgentPage() {
       setSchedules(prev => prev.filter(s => s.id !== schedule.id));
       setCancelTarget(null);
     } catch {
-      // Server call failed (or no wallet signature available) — still
+      // Server call failed (or no wallet signature available), still
       // remove it locally so the UI reflects the user's intent immediately;
       // if the server-side removal didn't go through, the schedule simply
       // won't be found as "due" from this device again since local state no
@@ -132,7 +132,7 @@ export default function ManageAgentPage() {
       await deleteAgentSchedule(schedule.id);
       setSchedules(prev => prev.filter(s => s.id !== schedule.id));
       setCancelTarget(null);
-      addToast('Cancelled locally — will fully sync once your connection is stable.', 'warning');
+      addToast('Cancelled locally, will fully sync once your connection is stable.', 'warning');
     } finally {
       setCancelling(false);
     }
@@ -261,7 +261,7 @@ export default function ManageAgentPage() {
                       onMouseEnter={e => (e.currentTarget.style.background = '#F8F9FA')}
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <td style={{ padding: '12px 18px', fontSize: 12, color: '#64748B', whiteSpace: 'nowrap' }}>{format(new Date(log.timestamp), 'dd MMM yyyy, HH:mm')}</td>
-                      <td style={{ padding: '12px 18px', fontSize: 13, color: '#0F172A', maxWidth: 300 }}>{log.action}{log.details ? <span style={{ color: '#94A3B8', marginLeft: 6, fontSize: 12 }}>— {log.details}</span> : null}</td>
+                      <td style={{ padding: '12px 18px', fontSize: 13, color: '#0F172A', maxWidth: 300 }}>{log.action}{log.details ? <span style={{ color: '#94A3B8', marginLeft: 6, fontSize: 12 }}>, {log.details}</span> : null}</td>
                       <td style={{ padding: '12px 18px' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px', borderRadius: 99, fontSize: 11, fontWeight: 600, background: log.status === 'success' ? '#ECFDF5' : '#FEF2F2', color: log.status === 'success' ? '#059669' : '#DC2626' }}>
                           {log.status === 'success' ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
@@ -275,7 +275,7 @@ export default function ManageAgentPage() {
                             {log.txHash.slice(0, 10)}…
                             <ExternalLink size={11} />
                           </a>
-                        ) : <span style={{ color: '#CBD5E1' }}>—</span>}
+                        ) : <span style={{ color: '#CBD5E1' }}>, </span>}
                       </td>
                     </tr>
                   ))}
@@ -343,7 +343,7 @@ export default function ManageAgentPage() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                         <span style={{ fontSize: 12, color: '#94A3B8', fontWeight: 600 }}>Date</span>
                         <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', textAlign: 'right' }}>
-                          {schedule.nextRunAt ? format(new Date(schedule.nextRunAt), 'dd MMM yyyy, HH:mm') + ' UTC' : '—'}
+                          {schedule.nextRunAt ? format(new Date(schedule.nextRunAt), 'dd MMM yyyy, HH:mm') + ' UTC' : ', '}
                           {schedule.lastRunAt ? ` · Last: ${format(new Date(schedule.lastRunAt), 'dd MMM, HH:mm')}` : ''}
                           {schedule.type === 'recurring' && schedule.recurrence ? ` · Repeats ${schedule.recurrence}` : ''}
                         </span>
@@ -357,7 +357,7 @@ export default function ManageAgentPage() {
                             aria-checked={schedule.type === 'recurring'}
                             onClick={() => {
                               if (schedule.type === 'recurring') {
-                                // Turning off recurring — revert to a one-off schedule keeping the same next run.
+                                // Turning off recurring, revert to a one-off schedule keeping the same next run.
                                 const reverted: AgentSchedule = { ...schedule, type: 'scheduled', recurrence: undefined };
                                 void saveAgentSchedule(reverted).then(() => {
                                   setSchedules(prev => prev.map(s => s.id === reverted.id ? reverted : s));
@@ -485,7 +485,7 @@ export default function ManageAgentPage() {
                       onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                       <td style={{ padding: '10px 16px', fontSize: 11, color: '#64748B', whiteSpace: 'nowrap' }}>{format(new Date(log.timestamp), 'dd MMM HH:mm')}</td>
                       <td style={{ padding: '10px 16px', fontSize: 13, color: '#0F172A' }}>{log.action}</td>
-                      <td style={{ padding: '10px 16px', fontSize: 12, color: '#64748B', maxWidth: 200 }}>{log.details ?? '—'}</td>
+                      <td style={{ padding: '10px 16px', fontSize: 12, color: '#64748B', maxWidth: 200 }}>{log.details ?? ', '}</td>
                       <td style={{ padding: '10px 16px' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 99, fontSize: 10, fontWeight: 600, background: log.status === 'success' ? '#ECFDF5' : '#FEF2F2', color: log.status === 'success' ? '#059669' : '#DC2626' }}>
                           {log.status === 'success' ? <CheckCircle2 size={9} /> : <AlertTriangle size={9} />}
@@ -499,7 +499,7 @@ export default function ManageAgentPage() {
                             {log.txHash.slice(0, 8)}…
                             <ExternalLink size={10} />
                           </a>
-                        ) : <span style={{ color: '#CBD5E1', fontSize: 11 }}>—</span>}
+                        ) : <span style={{ color: '#CBD5E1', fontSize: 11 }}>, </span>}
                       </td>
                     </tr>
                   ))}

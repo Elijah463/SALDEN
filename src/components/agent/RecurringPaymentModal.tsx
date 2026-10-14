@@ -2,7 +2,7 @@
 /**
  * @file components/agent/RecurringPaymentModal.tsx
  * Deliberately kept separate from the schedules list/manage page and from
- * SetSchedulePaymentModal — this is the "Recurring" toggle's modal, letting
+ * SetSchedulePaymentModal, this is the "Recurring" toggle's modal, letting
  * the user pick Weekly/Bi-weekly/Monthly for an existing scheduled payment.
  * The schedule keeps its already-set date/time as the first occurrence;
  * subsequent runs are computed by the cron executor after each run
@@ -20,7 +20,7 @@ interface RecurringPaymentModalProps {
   schedule: AgentSchedule;
   onClose: () => void;
   onUpdated: (schedule: AgentSchedule) => void;
-  /** Best-effort push to the server's in-memory schedule store — see
+  /** Best-effort push to the server's in-memory schedule store, see
    *  scheduleStore.ts for why this is a heartbeat, not a hard requirement. */
   syncToServer: (schedule: AgentSchedule) => void;
 }

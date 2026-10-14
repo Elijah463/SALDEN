@@ -3,7 +3,7 @@
  *
  * The client-facing surface of the unified token-approval cache
  * (lib/approvals/approvalCache.ts). Client components never talk to that
- * module (or lib/kv.ts) directly — same reasoning as every other
+ * module (or lib/kv.ts) directly, same reasoning as every other
  * server-only module in this app (lib/circle/user-wallet.ts, lib/kv.ts
  * itself): it would either pull server env vars into a client bundle or
  * silently no-op. lib/approvals/useTokenApproval.ts is the one client hook
@@ -15,7 +15,7 @@
  * DELETE { chainId, owner, token, spender }             -> { ok: true }
  *
  * `amount` is always a decimal string (raw token units, e.g. 6-decimal
- * USDC base units) — never a JS number, to avoid precision loss on amounts
+ * USDC base units), never a JS number, to avoid precision loss on amounts
  * above 2^53.
  *
  * No auth check beyond address validation: this cache is advisory only

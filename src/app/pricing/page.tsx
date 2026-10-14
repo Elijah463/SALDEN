@@ -9,8 +9,9 @@
  *  - emergencyWithdraw exists only in SaldenMultiTokenPayroll (premium clone)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { usePublicClient } from 'wagmi';
+import { formatUnits } from 'viem';
 import {
   CheckCircle2, Zap, Users, Bot, Shield, Globe,
   Loader2, ArrowRight, Lock, Star,
@@ -18,7 +19,7 @@ import {
 import { AppLayout }          from '@/components/layout/AppLayout';
 import { NetworkGuard }       from '@/components/shared/NetworkGuard';
 import { useApp }             from '@/context/AppContext';
-import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
+import { CONTRACTS, txLink, arcChain } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { trackClientEvent } from '@/lib/analyticsClient';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
@@ -27,6 +28,26 @@ import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useTokenApproval } from '@/lib/approvals/useTokenApproval';
 import { useCloneAccess } from '@/lib/useCloneAccess';
 import { writeCloneCache } from '@/lib/cloneCache';
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/** The wallet's payroll clone from the factory, or null if it has none. */
+async function readClone(client: NonNullable<ReturnType<typeof usePublicClient>>, wallet: string): Promise<string | null> {
+  const clone = await client.readContract({
+    address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI,
+    functionName: 'payrollOf', args: [wallet as `0x${string}`],
+  }) as string;
+  return clone && clone.toLowerCase() !== ZERO_ADDRESS ? clone : null;
+}
+
+/** Unix seconds when the clone's subscription ends (0 if never paid). */
+async function readExpiry(client: NonNullable<ReturnType<typeof usePublicClient>>, clone: string): Promise<number> {
+  const expiry = await client.readContract({
+    address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI,
+    functionName: 'proExpiry', args: [clone as `0x${string}`],
+  }) as bigint;
+  return Number(expiry);
+}
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 
 // ── Feature comparison row ─────────────────────────────────────────────────────
@@ -53,10 +74,27 @@ export default function PricingPage() {
   const { address, loginMethod } = useEffectiveAddress();
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const { ensureApproval, invalidateApproval } = useTokenApproval();
-  const publicClient     = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient     = usePublicClient({ chainId: arcChain.id });
   const { state, dispatch, addToast } = useApp();
   const { isPremiumUser } = state;
   useCloneAccess();
+
+  // Upgrade price is read live from the factory's deployFee() so an on-chain
+  // change is reflected here without a redeploy. $1.99 is only the fallback
+  // shown until the read completes (or if it fails).
+  const [priceUsdc, setPriceUsdc] = useState<number>(1.99);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const fee = await publicClient.readContract({
+          address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
+        }) as bigint;
+        if (!cancelled) setPriceUsdc(Number(formatUnits(fee, 6)));
+      } catch { /* keep the fallback */ }
+    })();
+    return () => { cancelled = true; };
+  }, [publicClient]);
 
   const [step,   setStep]   = useState<DeployStep>('idle');
   const [txHash, setTxHash] = useState('');
@@ -64,91 +102,68 @@ export default function PricingPage() {
 
   async function handleUpgrade() {
     if (!address || !canWrite || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
-    if (isPremiumUser) { addToast('You are already on the Premium plan.', 'info'); return; }
 
     setStep('approving'); setErrMsg('');
     try {
-      // Fresh on-chain check — not just the (possibly stale, or not-yet-
-      // resolved) local isPremiumUser flag. SaldenMultiTokenPayrollFactory
-      // only allows one clone per address; calling deployPayroll() again
-      // for an address that already has one reverts on-chain with no
-      // human-readable reason (viem shows this as "execution reverted for
-      // an unknown reason"). Checking payrollOf() directly here — instead
-      // of relying solely on useCloneAccess's effect, which may not have
-      // resolved yet if the user lands on /pricing first and clicks
-      // Upgrade immediately — closes that race and avoids ever sending a
-      // transaction that's guaranteed to fail.
-      const existingClone = await publicClient.readContract({
-        address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'payrollOf', args: [address],
-      }) as string;
-
-      if (existingClone && existingClone !== '0x0000000000000000000000000000000000000000') {
-        dispatch({ type: 'SET_PAYROLL_CLONE', payload: existingClone });
-        if (address) writeCloneCache(address, { payrollClone: existingClone });
-        addToast('You already have a Premium payroll contract — activating it now.', 'info');
-        setStep('idle');
-        return;
+      // The chain is the only source of truth: whether a clone exists, and whether its
+      // subscription is still running. Local state can be stale.
+      const existingClone = await readClone(publicClient, address);
+      if (existingClone) {
+        const expiresAt = await readExpiry(publicClient, existingClone);
+        if (expiresAt > Math.floor(Date.now() / 1000)) {
+          dispatch({ type: 'SET_PAYROLL_CLONE', payload: existingClone });
+          dispatch({ type: 'SET_PRO_STATUS',    payload: { expiresAt } });
+          writeCloneCache(address, { payrollClone: existingClone });
+          addToast('Your Salden Pro subscription is already active.', 'info');
+          setStep('idle');
+          return;
+        }
       }
 
-      const deployFee = await publicClient.readContract({
+      // Either a first purchase (deployPayroll) or a renewal of a lapsed clone (renewPro).
+      // A clone that already exists must never go through deployPayroll: it reverts.
+      const fee = await publicClient.readContract({
         address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployFee',
       }) as bigint;
 
-      // See lib/approvals/useTokenApproval.ts — checks the unified approval
-      // cache first and only prompts (and waits for on-chain confirmation
-      // of) a fresh approve if the cached amount is short.
       await ensureApproval({
-        token: CONTRACTS.USDC as `0x${string}`, spender: CONTRACTS.MULTI_TOKEN_FACTORY as `0x${string}`, amount: deployFee,
+        token: CONTRACTS.USDC as `0x${string}`, spender: CONTRACTS.MULTI_TOKEN_FACTORY as `0x${string}`, amount: fee,
       });
 
       setStep('deploying');
-      const deployTx = await universalWrite({
-        address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'deployPayroll', args: [],
-      });
-      await waitForSuccessfulReceipt(publicClient, deployTx);
-      setTxHash(deployTx);
+      const tx = existingClone
+        ? await universalWrite({
+            address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI,
+            functionName: 'renewPro', args: [existingClone as `0x${string}`],
+          })
+        : await universalWrite({
+            address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI,
+            functionName: 'deployPayroll', args: [],
+          });
+      await waitForSuccessfulReceipt(publicClient, tx);
+      setTxHash(tx);
 
-      const cloneAddr = await publicClient.readContract({
-        address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'payrollOf', args: [address],
-      }) as string;
+      const clone = existingClone ?? await readClone(publicClient, address);
+      if (!clone) throw new Error('Payroll contract not found after the transaction.');
+      const expiresAt = await readExpiry(publicClient, clone);
 
-      dispatch({ type: 'SET_PAYROLL_CLONE', payload: cloneAddr });
-      dispatch({ type: 'SET_PREMIUM',       payload: true        });
-      if (address) writeCloneCache(address, { payrollClone: cloneAddr });
-      trackClientEvent({ event: 'user_upgraded', walletAddress: address, txHash: deployTx });
+      dispatch({ type: 'SET_PAYROLL_CLONE', payload: clone });
+      dispatch({ type: 'SET_PRO_STATUS',    payload: { expiresAt } });
+      writeCloneCache(address, { payrollClone: clone });
+      trackClientEvent({ event: 'user_upgraded', walletAddress: address, txHash: tx });
       setStep('done');
-      addToast('Premium activated. Your private payroll contract is ready.', 'success', 8000);
+      addToast(
+        existingClone
+          ? 'Salden Pro renewed for another year.'
+          : 'Salden Pro activated. Your private payroll contract is ready.',
+        'success', 8000,
+      );
     } catch (err) {
-      // If the revert is specifically because a clone already exists
-      // (AlreadyDeployed, or the older undecoded 4-byte-selector form of
-      // the same thing), recover gracefully instead of showing a raw
-      // blockchain error — re-check on-chain state and activate the
-      // existing clone rather than leaving the user stuck.
-      try {
-        if (address && publicClient) {
-          const nowClone = await publicClient.readContract({
-            address: CONTRACTS.MULTI_TOKEN_FACTORY, abi: MULTI_TOKEN_FACTORY_ABI, functionName: 'payrollOf', args: [address],
-          }) as string;
-          if (nowClone && nowClone !== '0x0000000000000000000000000000000000000000') {
-            dispatch({ type: 'SET_PAYROLL_CLONE', payload: nowClone });
-            dispatch({ type: 'SET_PREMIUM',       payload: true      });
-            if (address) writeCloneCache(address, { payrollClone: nowClone });
-            addToast('You already have a Premium payroll contract — activating it now.', 'info');
-            setStep('idle');
-            return;
-          }
-        }
-      } catch { /* fall through to showing the original error below */ }
-
-      // If this revert is allowance-related (TransferFromFailed), the
-      // approval cache believed more was approved on-chain than actually
-      // was — clear it so the next attempt honestly re-checks instead of
-      // skipping the approve again. See lib/approvals/approvalCache.ts's
-      // header for why the cache can be wrong here but never unsafe.
+      // An allowance-related revert means the cached approval was wrong. Clear it so the
+      // next attempt re-checks on chain.
       if (/TransferFromFailed/i.test(String(err))) {
         void invalidateApproval(CONTRACTS.USDC as `0x${string}`, CONTRACTS.MULTI_TOKEN_FACTORY as `0x${string}`);
       }
-
       setErrMsg(friendlyErrorMessage(err, 'Transaction failed.'));
       setStep('error');
     }
@@ -206,7 +221,7 @@ export default function PricingPage() {
             <div style={{ marginTop: 24 }}>
               {isPremiumUser ? (
                 <div style={{ padding: '11px 0', textAlign: 'center', borderRadius: 10, background: '#F8F9FA', border: '1px solid #E2E8F0', fontSize: 14, fontWeight: 500, color: '#94A3B8' }}>
-                  Included with Premium
+                  Included with Salden Pro
                 </div>
               ) : (
                 <div style={{ padding: '11px 0', textAlign: 'center', borderRadius: 10, background: '#EEF2FF', fontSize: 14, fontWeight: 700, color: '#4F46E5' }}>
@@ -216,7 +231,7 @@ export default function PricingPage() {
             </div>
           </div>
 
-          {/* Premium */}
+          {/* Salden Pro */}
           <div style={{ background: 'linear-gradient(145deg, #4F46E5 0%, #6D28D9 100%)', borderRadius: 20, padding: '32px 28px', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', top: -40, right: -40, width: 160, height: 160, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
             <div style={{ position: 'absolute', top: 16, right: 20, background: '#14B8A6', color: '#fff', padding: '3px 12px', borderRadius: 99, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
@@ -224,9 +239,9 @@ export default function PricingPage() {
             </div>
 
             <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Premium</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Salden Pro</div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                <span style={{ fontSize: 42, fontWeight: 800, color: '#fff' }}>$10</span>
+                <span style={{ fontSize: 42, fontWeight: 800, color: '#fff' }}>${priceUsdc.toFixed(2)}</span>
                 <span style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)' }}>one-time · USDC</span>
               </div>
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 8, lineHeight: 1.65 }}>
@@ -252,7 +267,7 @@ export default function PricingPage() {
             <div style={{ marginTop: 24 }}>
               {isPremiumUser ? (
                 <div style={{ padding: '12px 0', textAlign: 'center', borderRadius: 10, background: 'rgba(255,255,255,0.15)', fontSize: 14, fontWeight: 700, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                  <CheckCircle2 size={16} color="#14B8A6" /> Premium Active
+                  <CheckCircle2 size={16} color="#14B8A6" /> Salden Pro Active
                 </div>
               ) : (
                 <>
@@ -263,7 +278,7 @@ export default function PricingPage() {
                   >
                     {isLoading
                       ? <><Loader2 size={16} style={{ animation: 'spin 0.7s linear infinite' }} /> {step === 'approving' ? 'Approving USDC…' : 'Deploying contract…'}</>
-                      : <><Zap size={16} /> Upgrade for $10 USDC</>
+                      : <><Zap size={16} /> Upgrade for ${priceUsdc.toFixed(2)} USDC / year</>
                     }
                   </button>
                   {!address && (
@@ -282,7 +297,7 @@ export default function PricingPage() {
           <div style={{ background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 14, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 820, margin: '0 auto', width: '100%' }}>
             <CheckCircle2 size={20} color="#059669" style={{ flexShrink: 0 }} />
             <div>
-              <p style={{ fontSize: 14, fontWeight: 700, color: '#059669', margin: '0 0 2px' }}>Premium activated successfully</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: '#059669', margin: '0 0 2px' }}>Salden Pro activated successfully</p>
               <a href={txLink(txHash)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#059669', display: 'flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}>
                 View on ArcScan <ArrowRight size={12} />
               </a>
@@ -301,7 +316,7 @@ export default function PricingPage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px', padding: '14px 24px', borderBottom: '1px solid #E2E8F0', background: '#F8F9FA' }}>
             <span style={{ fontSize: 12, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Feature</span>
             <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Free</div>
-            <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#4F46E5', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Premium</div>
+            <div style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#4F46E5', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Salden Pro</div>
           </div>
 
           {/* Every claim below is verified against deployed contract source */}
@@ -318,7 +333,7 @@ export default function PricingPage() {
           <Row label="Payroll Receipt emails"           free={true}             premium={true}          />
           <Row label="Transaction history"               free={true}             premium={true}          />
           <Row label="Compliance dashboard"              free={true}             premium={true}          />
-          <Row label="Cost"                              free="Free"             premium="$10 one-time"  />
+          <Row label="Cost"                              free="Free"             premium={`$${priceUsdc.toFixed(2)} per year`}  />
         </div>
 
       </div>

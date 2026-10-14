@@ -1,12 +1,12 @@
 /**
  * @file lib/ipfs.ts
  * IPFS upload via Pinata REST API.
- * Uses fetch directly — no extra npm package needed.
+ * Uses fetch directly, no extra npm package needed.
  *
  * Required env var: PINATA_JWT
  * Get it from: https://app.pinata.cloud → API Keys → New Key → Pinning permissions
  *
- * CID returned uses v1 (base32) — universally compatible with IPFS gateways.
+ * CID returned uses v1 (base32), universally compatible with IPFS gateways.
  */
 
 const PINATA_API  = 'https://api.pinata.cloud';

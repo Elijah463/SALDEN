@@ -10,10 +10,10 @@
  *   https://developers.circle.com/w3s/reference/
  *
  * Flow:
- *  1. createOrGetUser(userId)         — idempotent; won't error if user exists
- *  2. getUserSession(userId)          — returns { userToken, encryptionKey }
- *  3. initializeUserWallet(userToken) — returns challengeId for client SDK
- *  4. getUserWallets(userToken)        — returns array of wallets after setup
+ *  1. createOrGetUser(userId), idempotent; won't error if user exists
+ *  2. getUserSession(userId), returns { userToken, encryptionKey }
+ *  3. initializeUserWallet(userToken), returns challengeId for client SDK
+ *  4. getUserWallets(userToken), returns array of wallets after setup
  */
 
 import { getEntitySecretCiphertext, toUUIDv5 } from './entitySecret';
@@ -64,7 +64,7 @@ async function circleGet(path: string, userToken?: string) {
 
 // ── 1. Create or silently retrieve an existing Circle user ────────────────────
 //
-// Circle returns 409 if the user already exists — we treat that as success.
+// Circle returns 409 if the user already exists, we treat that as success.
 export async function createOrGetUser(userId: string): Promise<void> {
   try {
     await circlePost('/users', { userId });
@@ -95,25 +95,24 @@ export async function getUserSession(userId: string): Promise<CircleSession> {
 // Returns the challengeId that the Circle Web SDK on the client must execute
 // to prompt the user to set their PIN / recovery method.
 //
-// Arc Testnet IS one of Circle's individually-named Wallets API chains —
-// chain code `ARC-TESTNET`, with full EOA + SCA + MSCA support and every
+// Arc Network IS one of Circle's individually-named Wallets API chains, // chain code `ARC`, with full EOA + SCA + MSCA support and every
 // Wallets API endpoint available (it is not listed under "Blockchain-
 // specific limitations"). Verified directly against
 // https://developers.circle.com/w3s/supported-blockchains-and-currencies.
 // This used to say the opposite (that Arc fell under the generic "Other
-// EVM blockchains" fallback) — that was wrong; that fallback is real and
+// EVM blockchains" fallback), that was wrong; that fallback is real and
 // IS EOA-only with no contract execution support, but Arc was never
 // actually in it.
 //
 // Two things that follow from using the correct chain code:
-//  1. accountType stays 'EOA' for now — SCA is available for Arc, but
+//  1. accountType stays 'EOA' for now, SCA is available for Arc, but
 //     turning it on means configuring Circle's Gas Station (sponsorship
 //     policy, funded sponsor wallet) in the Circle Console, which is a
 //     dashboard-side change this codebase can't make or verify. Worth
-//     doing later — it would remove the "brand-new wallet needs USDC
-//     before its first tx" problem entirely — but out of scope here.
+//     doing later, it would remove the "brand-new wallet needs USDC
+//     before its first tx" problem entirely, but out of scope here.
 //  2. Because Arc is properly classified, /user/transactions/contractExecution
-//     now works for these wallets — see createContractExecutionChallenge()
+//     now works for these wallets, see createContractExecutionChallenge()
 //     below and lib/circle/useUniversalWrite.ts, which uses it directly
 //     instead of the old sign-then-broadcast-ourselves fallback.
 export async function initializeUserWallet(userToken: string): Promise<string> {
@@ -139,17 +138,17 @@ export interface CircleWallet {
   state:      string;
 }
 
-// The chain code every wallet in this app is created under — see
+// The chain code every wallet in this app is created under, see
 // initializeUserWallet() below. Kept as one constant so the filter here and
 // the creation call can never independently drift apart.
-const ARC_BLOCKCHAIN = 'ARC-TESTNET';
+const ARC_BLOCKCHAIN = 'ARC';
 
 // `blockchain` is a documented filter on GET /wallets (confirmed against
-// Circle's own List Wallets API reference — "Filter by blockchain", query
+// Circle's own List Wallets API reference, "Filter by blockchain", query
 // param `blockchain`). Filtering server-side, rather than fetching
 // everything and filtering in JS, also means an account with wallets on
-// several chains (e.g. a pre-migration EVM-TESTNET wallet alongside a real
-// ARC-TESTNET one) never has the wrong one show up in the result at all.
+// several chains (e.g. a pre-migration wallet alongside a real
+// ARC one) never has the wrong one show up in the result at all.
 export async function getUserWallets(userToken: string, blockchain: string = ARC_BLOCKCHAIN): Promise<CircleWallet[]> {
   const json = await circleGet(`/wallets?blockchain=${encodeURIComponent(blockchain)}`, userToken);
   return (json.data?.wallets ?? []) as CircleWallet[];
@@ -157,14 +156,14 @@ export async function getUserWallets(userToken: string, blockchain: string = ARC
 
 // ── 5. Check if a user already has a wallet (no challenge needed) ─────────────
 //
-// Only ever considers ARC-TESTNET wallets "the" wallet. An account whose
-// ONLY wallet predates the switch to the ARC-TESTNET chain code (see
+// Only ever considers ARC wallets "the" wallet. An account whose
+// ONLY wallet predates the switch to the ARC chain code (see
 // initializeUserWallet()'s doc comment) will correctly come back as
-// isNewUser: true here — the login flow then runs the normal
+// isNewUser: true here, the login flow then runs the normal
 // initializeUserWallet() challenge again, which provisions a proper,
-// working ARC-TESTNET wallet for that already-existing Circle user (no new
+// working ARC wallet for that already-existing Circle user (no new
 // email/PIN needed, just a fresh CREATE_WALLET-type challenge). That new
-// wallet gets a NEW address — funds and any registry/payroll clone tied to
+// wallet gets a NEW address, funds and any registry/payroll clone tied to
 // the old, wrong-chain address are NOT automatically carried over, since
 // they're genuinely a different wallet record on Circle's side. There's no
 // code-level fix for that part; it's a one-time consequence of the earlier
@@ -186,29 +185,27 @@ export async function getUserFirstWallet(
 
 // ── 6. Create a contract-execution CHALLENGE for a user-controlled wallet ─────
 //
-// THE primary write path for social-login (Circle UCW) users — see
+// THE primary write path for social-login (Circle UCW) users, see
 // lib/circle/useUniversalWrite.ts. Now that wallets are created under the
-// correct `ARC-TESTNET` chain code (see initializeUserWallet() above),
+// correct `ARC` chain code (see initializeUserWallet() above)
 // Circle's own /user/transactions/contractExecution handles simulation,
-// gas estimation, signing and broadcasting — this codebase no longer
+// gas estimation, signing and broadcasting, this codebase no longer
 // builds/estimates/signs the raw transaction itself for these users.
 //
-// Unlike executeContractCall() in agent-wallet.ts (developer-controlled —
-// Salden's own agent wallet, which Salden's server can authorise on its
+// Unlike executeContractCall() in agent-wallet.ts (developer-controlled, // Salden's own agent wallet, which Salden's server can authorise on its
 // own), a USER-controlled wallet can only be authorised by that user's own
-// PIN. This doesn't execute anything — it creates a pending challenge that
+// PIN. This doesn't execute anything, it creates a pending challenge that
 // the CLIENT must run through the Circle Web SDK (see
 // lib/circle/executeChallenge.ts's executeCircleTransactionChallenge),
 // which prompts the user's PIN and only then actually submits the
 // transaction. Same idempotency-key and entity-secret-ciphertext
-// requirements as every other "critical" Circle endpoint — see
+// requirements as every other "critical" Circle endpoint, see
 // entitySecret.ts.
 //
 // `callData` is used here (not `abiFunctionSignature`/`abiParameters`)
 // whenever the caller already has ABI-encoded calldata (which
-// useUniversalWrite.ts always does, via viem's encodeFunctionData) —
-// Circle's docs list these as mutually exclusive and equally valid, and
-// reusing our own already-reliable calldata encoding avoids a second,
+// useUniversalWrite.ts always does, via viem's encodeFunctionData), // Circle's docs list these as mutually exclusive and equally valid, and
+// reusing our own already-reliable calldata encoding avoids a second
 // redundant place that could get a function signature string wrong.
 export interface ContractExecutionChallengeParams {
   userToken:              string;
@@ -218,7 +215,7 @@ export interface ContractExecutionChallengeParams {
   abiParameters?:         unknown[];
   callData?:              string;
   value?:                 string;   // native-token amount, only for payable calls
-  idempotencyKey:         string;   // caller's own descriptive key — turned into a real UUID here, same pattern as agent-wallet.ts
+  idempotencyKey:         string;   // caller's own descriptive key, turned into a real UUID here, same pattern as agent-wallet.ts
 }
 
 export async function createContractExecutionChallenge(
@@ -251,9 +248,9 @@ export async function createContractExecutionChallenge(
 //
 // Circle's GET /v1/w3s/transactions/{id} is the same endpoint regardless
 // of whether the transaction came from a developer- or user-controlled
-// wallet — this just needs the API key, not a user token. Mirrors
+// wallet, this just needs the API key, not a user token. Mirrors
 // getTxStatus() in agent-wallet.ts (kept as a separate copy rather than a
-// shared import so this module has no dependency on agent-wallet.ts — see
+// shared import so this module has no dependency on agent-wallet.ts, see
 // the file header's modularity note).
 export interface CircleTxStatus {
   id:      string;
@@ -269,14 +266,14 @@ export async function getUserTxStatus(transactionId: string): Promise<CircleTxSt
 
 // ── 8. Create a message-signing CHALLENGE for a user-controlled wallet ────────
 //
-// Same reasoning as createContractExecutionChallenge above — only the
+// Same reasoning as createContractExecutionChallenge above, only the
 // user's own PIN can authorise a signature from their wallet. Needed by
 // any flow that signs a plain message rather than calling a contract
 // (e.g. the IPFS employee-data sync's encryption-key derivation in
 // lib/usePayrollSync.ts). Unlike contract execution, the SDK challenge
 // callback for a signing challenge is documented to return the result
 // directly as `result.data.signature` (confirmed via Circle's own SDK
-// sample code) — no polling/fallback needed, see
+// sample code), no polling/fallback needed, see
 // executeCircleMessageSigningChallenge() in executeChallenge.ts.
 export interface MessageSigningChallengeParams {
   userToken:      string;
@@ -302,16 +299,16 @@ export async function createMessageSigningChallenge(
   return challengeId;
 }
 
-// ── 9. SUPERSEDED — Create a transaction-SIGNING (not execution) challenge ────
+// ── 9. SUPERSEDED, Create a transaction-SIGNING (not execution) challenge ────
 //
 // This was the write path while wallets were (incorrectly) created under
 // the generic "Other EVM blockchains" classification, which really does
 // disallow /user/transactions/contractExecution for user-controlled
-// wallets — sign-only was the correct workaround for that classification.
-// Now that initializeUserWallet() uses the real `ARC-TESTNET` chain code,
+// wallets, sign-only was the correct workaround for that classification.
+// Now that initializeUserWallet() uses the real `ARC` chain code
 // contractExecution is fully supported and createContractExecutionChallenge()
 // above is the live path (see useUniversalWrite.ts). Left in place, unused,
-// as a reference/fallback rather than deleted — same convention as
+// as a reference/fallback rather than deleted, same convention as
 // write-challenge/route.ts below it.
 export interface TransactionSigningChallengeParams {
   userToken:      string;
@@ -319,7 +316,7 @@ export interface TransactionSigningChallengeParams {
   transaction: {
     to:                     string;
     data?:                  string;
-    value?:                 string;   // decimal string, wei — omit for 0
+    value?:                 string;   // decimal string, wei, omit for 0
     gas:                    string;   // decimal string
     maxFeePerGas:           string;   // decimal string, wei
     maxPriorityFeePerGas:   string;   // decimal string, wei
@@ -337,8 +334,7 @@ export async function createTransactionSigningChallenge(
   const json = await circlePost('/user/sign/transaction', {
     idempotencyKey: toUUIDv5(params.idempotencyKey),
     walletId:       params.walletId,
-    // Circle's API takes this as a JSON *string*, not a nested object —
-    // confirmed against their own request example.
+    // Circle's API takes this as a JSON *string* not a nested object, // confirmed against their own request example.
     transaction:    JSON.stringify(params.transaction),
     entitySecretCiphertext,
   }, params.userToken);
@@ -349,7 +345,7 @@ export async function createTransactionSigningChallenge(
 }
 
 /**
- * FALLBACK ONLY — see executeCircleTransactionChallenge() in
+ * FALLBACK ONLY, see executeCircleTransactionChallenge() in
  * executeChallenge.ts for why this exists. Circle's Web SDK challenge
  * callback is documented to return `result.type` / `result.status`, but
  * the exact field carrying the resulting transaction's id for a
@@ -358,7 +354,7 @@ export async function createTransactionSigningChallenge(
  * explicit). Rather than guess a field name and silently return
  * `undefined` if wrong, the client tries the direct field first, and if
  * that comes back empty, falls back to asking here: "what's this
- * wallet's most recent transaction?" — reliable because a write challenge
+ * wallet's most recent transaction?", reliable because a write challenge
  * only ever has one in-flight transaction per wallet at a time in this
  * app's flows (Salden doesn't fire concurrent writes from the same
  * social-login wallet).

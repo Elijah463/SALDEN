@@ -1,9 +1,10 @@
+import { requirePro } from '@/lib/agent/tier';
 /**
  * @file app/api/agent/limits/route.ts
  * Lets an employer view and set their own daily AI-agent spend limit
  * (Settings page). See lib/agent/employerLimits.ts and the updated
  * lib/agent/spendLimits.ts for how this interacts with the platform-wide
- * absolute ceiling (AGENT_MAX_DAILY_TOTAL) — this is an additional,
+ * absolute ceiling (AGENT_MAX_DAILY_TOTAL), this is an additional
  * tighter-or-equal limit the employer chooses, never a way to exceed the
  * platform ceiling.
  */
@@ -11,7 +12,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySessionToken } from '@/lib/agent/auth';
 import { getEmployerDailyLimit, setEmployerDailyLimit } from '@/lib/agent/employerLimits';
-import { PLATFORM_MAX_DAILY_TOTAL, MAX_SINGLE_PAYMENT } from '@/lib/agent/spendLimits';
 
 function getSession(req: NextRequest, walletAddress: string) {
   const authHeader = req.headers.get('authorization');
@@ -24,19 +24,21 @@ export async function GET(req: NextRequest) {
     const walletAddress = req.nextUrl.searchParams.get('wallet');
     if (!walletAddress) return NextResponse.json({ error: 'wallet required' }, { status: 400 });
 
-    // Deliberately no session check here — this is read-only and returns
-    // nothing sensitive: PLATFORM_MAX_DAILY_TOTAL/MAX_SINGLE_PAYMENT are
+    // Deliberately no session check here, this is read-only and returns
     // fixed constants, and an employer's self-configured spend ceiling
     // grants no capability to whoever reads it (walletAddress is already
     // public on-chain regardless). Requiring a wallet signature just to
-    // *view* this — before the employer has even decided to change
-    // anything — meant opening Settings always prompted a sign-in.
+    // *view* this, before the employer has even decided to change
+    // anything, meant opening Settings always prompted a sign-in.
     // Actually changing the limit (POST, below) still requires one.
-    const employerLimit = await getEmployerDailyLimit(walletAddress);
+    let employerLimit: number | null;
+    try {
+      employerLimit = await getEmployerDailyLimit(walletAddress);
+    } catch {
+      return NextResponse.json({ error: 'Spend limits are temporarily unavailable.' }, { status: 503 });
+    }
     return NextResponse.json({
-      employerLimit,                      // null if never configured — Settings should show the platform default as a placeholder in that case
-      platformCeiling: PLATFORM_MAX_DAILY_TOTAL,
-      maxSinglePayment: MAX_SINGLE_PAYMENT,
+      employerLimit,                      // null if never configured, Settings should show the platform default as a placeholder in that case
     });
   } catch (err) {
     console.error('[agent/limits GET]', err instanceof Error ? err.message : err);
@@ -48,6 +50,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as { walletAddress?: string; amount?: number; grossPayrollTotal?: number };
     const { walletAddress, amount, grossPayrollTotal } = body;
+    const proBlock = await requirePro(walletAddress);
+    if (proBlock) return proBlock;
 
     if (!walletAddress || typeof amount !== 'number' || typeof grossPayrollTotal !== 'number') {
       return NextResponse.json({ error: 'walletAddress, amount, and grossPayrollTotal are required.' }, { status: 400 });
@@ -59,11 +63,11 @@ export async function POST(req: NextRequest) {
     }
 
     // grossPayrollTotal is client-supplied (the client is the only party
-    // that can decrypt the employee list — see indexeddb.ts's note on
+    // that can decrypt the employee list, see indexeddb.ts's note on
     // resolvedPayments for the same architectural constraint). This is
     // deliberately low-stakes to trust: the only thing a client could gain
     // by lying about it is setting a HIGHER limit for themselves, which
-    // they could already do directly by passing a higher `amount` — the
+    // they could already do directly by passing a higher `amount`, the
     // floor check exists to catch honest mistakes (e.g. an employer
     // fat-fingering a limit lower than their own payroll), not to defend
     // against a malicious employer defrauding themselves.

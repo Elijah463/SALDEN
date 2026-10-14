@@ -3,7 +3,7 @@
  * SERVER-SIDE ONLY.
  *
  * Backs the app's unified token-approval system. Every place in Salden that
- * needs an ERC-20 approve before pulling funds (Swap, Premium upgrade,
+ * needs an ERC-20 approve before pulling funds (Swap, Salden Pro upgrade
  * dashboard payroll runs, AI Agent in-chat payments, the AI Agent's own
  * autonomous/scheduled payroll wallet) now goes through this same cache
  * instead of each independently calling `publicClient.readContract('allowance')`
@@ -22,28 +22,26 @@
  *
  * ── This cache is advisory, never authoritative for fund movement ─────────
  * The ERC-20 contract itself is the only real source of truth for whether a
- * `transferFrom` is allowed to succeed — nothing about what's stored here
+ * `transferFrom` is allowed to succeed, nothing about what's stored here
  * can move a single token. A stale/wrong cache entry (e.g. an approval that
  * was later revoked through some other means, like Etherscan or
  * revoke.cash) can at worst cause an unnecessary on-chain revert on the
  * downstream action, never an unauthorized transfer. `invalidateCachedApproval`
  * below exists specifically so a caller that observes that kind of revert
  * can clear the stale entry and self-heal on the next attempt instead of
- * staying wrong forever — see its call sites for the exact trigger.
+ * staying wrong forever, see its call sites for the exact trigger.
  *
  * ── Persistence model ───────────────────────────────────────────────────
  * In-memory Map as the ONLY source when no KV store is attached (works
  * with zero config today), best-effort mirrored into lib/kv.ts (Vercel KV
- * / Upstash Redis) when one is attached — upgrading to real cross-instance
+ * / Upstash Redis) when one is attached, upgrading to real cross-instance
  * consistency with no further code changes. When KV IS attached, reads
  * always consult it rather than trusting a local copy indefinitely; local
  * memory only wins when it's provably newer than what KV returned (the
  * brief window right after this instance's own write, before KV's own
- * read-after-write consistency catches up), never as a standing override —
- * see getCachedApproval's own comment for why that distinction matters.
+ * read-after-write consistency catches up), never as a standing override, * see getCachedApproval's own comment for why that distinction matters.
  *
- * KV layout: one key per (chainId, owner, token, spender) tuple —
- *   approvals:<chainId>:<owner>:<token>:<spender> -> { amount: string, updatedAt: number }
+ * KV layout: one key per (chainId, owner, token, spender) tuple, *   approvals:<chainId>:<owner>:<token>:<spender> -> { amount: string, updatedAt: number }
  * `amount` is stored as a decimal string since bigint isn't JSON-serialisable.
  */
 
@@ -55,7 +53,7 @@ export interface CachedApproval {
 }
 
 interface StoredApproval {
-  amount:    string; // bigint as a decimal string — see file header
+  amount:    string; // bigint as a decimal string, see file header
   updatedAt: number;
 }
 
@@ -65,12 +63,12 @@ function cacheKey(chainId: number, owner: string, token: string, spender: string
   return `approvals:${chainId}:${owner.toLowerCase()}:${token.toLowerCase()}:${spender.toLowerCase()}`;
 }
 
-/** Parses a stored entry defensively — an unparseable amount (corrupted
+/** Parses a stored entry defensively, an unparseable amount (corrupted
  *  data, a manual KV edit, a future format change) degrades to "nothing
  *  cached" rather than throwing. Server-side callers (autonomousExecution.ts,
  *  inngest/functions.ts) call getCachedApproval directly with no wrapping
  *  try/catch of their own around this specific read, so this needs to be
- *  safe at the source — consistent with the rest of this system's
+ *  safe at the source, consistent with the rest of this system's
  *  fail-open-toward-"not approved" philosophy (worst case: one unnecessary
  *  extra approve prompt, never a false "already approved"). */
 function toCachedApproval(entry: StoredApproval): CachedApproval {
@@ -84,7 +82,7 @@ function toCachedApproval(entry: StoredApproval): CachedApproval {
 }
 
 /** Returns the cached approved amount, or 0n if there's no entry (never
- *  approved yet, or a previously invalidated entry) — callers can always
+ *  approved yet, or a previously invalidated entry), callers can always
  *  do a plain `cached >= amountNeeded` comparison without a separate
  *  null-check. */
 export async function getCachedApproval(
@@ -94,16 +92,16 @@ export async function getCachedApproval(
   const local = _cache.get(key);
 
   if (!kvAvailable()) {
-    // No shared store configured — this instance's own memory is the only
+    // No shared store configured, this instance's own memory is the only
     // source of truth there is.
     return local ? toCachedApproval(local) : { amount: 0n, updatedAt: 0 };
   }
 
-  // Always consult KV — the cross-instance source of truth — rather than
+  // Always consult KV, the cross-instance source of truth, rather than
   // trusting a local copy indefinitely. Local memory can still win, but
   // ONLY when it's strictly newer than whatever KV returned: that covers
   // the brief window right after THIS instance's own write, before KV's
-  // own read-after-write consistency catches up — never a standing
+  // own read-after-write consistency catches up, never a standing
   // override. This also means invalidateCachedApproval (called from a
   // DIFFERENT instance than the one that has a local copy) is correctly
   // seen on the very next read, instead of being invisible to any
@@ -122,7 +120,7 @@ export async function getCachedApproval(
 
 /** Records a freshly-confirmed approval. Call this ONLY after the approve
  *  transaction has actually been confirmed on-chain (a successful receipt
- *  client-side, or a confirmed Circle tx status server-side) — never right
+ *  client-side, or a confirmed Circle tx status server-side), never right
  *  after broadcasting, the same race the rest of this codebase is careful
  *  about elsewhere (see lib/txReceipt.ts's header comment). */
 export async function setCachedApproval(
@@ -134,7 +132,7 @@ export async function setCachedApproval(
   if (kvAvailable()) await kvSet(key, value);
 }
 
-/** Clears a cache entry — the safety net for when a downstream action
+/** Clears a cache entry, the safety net for when a downstream action
  *  (batchPay, deploy, a swap's internal transferFrom, …) reverts in a way
  *  that indicates the real on-chain allowance wasn't actually what the
  *  cache believed. Clearing it means the NEXT attempt re-checks honestly

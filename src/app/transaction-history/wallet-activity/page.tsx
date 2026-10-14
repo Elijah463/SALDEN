@@ -2,7 +2,7 @@
 /**
  * @file app/transaction-history/wallet-activity/page.tsx
  *
- * Shows Swap / Bridge / incoming-Deposit activity — deliberately separate
+ * Shows Swap / Bridge / incoming-Deposit activity, deliberately separate
  * from the main Transaction History (payroll runs/transfers), and
  * deliberately LOCAL-ONLY (never synced to IPFS/KV), per explicit product
  * decision: it's fine if this doesn't follow the user to a different
@@ -14,25 +14,25 @@ import { usePublicClient } from 'wagmi';
 import { ArrowLeft, Repeat, Waypoints, ArrowDownToLine, ExternalLink, Loader2 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { txLink, arcTestnet } from '@/lib/contracts/config';
+import { txLink, arcChain } from '@/lib/contracts/config';
 import { getWalletActivity, type WalletActivityRecord } from '@/lib/db/indexeddb';
 import { detectIncomingDeposits } from '@/lib/walletActivity/detectDeposits';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
 
 const CHAIN_LOGOS: Record<string, string> = {
-  'Arc Testnet':      '/images/networks/arc.png',
-  'Ethereum Sepolia':  '/images/networks/ethereum-sepolia.png',
-  'Base Sepolia':      '/images/networks/base.png',
-  'Arbitrum Sepolia':  '/images/networks/arbitrum.png',
-  'Avalanche Fuji':    '/images/networks/avalanche.jpeg',
-  'Linea Sepolia':     '/images/networks/linea.jpeg',
+  'Arc Network':      '/images/networks/arc.png',
+  'Ethereum':        '/images/networks/ethereum.png',
+  'Base':            '/images/networks/base.png',
+  'Arbitrum':        '/images/networks/arbitrum.png',
+  'Avalanche':       '/images/networks/avalanche.jpeg',
+  'Linea':           '/images/networks/linea.jpeg',
 };
 
 // Shorter display form for chain names, matching the requested tile
 // wording ("from Ethereum to Arc" rather than the full config names).
 function shortChainName(name?: string): string {
   if (!name) return '';
-  return name.replace(' Testnet', '').replace(' Sepolia', '');
+  return name;
 }
 
 function TokenLogo({ symbol, size = 16 }: { symbol: string; size?: number }) {
@@ -66,8 +66,23 @@ const TYPE_META = {
   deposit: { label: 'Deposit', icon: ArrowDownToLine },
 } as const;
 
+/** Hides an onramp row once the same deposit shows up on-chain (same token and amount, within 48h). */
+function withoutOnrampDuplicates(records: WalletActivityRecord[]): WalletActivityRecord[] {
+  const onchain = records.filter(r => r.type === 'deposit' && r.source !== 'onramp');
+  const WINDOW_MS = 48 * 60 * 60 * 1000;
+  return records.filter(r => {
+    if (r.source !== 'onramp') return true;
+    return !onchain.some(d =>
+      d.token === r.token &&
+      Math.abs(Number(d.amount) - Number(r.amount)) < 0.005 &&
+      Math.abs(d.timestamp - r.timestamp) < WINDOW_MS
+    );
+  });
+}
+
 function ActivityTile({ record }: { record: WalletActivityRecord }) {
   const meta = TYPE_META[record.type];
+  const isOnramp = record.source === 'onramp';
   const Icon = meta.icon;
 
   return (
@@ -75,7 +90,7 @@ function ActivityTile({ record }: { record: WalletActivityRecord }) {
       background: '#fff', border: '1px solid #E2E8F0', borderRadius: 14,
       padding: '16px 18px', display: 'flex', gap: 14,
     }}>
-      {/* Icon — the only element in this tile that's brand indigo; every
+      {/* Icon, the only element in this tile that's brand indigo; every
           other element (text, chevrons) is black/grey by hierarchy, per
           explicit instruction. */}
       <div style={{
@@ -97,7 +112,13 @@ function ActivityTile({ record }: { record: WalletActivityRecord }) {
               {' '}to {record.toAmount} <TokenLogo symbol={record.toToken ?? ''} />{record.toToken}
             </>
           )}
-          {record.type === 'deposit' && (
+          {record.type === 'deposit' && isOnramp && (
+            <>
+              Card or bank deposit of {record.amount} <TokenLogo symbol={record.token ?? ''} />{record.token}
+              {' '}· {record.status === 'settled' ? 'Settled' : 'Processing'}
+            </>
+          )}
+          {record.type === 'deposit' && !isOnramp && (
             <>
               Received {record.amount} <TokenLogo symbol={record.token ?? ''} />{record.token}
               {' '}from <span style={{ fontFamily: "'JetBrains Mono', monospace", color: '#475569' }}>{truncAddr(record.fromAddress ?? '')}</span>
@@ -112,10 +133,12 @@ function ActivityTile({ record }: { record: WalletActivityRecord }) {
           )}
         </div>
 
-        <a href={txLink(record.hash)} target="_blank" rel="noreferrer"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 12, color: '#64748B', textDecoration: 'none' }}>
-          View on Arcscan <ExternalLink size={11} color="#94A3B8" />
-        </a>
+        {!isOnramp && (
+          <a href={txLink(record.hash)} target="_blank" rel="noreferrer"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 12, color: '#64748B', textDecoration: 'none' }}>
+            View on Arcscan <ExternalLink size={11} color="#94A3B8" />
+          </a>
+        )}
       </div>
     </div>
   );
@@ -123,20 +146,20 @@ function ActivityTile({ record }: { record: WalletActivityRecord }) {
 
 export default function WalletActivityPage() {
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const [activity, setActivity] = useState<WalletActivityRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
 
   const load = useCallback(async () => {
     if (!address) { setLoading(false); return; }
     setLoading(true);
-    // Check for new incoming deposits first (best-effort — a failure here
+    // Check for new incoming deposits first (best-effort, a failure here
     // shouldn't block showing whatever's already recorded locally).
     if (publicClient) {
       await detectIncomingDeposits(address as `0x${string}`, publicClient).catch(() => {});
     }
     const records = await getWalletActivity(address);
-    setActivity(records);
+    setActivity(withoutOnrampDuplicates(records));
     setLoading(false);
   }, [address, publicClient]);
 

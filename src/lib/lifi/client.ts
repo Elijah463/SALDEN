@@ -2,24 +2,18 @@
  * @file lib/lifi/client.ts
  * SERVER-SIDE ONLY.
  *
- * Thin wrapper around LI.FI's REST API (https://li.quest/v1) — no @lifi/sdk
+ * Thin wrapper around LI.FI's REST API (https://li.quest/v1), no @lifi/sdk
  * dependency, since it isn't in package.json and this only needs a couple
  * of read endpoints. Never call these functions from client components;
  * always go through the /api/lifi/* routes so LIFI_API_KEY stays private
- * (see https://docs.li.fi — the key must never reach the browser).
+ * (see https://docs.li.fi, the key must never reach the browser).
  *
- * NOTE ON TESTNETS: LI.FI's own docs are explicit that they generally
- * don't support testnets ("limited user engagement... not reflective of
- * the production environment"). Arc Testnet is a confirmed, official
- * exception (community.arc.io: "LI.FI now supports Arc Testnet"), and
- * Base/Arbitrum/OP Sepolia are confirmed present in LI.FI's live /chains
- * response as of this writing. Whether Ethereum Sepolia, Avalanche Fuji,
- * and Linea Sepolia are *also* in that curated exception list isn't
- * something a static chain list here can promise — getSupportedChainIds
- * below asks LI.FI directly and only reports what it actually returns,
- * so the app never claims support LI.FI doesn't actually have.
+ * CHAIN SUPPORT: Arc Network is a supported LI.FI chain (community.arc.io).
+ * Other chains are checked against LI.FI's live /chains response at runtime.
  */
 
+// 0.1% platform fee on every swap, as a fraction of fromAmount.
+const PLATFORM_SWAP_FEE = 0.001;
 const LIFI_API_BASE = 'https://li.quest/v1';
 
 function authHeaders(): HeadersInit {
@@ -55,15 +49,15 @@ export interface LifiQuote {
   toolDetails?: { name?: string };
 }
 
-/** Fetches a real, executable LI.FI quote — a same-chain swap here (Arc
- *  Testnet to itself), but the same endpoint handles cross-chain too.
+/** Fetches a real, executable LI.FI quote, a same-chain swap here (Arc
+ *  same chain), but the same endpoint handles cross-chain too.
  *
- *  Returns { quote: null, reason } on any failure — including the ACTUAL
+ *  Returns { quote: null, reason } on any failure, including the ACTUAL
  *  upstream reason where available (LI.FI's own error message/status),
  *  not just a blanket "no route." This matters because "no route" and
  *  "your request was malformed / this token isn't in LI.FI's registry for
  *  this chain" look identical to a user unless the real reason is
- *  captured — silently collapsing both into the same message makes a
+ *  captured, silently collapsing both into the same message makes a
  *  config problem (e.g. an unlisted/misconfigured token) indistinguishable
  *  from genuine no-liquidity, which is exactly the ambiguity that made the
  *  cirBTC routing issue hard to diagnose. */
@@ -77,16 +71,23 @@ export async function getSwapQuote(params: LifiQuoteParams): Promise<{ quote: Li
     url.searchParams.set('fromAmount', params.fromAmount);
     url.searchParams.set('fromAddress', params.fromAddress);
     if (params.slippage !== undefined) url.searchParams.set('slippage', String(params.slippage));
+    // Platform swap fee (0.1%). LI.FI deducts it from the sending token and
+    // pays it to the fee wallet configured for this integrator in the LI.FI
+    // Partner Portal (portal.li.fi). The integrator string must match that
+    // account. The fee is applied on-chain by LI.FI, so the client never
+    // handles the fee amount itself.
+    url.searchParams.set('fee', String(PLATFORM_SWAP_FEE));
+    url.searchParams.set('integrator', process.env.LIFI_INTEGRATOR || 'salden');
 
     const res = await fetch(url.toString(), { headers: authHeaders() });
     if (!res.ok) {
-      // Surface LI.FI's own error body when present — this is what
+      // Surface LI.FI's own error body when present, this is what
       // distinguishes "no liquidity for this pair" from "LI.FI doesn't
       // recognize this token address on this chain" (a config problem,
       // not a routing problem).
       const body = await res.json().catch(() => null) as { message?: string; error?: string } | null;
       const reason = body?.message || body?.error
-        || `LI.FI returned ${res.status}${res.status === 404 ? ' — no route between these tokens' : ''}.`;
+        || `LI.FI returned ${res.status}${res.status === 404 ? ', no route between these tokens' : ''}.`;
       return { quote: null, reason };
     }
     const data = await res.json() as LifiQuote;
@@ -108,7 +109,7 @@ export interface LifiTokenPrice {
 }
 
 /** Fetches a single token's live USD price from LI.FI. Returns null on any
- *  failure (unsupported chain/token, network error, etc.) — callers should
+ *  failure (unsupported chain/token, network error, etc.), callers should
  *  treat this as "price unavailable" and simply omit the USD display,
  *  never block the underlying bridge/swap on it. */
 export async function getTokenPrice(chainId: number, tokenAddress: string): Promise<LifiTokenPrice | null> {
@@ -142,14 +143,13 @@ export interface LifiChainSummary {
   mainnet: boolean;
 }
 
-// Cached in memory per warm serverless instance — this list changes rarely
+// Cached in memory per warm serverless instance, this list changes rarely
 // and every bridge/swap page load calling it fresh would be wasteful.
 let cachedChains: { data: LifiChainSummary[]; fetchedAt: number } | null = null;
 const CHAINS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 
 /** Returns every chain LI.FI currently reports as supported (mainnet and
- *  testnet). Source of truth for "is chain X actually usable right now" —
- *  see the file-level note above on why this isn't hardcoded. */
+ *  network). Source of truth for "is chain X actually usable right now", *  see the file-level note above on why this isn't hardcoded. */
 export async function getLifiSupportedChains(): Promise<LifiChainSummary[]> {
   if (cachedChains && Date.now() - cachedChains.fetchedAt < CHAINS_CACHE_TTL_MS) {
     return cachedChains.data;

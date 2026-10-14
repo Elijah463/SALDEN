@@ -8,7 +8,7 @@
  *   ERC-20 balanceOf (EURC, cirBTC) → 6/8 decimals → divide by 10^decimals
  *
  * Re-fetch strategy:
- *   nativeBalance (USDC) is read from useBalance hook — updates automatically.
+ *   nativeBalance (USDC) is read from useBalance hook, updates automatically.
  *   ERC-20 balances fetched once on mount / address change.
  *   nativeBalance is NOT in fetchTokenBalances useCallback deps to avoid
  *   continuous re-fetches on every block.
@@ -26,12 +26,12 @@ import { NetworkGuard }     from '@/components/shared/NetworkGuard';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { ERC20_ABI }        from '@/lib/contracts/abis';
-import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
+import { arcChain, CONTRACTS } from '@/lib/contracts/config';
 import { copyToClipboard }  from '@/lib/clipboard';
 import { tokenIconRenderSize } from '@/lib/token-registry';
 
 // Next.js statically replaces `process.env.NEXT_PUBLIC_X` at build time only
-// when it sees that exact literal expression in source — `process.env[someVar]`
+// when it sees that exact literal expression in source, `process.env[someVar]`
 // (dynamic/bracket access) can never be inlined this way, since the bundler
 // doesn't know what `someVar` will be until runtime, and `process.env` isn't
 // actually available in the browser bundle at runtime beyond what got
@@ -46,7 +46,7 @@ const ENV_TOKEN_ADDRESSES: Record<string, string | undefined> = {
 // ── Supported tokens ─────────────────────────────────────────────────────────
 
 // Icons are sized to exactly fill TokenRow's 40x40 circular slot (see
-// TOKEN_ICON_SIZE below) — no separate colored background/border behind
+// TOKEN_ICON_SIZE below), no separate colored background/border behind
 // them, so every row shows a clean, equally-sized token logo with no halo.
 const TOKEN_ICON_SIZE = 40;
 
@@ -154,14 +154,14 @@ function TokenRow({ symbol, name, icon, balance, loading, usdValue }: {
 
 export default function WalletPage() {
   const { address, isConnected: isAuth } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   const [showBalance,   setShowBalance]   = useBalanceVisibility();
   const [copied,        setCopied]        = useState(false);
   const [erc20Balances, setErc20Balances] = useState<Record<string, string>>({});
   const [loadingErc20,  setLoadingErc20]  = useState(false);
 
-  // Native balance — 18 decimals on Arc; .formatted gives human-readable value
+  // Native balance, 18 decimals on Arc; .formatted gives human-readable value
   const { data: nativeBalance } = useBalance({
     address: address as `0x${string}` | undefined,
     query: { enabled: !!address },
@@ -174,21 +174,21 @@ export default function WalletPage() {
       })
     : '0.00';
 
-  // ERC-20 balances — nativeBalance intentionally excluded from deps
+  // ERC-20 balances, nativeBalance intentionally excluded from deps
   // to avoid re-fetching on every block; USDC is shown from nativeBalance directly
   //
-  // A transient RPC hiccup (Arc's public testnet RPC intermittently
+  // A transient RPC hiccup (Arc's public RPC intermittently
   // rate-limits with HTTP 429) used to be indistinguishable from a
   // genuinely empty wallet: any failed balanceOf() read fell into the same
   // catch block that displayed "0.00", identical to what a real zero
-  // balance shows. That's exactly the reported symptom — refreshing
+  // balance shows. That's exactly the reported symptom, refreshing
   // sometimes shows the real balance and sometimes shows 0.00 for the same
   // funded wallet, purely depending on whether that particular read hit a
   // rate limit. Fixed the same way swap/page.tsx's fetchTokenBalance
   // already does it: retry a few times first (a rate limit is usually
   // gone within a second or two), and on total failure keep whatever
   // balance was last successfully read instead of overwriting it with a
-  // fake zero — an unknown balance and a confirmed-zero balance are not
+  // fake zero, an unknown balance and a confirmed-zero balance are not
   // the same thing and shouldn't render the same way.
   const erc20BalancesRef = useRef(erc20Balances);
   useEffect(() => { erc20BalancesRef.current = erc20Balances; }, [erc20Balances]);
@@ -223,7 +223,7 @@ export default function WalletPage() {
         }
       }
       // Keep the last known-good value on total failure rather than
-      // clobbering it with a fake "0.00" — see comment above.
+      // clobbering it with a fake "0.00", see comment above.
       out[t.symbol] = resolved ?? previous[t.symbol] ?? `0.${'0'.repeat(t.displayDecimals)}`;
     }
     setErc20Balances(prev => ({ ...prev, ...out }));
@@ -232,7 +232,7 @@ export default function WalletPage() {
 
   useEffect(() => { if (address) fetchErc20(); }, [address, fetchErc20]);
 
-  // ── Total USD value across all tokens (hero card) — live prices via LI.FI ──
+  // ── Total USD value across all tokens (hero card), live prices via LI.FI ──
   const [tokenPrices, setTokenPrices] = useState<Record<string, number>>({});
 
   useEffect(() => {
@@ -244,7 +244,7 @@ export default function WalletPage() {
           : undefined;
         if (!addr) return [t.symbol, null] as const;
         try {
-          const res = await fetch(`/api/lifi/price?chainId=${arcTestnet.id}&token=${addr}`);
+          const res = await fetch(`/api/lifi/price?chainId=${arcChain.id}&token=${addr}`);
           const data = await res.json() as { price: { priceUSD: string } | null };
           return [t.symbol, data.price ? Number(data.price.priceUSD) : null] as const;
         } catch {
@@ -263,13 +263,13 @@ export default function WalletPage() {
   const totalUsd = TOKENS.reduce((sum, t) => {
     const balanceStr = t.fromNative ? usdcDisplay : (erc20Balances[t.symbol] ?? '0');
     const balance = Number(balanceStr.replace(/,/g, '')) || 0;
-    const price = tokenPrices[t.symbol] ?? (t.symbol === 'USDC' ? 1 : undefined); // USDC defaults to $1 if the live price hasn't loaded yet — everything else waits for a real price rather than guessing
+    const price = tokenPrices[t.symbol] ?? (t.symbol === 'USDC' ? 1 : undefined); // USDC defaults to $1 if the live price hasn't loaded yet, everything else waits for a real price rather than guessing
     if (price === undefined) return sum;
     return sum + balance * price;
   }, 0);
   const totalUsdDisplay = totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   // True only once every token with a nonzero balance has a resolved price
-  // — while any are still missing, the total above is a partial sum, so we
+  // while any are still missing, the total above is a partial sum, so we
   // label it "≈" rather than presenting it as exact.
   const allPricesLoaded = TOKENS.every(t => {
     const balanceStr = t.fromNative ? usdcDisplay : (erc20Balances[t.symbol] ?? '0');

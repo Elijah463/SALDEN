@@ -1,6 +1,6 @@
 /**
  * @file components/shared/Logo.tsx
- * Salden brand logo — renders the real /logo.svg mark + SALDEN wordmark.
+ * Salden brand logo, renders the real /logo.svg mark + SALDEN wordmark.
  * Uses a standard <img> tag so SVG renders at full fidelity on all browsers.
  */
 

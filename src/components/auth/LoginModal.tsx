@@ -3,9 +3,9 @@
  * @file components/auth/LoginModal.tsx
  *
  * Login options:
- *  1. Email OTP  — unchanged flow
- *  2. Google     — Google Identity Services → Circle User-Controlled Wallet
- *  3. WalletConnect — unchanged external wallet flow
+ *  1. Email OTP, unchanged flow
+ *  2. Google, Google Identity Services → Circle User-Controlled Wallet
+ *  3. WalletConnect, unchanged external wallet flow
  *
  * Google + Circle flow:
  *  a) Load Google Identity Services (GIS) script once.
@@ -114,7 +114,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    // External wallet users go directly to dashboard — email linking (if
+    // External wallet users go directly to dashboard, email linking (if
     // wanted) is handled separately from Settings, reusing OTPForm's Case A
     // (wallet param present -> verify + link email, no Circle wallet
     // created). Guard on `open` so this never fires while the modal is
@@ -150,14 +150,14 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
         if (!res.ok) throw new Error(data.error ?? 'Google sign-in failed');
 
         if (!data.isNewUser && data.walletAddress) {
-          // Returning user — wallet already exists
+          // Returning user, wallet already exists
           storeSession(data.email, data.walletAddress);
           onClose();
           router.push('/dashboard');
           return;
         }
 
-        // New user — run Circle wallet-setup challenge via shared utility
+        // New user, run Circle wallet-setup challenge via shared utility
         setStep('google-wallet-setup');
         const walletAddress = await executeCircleChallenge({
           challengeId:   data.challengeId,
@@ -193,7 +193,7 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
 
       window.google!.accounts.id.prompt((notification) => {
         if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          // One-tap was suppressed — open a full popup instead
+          // One-tap was suppressed, open a full popup instead
           window.google!.accounts.id.renderButton(
             document.getElementById('google-signin-container')!,
             { theme: 'outline', size: 'large', width: 360 }
@@ -213,11 +213,11 @@ export function LoginModal({ open, onClose }: LoginModalProps) {
 
   async function handleEmailSubmit() {
     if (!validateEmail(email)) { setEmailErr('Please enter a valid email address'); return; }
-    // BUG FIX — "No wallet found for this account yet" for accounts that
+    // BUG FIX, "No wallet found for this account yet" for accounts that
     // actually have one: this used to pass the raw, as-typed `email`
     // (whatever casing/whitespace the input field or autofill produced)
     // straight into the /auth/otp URL. OTPForm then used THAT raw value as
-    // the identity key for storeSession() — but /api/auth/email-wallet
+    // the identity key for storeSession(), but /api/auth/email-wallet
     // normalizes (.trim().toLowerCase()) before creating/looking up the
     // Circle user. Any casing/whitespace mismatch between the two meant
     // every later Circle action (sign/contract-execution challenges) was

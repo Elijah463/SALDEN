@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       // encryptionPublicKey is managed client-side after activation
     });
   } catch {
-    // walletId invalid or Circle API down — treat as inactive
+    // walletId invalid or Circle API down, treat as inactive
     return NextResponse.json({ active: false });
   }
 }

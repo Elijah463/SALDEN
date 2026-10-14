@@ -2,16 +2,16 @@
  * @file app/api/auth/send-otp/route.ts
  * Generates a secure OTP, signs it into a stateless HMAC token,
  * sends the OTP to the user's email, and returns the token to the client.
- * The token is required for verification — no server state involved.
+ * The token is required for verification, no server state involved.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 import { generateSecureOTP, createOTPToken } from '@/lib/otp-token';
 
-// Email-based rate limiter — 3 OTPs per email per 5 minutes
+// Email-based rate limiter, 3 OTPs per email per 5 minutes
 const RATE_MAP   = new Map<string, { count: number; resetAt: number }>();
-// IP-based rate limiter — 10 OTP requests per IP per 10 minutes
+// IP-based rate limiter, 10 OTP requests per IP per 10 minutes
 const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
 
 const RATE_LIMIT      = 3;
@@ -51,7 +51,7 @@ function getResend(): Resend {
 
 export async function POST(req: NextRequest) {
   try {
-    // IP-based rate limit (before reading body — prevents request body parsing abuse)
+    // IP-based rate limit (before reading body, prevents request body parsing abuse)
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
     if (!checkIPRateLimit(ip)) {
       return NextResponse.json(
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     }
 
     const otp   = generateSecureOTP();
-    const token = createOTPToken(email, otp);  // stateless — no server storage
+    const token = createOTPToken(email, otp);  // stateless, no server storage
 
     await getResend().emails.send({
       from:    'Salden <noreply@salden.xyz>',
@@ -105,14 +105,14 @@ export async function POST(req: NextRequest) {
           </p>
           <hr style="border:none;border-top:1px solid #E2E8F0;margin:28px 0;" />
           <p style="color:#CBD5E1;font-size:12px;">
-            Salden &middot; Onchain Payroll &middot; Arc Testnet &middot;
+            Salden &middot; Onchain Payroll &middot; Arc Network &middot;
             <a href="https://salden.xyz" style="color:#94A3B8;">salden.xyz</a>
           </p>
         </div>
       `,
     });
 
-    // Return token to client — client stores it and sends with OTP on verify
+    // Return token to client, client stores it and sends with OTP on verify
     return NextResponse.json({
       success: true,
       token,

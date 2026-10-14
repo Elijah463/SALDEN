@@ -7,17 +7,17 @@
  * REWRITTEN for the function-calling chat route (no more SSE / regex
  * markers). Key changes from the previous version:
  *
- *   - Single fetch + json() per turn — the route no longer streams, since
+ *   - Single fetch + json() per turn, the route no longer streams, since
  *     the function-calling loop is inherently multi-round and non-streaming
  *     server-side. Trade-off: no token-by-token typing effect anymore;
  *     gained: tool calls can't be corrupted by truncation mid-marker.
- *   - Session auth — every request now carries a signed bearer token via
+ *   - Session auth, every request now carries a signed bearer token via
  *     useAgentSession(), obtained by signing a one-time message with the
  *     connected wallet. Requires a WalletClient.
  *   - `actionLog` is now a real array returned by the server, generated
- *     from tool calls actually executed — not parsed from model text.
+ *     from tool calls actually executed, not parsed from model text.
  *   - `events` is an array of structured proposals (faucet, unlisted
- *     payment, add employee, payroll run) — rendered as real confirmation
+ *     payment, add employee, payroll run), rendered as real confirmation
  *     cards, each with its own expiry and idempotency guard.
  *   - `rateLimited` and `truncated` flags surfaced from the server.
  */
@@ -27,6 +27,7 @@ import { FileText } from 'lucide-react';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useApp }    from '@/context/AppContext';
 import ChatMessage   from '@/components/agent/ChatMessage';
+import { IrisBrand } from '@/components/agent/IrisBrand';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
 import { generateSessionId, loadSessionMessages, saveSession } from '@/lib/chatSessions';
 import { saveAgentLog } from '@/lib/db/indexeddb';
@@ -45,15 +46,14 @@ interface ActionLogEntry {
   status:    'SUCCESS' | 'FAILED' | 'QUEUED';
   detail?:   string;
   timestamp: string;
-  /** Circle's own transaction id, present only when status is 'QUEUED' —
-   *  lets the polling effect below check /api/agent/tx-status and update
+  /** Circle's own transaction id, present only when status is 'QUEUED', *  lets the polling effect below check /api/agent/tx-status and update
    *  this exact entry once the transaction actually resolves, instead of
    *  it staying "QUEUED" forever even after it's confirmed on-chain. */
   pendingTxId?: string;
 }
 
 interface AgentEvent {
-  type: 'faucet_request' | 'unlisted_payment_request' | 'add_employee_request' | 'payroll_run_request'
+  type: 'unlisted_payment_request' | 'add_employee_request' | 'payroll_run_request'
       | 'agent_executed_payment' | 'agent_executed_payroll_run'
       | 'edit_employee_request' | 'edit_employee_immediate' | 'remove_employee_request'
       | 'bulk_add_employees_request' | 'bulk_add_employees_immediate'
@@ -63,18 +63,17 @@ interface AgentEvent {
   txHash?: string; pending?: boolean; recipients?: number; totalAmount?: string;
   currentAddress?: string; newAddress?: string;
   employeesJson?: string; skippedCount?: number;
-  /** schedule_payment_request only — epoch ms for when the one-time
+  /** schedule_payment_request only, epoch ms for when the one-time
    *  payment should run. */
   whenMs?: number;
-  /** cancel_schedule_request only — the schedule's id and human-readable
+  /** cancel_schedule_request only, the schedule's id and human-readable
    *  label (from get_schedules), so the card can show exactly what's
    *  about to be cancelled without a second round trip. */
   scheduleId?: string; label?: string;
-  /** Circle's own transaction id for a pending agent_executed_* event —
-   *  same purpose as ActionLogEntry.pendingTxId above. */
+  /** Circle's own transaction id for a pending agent_executed_* event, *  same purpose as ActionLogEntry.pendingTxId above. */
   transactionId?: string;
   /** Set by the server (see tools.ts's propose_* schemas and chat/route.ts)
-   *  when the model judged the instruction fully explicit — the matching
+   *  when the model judged the instruction fully explicit, the matching
    *  card skips its manual review click and goes straight to the wallet
    *  signature prompt. Undefined/false shows the normal review card. */
   autoConfirm?: boolean;
@@ -91,14 +90,14 @@ interface Message {
   truncated?: boolean;
   proposedAt: number;          // for card expiry
   /** Only set on assistant messages. The raw Gemini response parts for
-   *  this turn — never rendered, only round-tripped back to the server on
+   *  this turn, never rendered, only round-tripped back to the server on
    *  the next request so it can rebuild history with the thought
    *  signature Gemini 3.x requires. See app/api/agent/chat/route.ts's
    *  buildHistory() for the full explanation. Without this, tool calling
    *  works once per conversation and then breaks. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rawParts?: any[];
-  /** Only set on user messages that included a file — metadata only (name
+  /** Only set on user messages that included a file, metadata only (name
    *  + type), not the file content itself, purely so the chat log shows
    *  what was actually sent instead of the attachment vanishing the
    *  moment the message is sent. */
@@ -109,27 +108,27 @@ interface ChatInterfaceProps {
   walletAddress:  string;
   onDataChanged?: () => void;
   /** Real agent wallet address and active status from useAgentStatus() in the
-   *  parent page — previously this component hardcoded agentActive: true and
+   *  parent page, previously this component hardcoded agentActive: true and
    *  agentAddress: undefined, which meant the AI was always told the agent was
    *  "active" with no wallet, and get_balance/request_faucet for the agent
    *  wallet could never resolve a target address. */
   agentAddress?:  string;
   agentActive?:   boolean;
-  /** Circle wallet ID for the agent — required for autonomous execution
+  /** Circle wallet ID for the agent, required for autonomous execution
    *  (execute_payment/execute_payroll_run) since Circle's contract-execution
    *  API signs by walletId, not by address. */
   agentWalletId?: string;
   /** Resume a previously-saved conversation (from /ai-agent?session=<id>,
    *  see chat-history/page.tsx). Omit for a fresh conversation. */
   sessionId?:     string;
-  /** usePayrollSync's status from the parent page — the authoritative
+  /** usePayrollSync's status from the parent page, the authoritative
    *  signal for whether state.employees (and payrollSetup) actually
    *  reflect this wallet's real, fully-hydrated data yet, as opposed to
    *  still being mid-load or empty because loading hasn't started.
    *  Threaded down to confirmation cards that read state.employees at
    *  confirm-time (add/edit employee, payroll run, schedule payment) so
    *  they can wait for a genuine "settled" signal instead of each
-   *  guessing independently — see AgentConfirmationCards.tsx's
+   *  guessing independently, see AgentConfirmationCards.tsx's
    *  hydrationStatus comments for the full reasoning and why a plain
    *  employees.length check or a fixed timeout isn't reliable enough on
    *  its own. Optional and defaults to treating hydration as settled if
@@ -153,8 +152,7 @@ const SUGGESTED = [
   { label: 'Check balance',        text: "What's the employer wallet USDC balance?"        },
   { label: 'Compliance check',     text: 'Run a compliance check on all employee wallets'  },
   { label: 'Add an employee',      text: 'I want to add a new employee'                    },
-  { label: 'Top up wallet',        text: 'Request testnet USDC for my employer wallet'     },
-];
+  ];
 
 function nowTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -172,100 +170,9 @@ function incrementDailyCount(): number {
   } catch { return 0; }
 }
 
-// (ActionLogCard removed — these entries are now persisted to the Manage
+// (ActionLogCard removed, these entries are now persisted to the Manage
 // Agent page's log store instead of rendered inline in chat. See the
 // persistence effect inside ChatInterface below.)
-
-// ── Faucet result card (unchanged behaviour from prior round) ─────────────────
-
-interface FaucetResult {
-  status: 'funded' | 'pending' | 'rate_limited' | 'error' | 'balance';
-  address: string; balance?: string; balanceBefore?: string; balanceAfter?: string; message?: string;
-}
-
-function FaucetResultCard({ address, walletAddress, token, agentAddress, onResolved }: { address: string; walletAddress: string; token?: string; agentAddress?: string; onResolved?: (outcome: 'confirmed' | 'error', detail?: string) => void }) {
-  const [result, setResult]   = useState<FaucetResult | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/agent/faucet`, {
-          method: 'POST', headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ address, ownerWallet: walletAddress, agentAddress }),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({})) as { error?: string };
-          throw new Error(body.error ?? 'Faucet request failed. Please try again.');
-        }
-        const data = await res.json() as FaucetResult;
-        if (!cancelled) {
-          setResult(data); setLoading(false);
-          // BUG FIX: this used to resolve entirely on its own, with no way
-          // to tell the parent — so the action-log line server-rendered as
-          // "⏳ QUEUED · Faucet request for 0x..." stayed QUEUED forever,
-          // even once this card clearly showed Funded/Error right below
-          // it. Same underlying bug class as the payment/payroll-run
-          // "stuck in Queue" fix, just resolved via a direct callback here
-          // since this component already knows its real outcome
-          // synchronously, rather than needing to poll anything.
-          onResolved?.(data.status === 'funded' || data.status === 'pending' ? 'confirmed' : 'error', data.message);
-        }
-      } catch (err: unknown) {
-        if (!cancelled) {
-          const msg = friendlyErrorMessage(err, 'Faucet request failed');
-          setError(msg); setLoading(false);
-          onResolved?.('error', msg);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [address, walletAddress, token, agentAddress, onResolved]);
-
-  const shortAddr = `${address.slice(0, 8)}…${address.slice(-6)}`;
-
-  if (loading) {
-    return (
-      <div style={{ marginTop: 8, padding: '10px 14px', borderRadius: 10, border: '1.5px solid #C7D2FE', background: '#EEF2FF', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #4F46E5', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-        <span style={{ color: '#4338CA' }}>Requesting testnet USDC for {shortAddr}…</span>
-      </div>
-    );
-  }
-  if (error) {
-    return (
-      <div style={{ marginTop: 8, padding: '10px 14px', borderRadius: 10, border: '1.5px solid #FCA5A5', background: '#FEF2F2', fontSize: 12 }}>
-        <span style={{ color: '#DC2626', fontWeight: 700 }}>✗ Faucet Error</span>
-        <div style={{ color: '#991B1B', marginTop: 2 }}>{error}</div>
-      </div>
-    );
-  }
-  if (!result) return null;
-
-  const statusMeta: Record<string, { label: string; color: string; bg: string; border: string }> = {
-    funded:       { label: '✓ Funded',       color: '#059669', bg: '#F0FDF4', border: '#6EE7B7' },
-    pending:      { label: '⏳ Pending',      color: '#92400E', bg: '#FFFBEB', border: '#FDE68A' },
-    rate_limited: { label: '⚠ Rate Limited',  color: '#92400E', bg: '#FFFBEB', border: '#FED7AA' },
-    error:        { label: '✗ Error',         color: '#DC2626', bg: '#FEF2F2', border: '#FCA5A5' },
-  };
-  const meta = statusMeta[result.status] ?? statusMeta.error;
-
-  return (
-    <div style={{ marginTop: 8, padding: '10px 14px', borderRadius: 10, border: `1.5px solid ${meta.border}`, background: meta.bg, fontSize: 12 }}>
-      <div style={{ fontWeight: 800, fontSize: 11, letterSpacing: '0.05em', color: meta.color, marginBottom: 4 }}>{meta.label} — Testnet Faucet</div>
-      <div style={{ color: '#475569' }}>Address: {shortAddr}</div>
-      {result.status === 'funded' && result.balanceBefore && result.balanceAfter && (
-        <div style={{ color: '#475569', marginTop: 2 }}>Balance: {result.balanceBefore} → <strong style={{ color: '#059669' }}>{result.balanceAfter} USDC</strong></div>
-      )}
-      {result.message && <div style={{ color: '#64748B', marginTop: 2 }}>{result.message}</div>}
-    </div>
-  );
-}
 
 // ── Expired card placeholder ───────────────────────────────────────────────────
 
@@ -294,7 +201,40 @@ function UsageBanner({ count }: { count: number }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+/**
+ * Reads the chat route's status stream. Status lines update the thinking line
+ * as the agent works; the final result line is turned back into an ordinary
+ * JSON Response, so the rest of the send flow (401 retry, errors, replies) is
+ * unchanged. Non-stream responses pass through untouched.
+ */
+async function normaliseAgentResponse(res: Response, onStatus: (text: string) => void): Promise<Response> {
+  if (!res.headers.get('content-type')?.includes('application/x-ndjson') || !res.body) return res;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: { status: number; body: unknown } | null = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      const event = JSON.parse(line) as { type: string; text?: string; status?: number; body?: unknown };
+      if (event.type === 'status' && event.text) onStatus(event.text);
+      if (event.type === 'result') result = { status: event.status ?? 500, body: event.body };
+    }
+  }
+  if (!result) return new Response(JSON.stringify({ error: 'Request failed' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+  const final = result as { status: number; body: unknown };
+  return new Response(JSON.stringify(final.body), { status: final.status, headers: { 'Content-Type': 'application/json' } });
+}
+
 export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId, hydrationStatus }: ChatInterfaceProps) {
+  const [agentStatus, setAgentStatus] = useState('');
+  const [upgradeNeeded, setUpgradeNeeded] = useState(false);
   const { state } = useApp();
   const { employees, tokenRegistry, payrollClone, payrollSetup } = state;
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
@@ -313,8 +253,8 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Tracks whether the person is currently scrolled near the bottom of the
   // chat. The auto-scroll effect below used to fire unconditionally on
-  // every `messages`/`isLoading` change — including background updates like
-  // the tx-status poller's silent setMessages calls — which yanked the view
+  // every `messages`/`isLoading` change, including background updates like
+  // the tx-status poller's silent setMessages calls, which yanked the view
   // back to the bottom even while someone was actively scrolled up reading
   // earlier messages, making it impossible to read history. Defaults to
   // true so the normal "stick to the latest message" behavior is unchanged
@@ -373,16 +313,16 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   // This is THE fix for "the transaction succeeded on-chain but the chat
   // stayed stuck on QUEUED forever": lib/agent/autonomousExecution.ts only
   // polls for confirmation for a few seconds before the chat response has
-  // to go out — a transaction that hadn't confirmed by then comes back
+  // to go out, a transaction that hadn't confirmed by then comes back
   // marked QUEUED/pending with nothing ever checking it again afterward,
   // even once it confirms moments later. This scans for any unresolved
   // pendingTxId/transactionId still in the conversation and keeps checking
   // /api/agent/tx-status until each one resolves, then updates that exact
-  // action-log line and event card in place — no page refresh needed.
+  // action-log line and event card in place, no page refresh needed.
   //
   // Deliberately reuses sessionTokenRef.current (already obtained by the
   // request that produced the pending transaction) rather than calling
-  // getToken() itself — this must never trigger a fresh sign-message
+  // getToken() itself, this must never trigger a fresh sign-message
   // prompt from a background poll the user didn't initiate. If there's no
   // cached token yet (e.g. messages were just reloaded from a saved
   // session on page load, before any new message has been sent), it
@@ -399,7 +339,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
     const pollOnce = async () => {
       const token = sessionTokenRef.current;
-      if (!token) return; // no signed session yet — wait for the next interval rather than prompting
+      if (!token) return; // no signed session yet, wait for the next interval rather than prompting
 
       for (const txId of pendingIds) {
         try {
@@ -418,7 +358,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
             actionLog: m.actionLog?.map(l => l.pendingTxId === txId
               ? {
                   ...l, status: resolvedStatus, pendingTxId: undefined,
-                  detail: resolvedStatus === 'FAILED' ? 'Transaction reverted on-chain — no funds moved.' : l.detail,
+                  detail: resolvedStatus === 'FAILED' ? 'Transaction reverted on-chain, no funds moved.' : l.detail
                 }
               : l),
             events: m.events?.map(e => e.transactionId === txId
@@ -426,7 +366,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
               : e),
           })));
           if (resolvedStatus === 'SUCCESS') onDataChanged?.();
-        } catch { /* network blip — retry on the next interval */ }
+        } catch { /* network blip, retry on the next interval */ }
       }
     };
 
@@ -439,9 +379,9 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   // store, instead of showing them inline in chat (see ActionLogCard's
   // removal above). Runs off `messages` itself rather than only the
   // initial send response, so it also catches entries that start out
-  // QUEUED and only resolve later — either via the tx-status poller just
+  // QUEUED and only resolve later, either via the tx-status poller just
   // above, or via one of the confirmation cards' own onResolved handlers
-  // (FaucetResultCard, AddEmployeeCard, PayrollRunCard, etc.) — without
+  // (FaucetResultCard, AddEmployeeCard, PayrollRunCard, etc.), without
   // needing a separate persistence call duplicated into every one of those
   // handlers. `persistedLogKeys` guards against re-persisting the same
   // entry on every subsequent messages update; the deterministic
@@ -453,14 +393,14 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     for (const m of messages) {
       if (!m.actionLog) continue;
       m.actionLog.forEach((entry, i) => {
-        if (entry.status === 'QUEUED') return; // not final yet — wait for it to resolve
+        if (entry.status === 'QUEUED') return; // not final yet, wait for it to resolve
         const key = `${m.id}:${i}`;
         if (persistedLogKeysRef.current.has(key)) return;
         persistedLogKeysRef.current.add(key);
 
         // Best-effort tx-hash attachment: when this turn produced exactly
         // one event that already resolved to a txHash, pair it with a
-        // SUCCESS entry — covers the common single-action-per-turn case.
+        // SUCCESS entry, covers the common single-action-per-turn case.
         // A multi-action turn simply logs without a tx link rather than
         // risk pairing the wrong hash to the wrong entry.
         const soleTxHash = m.events?.length === 1 ? m.events[0].txHash : undefined;
@@ -489,9 +429,9 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   }
 
   // PDF: Gemini's own document understanding reads this natively via
-  // inlineData — same mechanism as images, just a different MIME type.
+  // inlineData, same mechanism as images, just a different MIME type.
   // Everything else here is plain text (code files, CSV, JSON, Markdown)
-  // — no special "document understanding" needed, it's just extracted as
+  // no special "document understanding" needed, it's just extracted as
   // text and included in the prompt like any other text.
   //
   // Deliberately NOT included: .doc/.docx. Per Google's own Gemini API
@@ -499,7 +439,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   // vision only meaningfully understands PDFs." Broader Office-format
   // support (DOCX, XLSX, PPTX) exists in Google's own Workspace apps,
   // which silently convert those files with Google's internal Docs/Sheets
-  // converters before the model ever sees them — that conversion isn't
+  // converters before the model ever sees them, that conversion isn't
   // part of the raw Gemini API this app calls, so passing a .docx file's
   // raw bytes here would not be reliably understood. Rather than accept
   // it and silently produce garbage, it's excluded until there's a real,
@@ -513,12 +453,12 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     'text/jsx', 'text/tsx',
     'text/x-csv', 'application/csv', // some browsers/OSes report CSV under these instead of text/csv
   ];
-  // Extensions the OS file picker should filter to — belt-and-suspenders
+  // Extensions the OS file picker should filter to, belt-and-suspenders
   // alongside the MIME check above, since some browsers report an empty
   // or generic `file.type` for less common extensions (.ts/.tsx/.jsx in
   // particular are inconsistently recognized).
   const ALLOWED_ATTACHMENT_EXTENSIONS = ['.pdf', '.csv', '.js', '.jsx', '.ts', '.tsx', '.txt', '.json', '.md'];
-  const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // matches the server's own limit — reject early with a clear message instead of a vague server error
+  const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // matches the server's own limit, reject early with a clear message instead of a vague server error
 
   function clearAttachment() {
     setPendingAttachment(prev => { if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl); return null; });
@@ -555,7 +495,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       const base64 = result.split(',')[1] ?? '';
       // None of the allowed types here (PDF, CSV, code, text, JSON, MD) are
       // things a browser <img> tag can actually render as a visual preview
-      // — that only applies to raster images, which are deliberately not
+      // that only applies to raster images, which are deliberately not
       // in the allowed list anymore. Every attachment shows as a file chip.
       setPendingAttachment(prev => {
         if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
@@ -567,13 +507,13 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         };
       });
     };
-    reader.onerror = () => setAttachError('Could not read that file — please try again.');
+    reader.onerror = () => setAttachError('Could not read that file, please try again.');
     reader.readAsDataURL(file);
   }
 
   const send = useCallback(async (text: string, silent = false, attachment?: { mimeType: string; data: string; fileName?: string }) => {
     // Silent sends (confirmation events from card callbacks) must never be
-    // dropped by the isLoading guard — the AI needs to know what happened.
+    // dropped by the isLoading guard, the AI needs to know what happened.
     if ((!text.trim() && !attachment) || (isLoading && !silent)) return;
 
     const currentCount = getDailyCount();
@@ -582,7 +522,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       return;
     }
     if (!canWrite) {
-      setError('Wallet not connected — cannot start a secure agent session.');
+      setError('Wallet not connected, cannot start a secure agent session.');
       return;
     }
 
@@ -597,6 +537,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     };
     if (!silent) { isNearBottomRef.current = true; setMessages(prev => [...prev, userMsg]); setInput(''); }
     setIsLoading(true);
+    setAgentStatus('');
     setError(null);
 
     const allMessages = [
@@ -605,7 +546,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     ];
 
     // tokenRegistry (from AppContext) is a Record<address, { symbol, decimals, ... }>
-    // — the server's parseTokenRegistry() JSON.parse()s this string to build the
+    // the server's parseTokenRegistry() JSON.parse()s this string to build the
     // real symbol->decimals map get_balance needs for ERC-20 reads. Previously
     // this field was never sent at all, so get_balance for any token other than
     // 'native' silently failed every time with "not in the token registry".
@@ -619,8 +560,8 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         fullName: e.fullName, walletAddress: e.walletAddress,
         department: e.department, group: e.group,
         // Needed for execute_payroll_run and the in-chat PayrollRunCard to
-        // compute per-employee amounts. Every payroll action — proposed or
-        // autonomous — is handled entirely within the chat interface; the
+        // compute per-employee amounts. Every payroll action, proposed or
+        // autonomous, is handled entirely within the chat interface; the
         // agent never redirects the user out to the dashboard to finish
         // something itself.
         salaryAmount: e.salaryAmount,
@@ -632,7 +573,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       tokenRegistry: tokenRegistryJson,
       // Lets execute_payment/execute_payroll_run (the fully autonomous,
       // server-executed paths) send a payroll receipt email after
-      // confirming on-chain — see the matching comment on the server side
+      // confirming on-chain, see the matching comment on the server side
       // in app/api/agent/chat/route.ts.
       receiptEmail:  payrollSetup?.email || undefined,
     };
@@ -643,22 +584,24 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
       let res = await fetch(`${API_BASE}/agent/chat`, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'x-agent-stream': '1' },
         body: JSON.stringify({ messages: allMessages, walletAddress, context, attachment }),
       });
 
-      // Session expired mid-flight — refresh once and retry.
+      // Session expired mid-flight, refresh once and retry.
+      res = await normaliseAgentResponse(res, setAgentStatus);
       if (res.status === 401) {
         invalidate(walletAddress);
         token = await getToken(walletAddress, universalSignMessage, true);
         sessionTokenRef.current = token;
         res = await fetch(`${API_BASE}/agent/chat`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'x-agent-stream': '1' },
           body: JSON.stringify({ messages: allMessages, walletAddress, context, attachment }),
         });
       }
 
+      res = await normaliseAgentResponse(res, setAgentStatus);
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: 'Request failed' })) as { error?: string };
         throw new Error(errBody.error ?? 'Request failed');
@@ -667,6 +610,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       const data = await res.json() as {
         response?: string; actionLog?: ActionLogEntry[]; events?: AgentEvent[];
         truncated?: boolean; rateLimited?: boolean; cached?: boolean;
+        upgradeRequired?: boolean; freeLimitReached?: boolean;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rawParts?: any[];
       };
@@ -683,6 +627,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         rawParts: data.rawParts,
       };
       setMessages(prev => [...prev, assistantMsg]);
+      if (data.upgradeRequired) setUpgradeNeeded(true);
 
       if (!data.rateLimited && !data.cached) {
         setDailyCount(incrementDailyCount());
@@ -692,19 +637,19 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : '';
       const msg = /session|sign in|401/i.test(raw)
-        ? 'Session expired — please sign in again.'
+        ? 'Session expired, please sign in again.'
         : /wallet|connect/i.test(raw)
         ? 'Wallet not connected. Please reconnect and try again.'
         : /network|fetch/i.test(raw)
         ? 'Network error. Check your connection and try again.'
         // BUG FIX: this used to fall through to a hardcoded generic
         // string for anything that didn't match one of the three patterns
-        // above — silently discarding the server's own specific,
+        // above, silently discarding the server's own specific
         // already-friendly message (e.g. "I'm getting rate-limited right
-        // now — please wait about a minute and try again.") and showing
+        // now, please wait about a minute and try again.") and showing
         // the same unhelpful "Something went wrong" for every distinct
         // failure. `raw` here is our own controlled text from the server's
-        // `error` field, never a raw exception dump — safe to show as-is;
+        // `error` field, never a raw exception dump, safe to show as-is;
         // friendlyErrorMessage() is a defensive backstop in case it's ever
         // something unexpectedly long.
         : friendlyErrorMessage(err, 'Something went wrong. Please try again.');
@@ -727,13 +672,13 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     }));
   }, []);
 
-  // Enter used to send (Shift+Enter for a newline) — on a phone's virtual
+  // Enter used to send (Shift+Enter for a newline), on a phone's virtual
   // keyboard, the Enter/Go key has no reliable way to combine with Shift,
   // so every Enter press sent whatever had been typed so far mid-thought.
   // Enter now always just inserts a newline; the Send button is the only
   // way to send, on every device.
   const onKeyDown = (_e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Intentionally a no-op — let the textarea's default Enter behaviour
+    // Intentionally a no-op, let the textarea's default Enter behaviour
     // (insert a newline) happen. Kept as a named handler rather than
     // removed so the intent is documented, not just silently absent.
   };
@@ -747,7 +692,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       background: '#F8FAFC', borderRadius: '16px', border: '1px solid #E2E8F0',
       overflow: 'hidden', fontFamily: "'DM Sans', system-ui, sans-serif",
     }}>
-      {/* New-chat control — only shown once there's a conversation to reset */}
+      {/* New-chat control, only shown once there's a conversation to reset */}
       {messages.length > 0 && (
         <div style={{ padding: '10px 16px 0', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
           <button
@@ -768,24 +713,65 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
       {warnConvLen && (
         <div style={{ margin: '0 12px 8px', padding: '7px 12px', borderRadius: 9, background: '#EEF2FF', border: '1px solid #C7D2FE', fontSize: 12, color: '#4338CA', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>Long conversation — older context may be summarised.</span>
+          <span>Long conversation, older context may be summarised.</span>
           <button onClick={resetConversation} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#14B8A6', fontWeight: 700, fontSize: 12, fontFamily: 'inherit' }}>Start fresh</button>
+        </div>
+      )}
+
+      {upgradeNeeded && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
+          padding: '10px 14px', margin: '8px 16px 0', fontSize: 13,
+        }}>
+          <span style={{ color: '#4338CA', fontWeight: 600 }}>
+            You've reached your free usage limit. Come back in 5 hours, or upgrade for unlimited messages.
+          </span>
+          <a href="/pricing" style={{
+            padding: '6px 14px', borderRadius: 8, background: '#4F46E5', color: '#fff',
+            fontWeight: 700, fontSize: 13, textDecoration: 'none', whiteSpace: 'nowrap',
+          }}>Upgrade</a>
         </div>
       )}
 
       {/* Messages */}
       <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: '20px 16px' }}>
         {messages.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '32px 16px' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', marginBottom: 8 }}>How can I help with payroll today?</div>
-            <div style={{ fontSize: 13, color: '#64748B', marginBottom: 24 }}>Ask me to run payroll, check balances, manage employees, or schedule payments.</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, maxWidth: 400, margin: '0 auto' }}>
-              {SUGGESTED.map((p, i) => (
-                <button key={i} onClick={() => send(p.text)} style={{ padding: '10px 12px', background: '#FFF', border: '1px solid #E2E8F0', borderRadius: 10, cursor: 'pointer', fontSize: 12, color: '#334155', fontWeight: 500, textAlign: 'left' as const, fontFamily: 'inherit' }}>
-                  {p.label}
-                </button>
-              ))}
+          // IRIS empty state: glowing, animated backdrop behind the IRIS
+          // brand mark (spinning avatar + wordmark). Unmounts as soon as
+          // the first message is sent, which returns the chat to a plain
+          // white background. A new chat starts empty again.
+          <div style={{
+            position: 'relative', minHeight: '100%', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: 16,
+          }}>
+            <div aria-hidden className="iris-bg-glow" style={{ position: 'absolute', inset: 0, zIndex: 0 }} />
+            <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', padding: '48px 16px' }}>
+              <IrisBrand size="lg" showTagline />
             </div>
+            <style>{`
+              .iris-bg-glow {
+                background:
+                  radial-gradient(circle at 20% 30%, rgba(79,70,229,0.45), transparent 45%)
+                  radial-gradient(circle at 80% 70%, rgba(20,184,166,0.42), transparent 45%)
+                  radial-gradient(circle at 55% 15%, rgba(199,210,254,0.6), transparent 50%)
+                  radial-gradient(circle at 40% 85%, rgba(20,184,166,0.22), transparent 50%);
+                background-size: 180% 180%;
+                filter: blur(36px) saturate(1.2);
+                animation: irisBgDrift 14s ease-in-out infinite, irisBgPulse 6s ease-in-out infinite;
+              }
+              @keyframes irisBgDrift {
+                0%, 100% { background-position: 0% 0%; }
+                50%      { background-position: 100% 100%; }
+              }
+              @keyframes irisBgPulse {
+                0%, 100% { opacity: 0.85; }
+                50%      { opacity: 1; }
+              }
+              @media (prefers-reduced-motion: reduce) {
+                .iris-bg-glow { animation: none; }
+              }
+            `}</style>
           </div>
         )}
 
@@ -799,33 +785,13 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                   ⓘ This response was shortened and regenerated after hitting the length limit.
                 </div>
               )}
-              {/* actionLog is no longer rendered inline — see the persistence
+              {/* actionLog is no longer rendered inline, see the persistence
                   effect above, which sends finalized entries to the Manage
                   Agent page's log store instead. */}
 
               {m.role === 'assistant' && m.events?.map((ev, i) => {
                 const resolved = m.eventsResolved?.[i];
                 if (resolved) return null; // outcome already reported via its own card transition
-
-                if (ev.type === 'faucet_request' && ev.address) {
-                  return (
-                    <FaucetResultCard
-                      key={i}
-                      address={ev.address} walletAddress={walletAddress}
-                      token={sessionTokenRef.current ?? undefined} agentAddress={agentAddress}
-                      onResolved={(outcome, detail) => {
-                        setMessages(prev => prev.map(msg => msg.id !== m.id ? msg : {
-                          ...msg,
-                          actionLog: msg.actionLog?.map(log =>
-                            (log.status === 'QUEUED' && log.action.startsWith('Faucet request for'))
-                              ? { ...log, status: outcome === 'confirmed' ? 'SUCCESS' : 'FAILED', detail: outcome === 'error' ? detail : log.detail }
-                              : log
-                          ),
-                        }));
-                      }}
-                    />
-                  );
-                }
 
                 if (ev.type === 'unlisted_payment_request' && ev.address && ev.amount && ev.token) {
                   if (expired) return <ExpiredCard key={i} label="payment" />;
@@ -1067,7 +1033,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       padding: '12px 16px', fontSize: 13, color: '#166534',
                     }}>
                       <strong>Agent paid {ev.amount} {ev.token}</strong> to {String(ev.address).slice(0, 8)}…{String(ev.address).slice(-4)}
-                      {ev.pending ? ' — still confirming on-chain.' : '.'}
+                      {ev.pending ? ', still confirming on-chain.' : '.'}
                       {ev.txHash && (
                         <> <a href={txLink(String(ev.txHash))} target="_blank" rel="noreferrer" style={{ color: '#166534', textDecoration: 'underline' }}>View transaction</a></>
                       )}
@@ -1081,8 +1047,8 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
                       background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10,
                       padding: '12px 16px', fontSize: 13, color: '#166534',
                     }}>
-                      <strong>Agent ran payroll for &quot;{ev.group}&quot;</strong> — {ev.recipients} employee{ev.recipients === 1 ? '' : 's'}, {ev.totalAmount} USDC
-                      {ev.pending ? ' — still confirming on-chain.' : '.'}
+                      <strong>Agent ran payroll for &quot;{ev.group}&quot;</strong>, {ev.recipients} employee{ev.recipients === 1 ? '' : 's'}, {ev.totalAmount} USDC
+                      {ev.pending ? ', still confirming on-chain.' : '.'}
                       {ev.txHash && (
                         <> <a href={txLink(String(ev.txHash))} target="_blank" rel="noreferrer" style={{ color: '#166534', textDecoration: 'underline' }}>View transaction</a></>
                       )}
@@ -1096,7 +1062,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           );
         })}
 
-        {isLoading && <ChatMessage role="assistant" content="" isLoading />}
+        {isLoading && <ChatMessage role="assistant" content="" isLoading thinkingText={[...messages].reverse().find(m => m.role === "user")?.content ?? ""} agentStatus={agentStatus} />}
         <div ref={endRef} />
       </div>
 
@@ -1137,7 +1103,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         <input
           ref={fileInputRef}
           type="file"
-          // No image MIME types here anymore at all — the previous gallery-
+          // No image MIME types here anymore at all, the previous gallery-
           // jump issue was specifically caused by an image-only accept list
           // making mobile browsers treat this as a photo picker. With only
           // document/code/data types now, there's nothing for the OS to

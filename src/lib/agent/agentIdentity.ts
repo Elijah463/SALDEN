@@ -7,7 +7,7 @@
  * `context.agentWalletId`, `context.agentAddress`, and `context.payrollClone`
  * directly from the request body and hand them to executeAutonomousTransfer /
  * executeAutonomousBatchPay. The session token proves the caller controls
- * `walletAddress` — it never proved those other three fields actually
+ * `walletAddress`, it never proved those other three fields actually
  * belonged to that wallet. Anyone with a valid session for their OWN wallet
  * could supply someone else's agentWalletId/payrollClone in the request body
  * and have that victim's agent wallet execute a payment to an address of the
@@ -30,7 +30,7 @@
  * resolveAgentWallet() / resolvePayrollClone() instead. context.agentAddress
  * is still fine to use for purely informational purposes (e.g. what the
  * system prompt tells the model the agent's address is) since nothing bad
- * happens if that string is wrong — it only becomes a problem the moment
+ * happens if that string is wrong, it only becomes a problem the moment
  * it's used to decide where money goes.
  */
 
@@ -41,7 +41,7 @@ import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { getAgentWalletByRefId } from '@/lib/circle/agent-wallet';
 
 /** Same derivation used in app/api/agent/activate/route.ts when the wallet
- *  was first created — kept here as the single source of truth for the
+ *  was first created, kept here as the single source of truth for the
  *  formula so the two never drift apart. */
 export function agentWalletRefId(walletAddress: string): string {
   return `salden-agent-${walletAddress.toLowerCase()}`;
@@ -52,14 +52,14 @@ export interface ResolvedAgentWallet {
   address: `0x${string}`;
 }
 
-/** Returns null if the employer has no active agent wallet — callers should
+/** Returns null if the employer has no active agent wallet, callers should
  *  treat that exactly like the old "agent wallet is not active" failure
  *  path, not as an unexpected error. */
 export async function resolveAgentWallet(walletAddress: string): Promise<ResolvedAgentWallet | null> {
   try {
     const wallet = await getAgentWalletByRefId(agentWalletRefId(walletAddress));
     if (!wallet) return null;
-    if (wallet.state !== 'LIVE') return null; // e.g. still PENDING or FROZEN — not safe to use yet
+    if (wallet.state !== 'LIVE') return null; // e.g. still PENDING or FROZEN, not safe to use yet
     return { walletId: wallet.walletId, address: getAddress(wallet.address) };
   } catch {
     return null;
@@ -67,7 +67,7 @@ export async function resolveAgentWallet(walletAddress: string): Promise<Resolve
 }
 
 /** Returns null if this employer has no deployed payroll clone. Reads
- *  on-chain, so this is always up to date with reality — no stale cache,
+ *  on-chain, so this is always up to date with reality, no stale cache
  *  no possibility of the client lying about which clone it "should" be. */
 export async function resolvePayrollClone(walletAddress: string): Promise<`0x${string}` | null> {
   try {

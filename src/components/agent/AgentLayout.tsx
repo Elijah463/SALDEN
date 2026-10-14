@@ -4,7 +4,7 @@
  *
  * Wraps all AI Agent section pages.
  * The SlidersHorizontal icon (top-right of header) opens a RIGHT-side drawer.
- * This drawer is the AI Agent sidebar — only visible on AI Agent pages.
+ * This drawer is the AI Agent sidebar, only visible on AI Agent pages.
  * All other pages are completely unaffected.
  *
  * Drawer content (ImportantUpdate #13):
@@ -18,11 +18,9 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  SlidersHorizontal, X, Wallet, Settings2,
-  MessageSquare, PlusCircle, ArrowLeft,
-} from 'lucide-react';
+import { SlidersHorizontal, X, Wallet, Settings2, MessageSquare, PlusCircle, ArrowLeft, Zap } from 'lucide-react';
 import { AppLayout }     from '@/components/layout/AppLayout';
+import { IrisBrand, BetaTag } from '@/components/agent/IrisBrand';
 import { useAgentStatus } from '@/lib/useAgentStatus';
 
 interface AgentLayoutProps {
@@ -31,6 +29,7 @@ interface AgentLayoutProps {
 }
 
 const AGENT_NAV = [
+  { href: '/ai-agent/activation',   icon: Zap,           label: 'Agent Activation' },
   { href: '/ai-agent/agent-wallet', icon: Wallet,        label: 'Agent Wallet'    },
   { href: '/ai-agent/manage',       icon: Settings2,     label: 'Manage AI Agent' },
   { href: '/ai-agent/chat-history', icon: MessageSquare, label: 'Chat History'    },
@@ -53,7 +52,7 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
     router.push('/ai-agent?new=' + Date.now());
   }
 
-  // ── Sliders icon — passed as headerRight to AppLayout ────────────────────
+  // ── Sliders icon, passed as headerRight to AppLayout ────────────────────
   const slidersBtn = (
     <button
       onClick={() => setDrawerOpen(true)}
@@ -119,7 +118,10 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '18px 20px', borderBottom: '1px solid #F1F5F9',
         }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>AI Agent</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: '#0F172A' }}>AI Agent</span>
+            <BetaTag />
+          </span>
           <button
             onClick={() => setDrawerOpen(false)}
             style={{
@@ -134,33 +136,21 @@ export function AgentLayout({ title, children }: AgentLayoutProps) {
 
         {/* Agent card */}
         <div style={{ padding: '20px', borderBottom: '1px solid #F1F5F9' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-            {/* Avatar */}
-            <div style={{
-              width: 72, height: 72, flexShrink: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/ai-avatar.png" alt="" width={72} height={72} style={{ objectFit: 'contain' }} />
-            </div>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
-                AI Agent
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{
-                  width: 7, height: 7, borderRadius: '50%',
-                  background: isActive ? '#14B8A6' : '#94A3B8',
-                  boxShadow: isActive ? '0 0 6px #14B8A6' : 'none',
-                  display: 'inline-block',
-                }} />
-                <span style={{
-                  fontSize: 12, fontWeight: 600,
-                  color: isActive ? '#059669' : '#94A3B8',
-                }}>
-                  {isActive ? 'Active' : 'Inactive'}
-                </span>
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <IrisBrand size="sm" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: isActive ? '#14B8A6' : '#94A3B8',
+                boxShadow: isActive ? '0 0 6px #14B8A6' : 'none',
+                display: 'inline-block',
+              }} />
+              <span style={{
+                fontSize: 12, fontWeight: 600,
+                color: isActive ? '#059669' : '#94A3B8',
+              }}>
+                {isActive ? 'Active' : 'Inactive'}
+              </span>
             </div>
           </div>
 

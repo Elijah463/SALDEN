@@ -24,14 +24,14 @@ export const metadata: Metadata = {
   // ── Core ──────────────────────────────────────────────────────────────────
   metadataBase:  new URL(APP_URL),
   title: {
-    default:  'Salden — Smart Payroll For Teams of Any Size',
-    template: '%s — Salden',
+    default:  'Salden, Smart Payroll For Teams of Any Size',
+    template: '%s, Salden',
   },
   description:
-    'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, compliance screening, and encrypted employee records — all on Arc Testnet.',
+    'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, compliance screening, and encrypted employee records, all on Arc Network.',
   keywords: [
     'Onchain payroll', 'crypto payroll', 'USDC payroll', 'web3 payroll',
-    'blockchain payroll', 'Arc Testnet', 'smart contract payroll',
+    'blockchain payroll', 'Arc Network', 'smart contract payroll',
     'AI payroll agent', 'Salden',
   ],
   authors:  [{ name: 'Salden', url: 'https://salden.xyz' }],
@@ -46,7 +46,6 @@ export const metadata: Metadata = {
       'max-image-preview': 'large',
     },
   },
-
   // ── Icons ──────────────────────────────────────────────────────────────────
   icons: {
     icon: [
@@ -59,41 +58,37 @@ export const metadata: Metadata = {
       { rel: 'mask-icon', url: '/logo.svg', color: '#4F46E5' },
     ],
   },
-
   // ── Manifest ───────────────────────────────────────────────────────────────
   manifest: '/manifest.json',
-
   // ── Open Graph (social link previews) ─────────────────────────────────────
   openGraph: {
     type:        'website',
     url:          APP_URL,
     siteName:    'Salden',
-    title:       'Salden — Smart Payroll For Teams of Any Size',
+    title:       'Salden, Smart Payroll For Teams of Any Size',
     description:
-      'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, and compliance — all on Arc Testnet.',
+      'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, and compliance, all on Arc Network.',
     images: [
       {
         url:    '/images/og-image.jpg',
         width:   1512,
         height:  756,
-        alt:    'Salden — Smart Payroll For Teams of Any Size',
+        alt:    'Salden, Smart Payroll For Teams of Any Size',
         type:   'image/jpeg',
       },
     ],
     locale: 'en_US',
   },
-
   // ── Twitter / X card ──────────────────────────────────────────────────────
   twitter: {
     card:        'summary_large_image',
     site:        '@salden_xyz',
     creator:     '@salden_xyz',
-    title:       'Salden — Smart Payroll For Teams of Any Size',
+    title:       'Salden, Smart Payroll For Teams of Any Size',
     description:
-      'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, and compliance — all on Arc Testnet.',
+      'On-chain payroll for teams of any size. Batch USDC payments, AI-powered scheduling, and compliance, all on Arc Network.',
     images:      ['/images/og-image.jpg'],
   },
-
   // ── Misc ───────────────────────────────────────────────────────────────────
   applicationName: 'Salden',
   referrer:        'origin-when-cross-origin',
@@ -126,8 +121,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           help the user recover into the app).
 
           BUG FIX: the indexedDB branch below used to just set
-          `window.indexedDB = undefined` when it was already undefined —
-          a no-op that didn't stop later `indexedDB.open(...)` calls from
+          `window.indexedDB = undefined` when it was already undefined, a no-op that didn't stop later `indexedDB.open(...)` calls from
           still throwing. It now installs an actual minimal functional
           stub (async open/error lifecycle, matching the real API's
           contract) so calling code degrades gracefully instead of
@@ -137,22 +131,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           React-render layer.
 
           This has zero effect for the overwhelming majority of real users
-          with a normal browser — indexedDB/localStorage/sessionStorage
+          with a normal browser, indexedDB/localStorage/sessionStorage
           all already exist there, so every check below is a no-op.
         */}
         <Script id="storage-api-guard" strategy="beforeInteractive">
           {`
             (function() {
               // BUG FIX: this used to just do "window.indexedDB = undefined"
-              // when indexedDB was missing — but it's already undefined at
+              // when indexedDB was missing, but it's already undefined at
               // that point (that's the condition that triggered the branch),
               // so that line changed nothing. Any later WalletConnect/
               // RainbowKit code calling indexedDB.open(...) still threw
               // "Cannot read properties of undefined", crashing the whole
               // app in exactly the restricted browsers (X's in-app browser,
               // Vercel's OG-image screenshot bot) this was meant to guard
-              // against. Fix: install a minimal but real functional stub —
-              // one that behaves like a real (empty, non-persistent)
+              // against. Fix: install a minimal but real functional stub, // one that behaves like a real (empty, non-persistent)
               // IndexedDB so calling code gets the async open/error
               // lifecycle it expects instead of a hard crash.
               try {
@@ -161,7 +154,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 if (!needsIdbStub && typeof window !== 'undefined') {
                   // Exists by name, but some restricted contexts still throw
                   // the moment you actually call a method on it (rather than
-                  // just referencing it) — verify it's really usable.
+                  // just referencing it), verify it's really usable.
                   try { window.indexedDB.open('__salden_idb_test__'); }
                   catch (e) { needsIdbStub = true; }
                 }
@@ -190,8 +183,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   window.indexedDB = {
                     open: function() {
                       var req = fakeRequest();
-                      // Fire asynchronously, same contract as the real API —
-                      // callers typically attach onsuccess/onerror right
+                      // Fire asynchronously, same contract as the real API, // callers typically attach onsuccess/onerror right
                       // after calling open(), expecting them to fire later.
                       setTimeout(function() {
                         req.error = new Error('IndexedDB unavailable in this browser context');
@@ -246,7 +238,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Orbitron:wght@500;700;800&display=swap"
           rel="stylesheet"
         />
         {/* Explicit Safari pinned-tab SVG */}

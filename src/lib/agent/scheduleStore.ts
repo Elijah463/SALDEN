@@ -13,13 +13,13 @@
  * scaling to multiple concurrent instances, redeploys), so the cron job
  * could easily run against an empty store. The mitigation was
  * /api/agent/schedule/sync self-healing the store whenever a user opened
- * "Manage AI Agent" — better than nothing, but a schedule due to fire
+ * "Manage AI Agent", better than nothing, but a schedule due to fire
  * during a window where nobody had the app open could still be missed.
  *
  * This now mirrors everything into lib/kv.ts (Vercel KV / Upstash Redis)
  * when a KV store is attached to the project, while keeping the exact
  * same in-memory Map as a same-instance fast path AND as the fallback
- * when no KV store is attached — so this still works today with zero
+ * when no KV store is attached, so this still works today with zero
  * config, and upgrades to true cross-instance reliability the moment you
  * attach a KV store in the Vercel dashboard. No new env vars needed:
  * lib/kv.ts reads the standard KV_REST_API_URL / KV_REST_API_TOKEN
@@ -83,7 +83,7 @@ async function writeWalletBlob(walletAddress: string, schedules: AgentSchedule[]
 }
 
 /** Merges the in-memory copy for a wallet on top of whatever KV returned,
- *  keyed by schedule id — in-memory wins on conflict, since it's
+ *  keyed by schedule id, in-memory wins on conflict, since it's
  *  guaranteed to reflect this instance's most recent write. */
 function mergeWithMemory(walletAddress: string, fromKv: AgentSchedule[]): AgentSchedule[] {
   const wallet = walletAddress.toLowerCase();
@@ -100,7 +100,7 @@ export async function upsertSchedule(schedule: AgentSchedule): Promise<void> {
 
 // ⚠ KNOWN RACE: if the same wallet syncs schedules from two places at once
 // (e.g. two open tabs) within the same moment, both requests read-modify-
-// write the same wallet blob, and the second write wins — the first
+// write the same wallet blob, and the second write wins, the first
 // request's changes to OTHER schedules in that same blob could be lost
 // (each request's own schedules are always preserved, since both include
 // their own full intended state; it's a third schedule neither request
@@ -139,7 +139,7 @@ export async function removeSchedule(id: string): Promise<void> {
   // Same bug/fix as markScheduleRun above: _schedules.get(id) only checks
   // this instance's in-memory map, which is very likely empty for the
   // schedule being cancelled (this runs from a user-triggered API call,
-  // which — like a cron invocation — may land on a different serverless
+  // which, like a cron invocation, may land on a different serverless
   // instance than the one that created/last touched this schedule). Search
   // KV the same way if it's not found locally, so cancelling a schedule
   // actually removes it durably instead of silently no-op'ing while it
@@ -177,7 +177,7 @@ export async function getDueSchedules(now: number): Promise<AgentSchedule[]> {
     for (const s of blob) byId.set(s.id, s);
   }
   // Also fold in any in-memory-only wallets that somehow never made it into
-  // the index (e.g. addToIndex failed mid-write) — belt and braces.
+  // the index (e.g. addToIndex failed mid-write), belt and braces.
   for (const s of _schedules.values()) byId.set(s.id, s);
 
   return [...byId.values()].filter(isDue);
@@ -198,22 +198,22 @@ export async function markScheduleRun(
   // BUG FIX: this used to only ever look at the in-memory `_schedules`
   // Map (`_schedules.get(id)`) and silently return if not found there.
   // On Vercel, a cron-triggered invocation runs on whatever serverless
-  // instance happens to be available — almost certainly NOT the same one
+  // instance happens to be available, almost certainly NOT the same one
   // that originally created/synced the schedule, so its in-memory Map is
   // empty for this schedule even though the schedule genuinely exists in
   // KV. The result: the payment executes correctly on-chain, but the
   // status update after it is silently dropped, leaving the schedule
-  // stuck showing "Active" forever — even though it already ran. On the
+  // stuck showing "Active" forever, even though it already ran. On the
   // NEXT cron tick it looks "due" again, gets re-attempted, and is only
   // saved from actually double-paying by Circle's own idempotency-key
   // deduplication (same idempotencyKeyBase every retry, since nextRunAt
-  // was never advanced) — not by anything in this store. Every other
+  // was never advanced), not by anything in this store. Every other
   // read in this file (getDueSchedules, getSchedulesForWallet) already
   // correctly merges KV with memory; this was the one place that didn't.
   let existing = _schedules.get(id);
 
   if (!existing && kvAvailable()) {
-    // Not in this instance's memory — the schedule's wallet is unknown
+    // Not in this instance's memory, the schedule's wallet is unknown
     // here, so check the index and search each wallet's blob for it.
     // Schedule counts per wallet are small (this is a payroll scheduling
     // feature, not a high-volume queue), so this is cheap in practice.
@@ -232,9 +232,9 @@ export async function markScheduleRun(
   if (result.status === 'failed') {
     existing.status = 'failed';
   } else if (result.nextRunAt) {
-    existing.nextRunAt = result.nextRunAt; // recurring — schedule the next run
+    existing.nextRunAt = result.nextRunAt; // recurring, schedule the next run
   } else {
-    existing.status = 'completed'; // one-off — done
+    existing.status = 'completed'; // one-off, done
   }
   _schedules.set(id, existing);
 

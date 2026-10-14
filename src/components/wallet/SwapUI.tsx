@@ -143,7 +143,7 @@ export function TokenBox({
                 ? <Loader2 size={20} color="#94A3B8" style={{ animation: 'spin 0.7s linear infinite' }} />
                 : <span style={{ fontSize: 24, fontWeight: 800, color: '#0F172A',
                     fontFamily: "'JetBrains Mono', monospace" }}>
-                    {amount || '—'}
+                    {amount || ', '}
                   </span>
               }
             </div>
@@ -155,7 +155,7 @@ export function TokenBox({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
           <span style={{ fontSize: 12, color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 4 }}>
             <Wallet size={11} />
-            {balanceLoading ? 'Loading…' : balance != null ? `${balance} ${token.symbol}` : '—'}
+            {balanceLoading ? 'Loading…' : balance != null ? `${balance} ${token.symbol}` : ', '}
           </span>
         </div>
       )}

@@ -3,7 +3,7 @@
  * @file lib/circle/useCircleAdapter.ts
  *
  * Converts the wagmi connector client (EIP-1193 provider) into a Circle
- * AppKit viem adapter — the bridge between wagmi's wallet and AppKit's SDK.
+ * AppKit viem adapter, the bridge between wagmi's wallet and AppKit's SDK.
  *
  * Pattern from official Circle + RainbowKit docs:
  *   useConnectorClient() → transport.value.provider → createAdapterFromProvider()
@@ -40,14 +40,14 @@ export interface UseCircleAdapterResult {
  * `client.transport.value.provider` assumes viem's `custom()` transport
  * shape. That shape isn't guaranteed across wagmi/viem versions or across
  * different connector types (injected vs. WalletConnect vs. Coinbase), and
- * when it doesn't match, `provider` silently ends up `undefined` — with NO
+ * when it doesn't match, `provider` silently ends up `undefined`, with NO
  * error surfaced (the old code explicitly did `setError(null)` in that
  * branch). The result: `isAdapterReady` stays false forever and the Bridge
  * button never activates, with no visible explanation. That silent failure
  * is what was reported as "the bridge button just doesn't become active."
  *
- * Fix: prefer the public, documented wagmi API — `connector.getProvider()`
- * — which every wagmi connector implements regardless of internal client
+ * Fix: prefer the public, documented wagmi API, `connector.getProvider()`
+ * which every wagmi connector implements regardless of internal client
  * shape. Fall back to the old transport-probing path only if that isn't
  * available, and otherwise report a real error instead of failing silently.
  */

@@ -3,7 +3,7 @@
  * Cancels (permanently removes) a scheduled payment. Called from the
  * "Cancel Payment" action on each schedule card in Manage AI Agent.
  *
- * SECURITY: the schedule id alone is not proof of ownership — it's just an
+ * SECURITY: the schedule id alone is not proof of ownership, it's just an
  * opaque string the client already has (visible in its own IndexedDB/UI).
  * Without an ownership check here, a valid session for wallet A could
  * cancel a schedule belonging to wallet B by simply passing its id. This
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Your session has expired. Please sign in again.' }, { status: 401 });
     }
 
-    // Ownership check — only remove a schedule that genuinely belongs to
+    // Ownership check, only remove a schedule that genuinely belongs to
     // this session-authenticated wallet.
     const mine = await getSchedulesForWallet(walletAddress);
     const owned = mine.some(s => s.id === scheduleId);

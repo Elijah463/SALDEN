@@ -4,7 +4,7 @@
  *
  * Caches "this employer's agent wallet has been granted isAgent() on both
  * the payroll clone and the registry clone" once confirmed true on-chain,
- * so no future page load — on any browser, any device — needs to re-run
+ * so no future page load, on any browser, any device, needs to re-run
  * the on-chain isAgent() checks or show the permission wizard again.
  *
  * This is safe to treat as a pure UI optimization, not a security
@@ -14,44 +14,32 @@
  * regardless of what this cache says. If this cache were ever wrong (a
  * grant transaction failed after the client already marked it done, say),
  * the worst case is a transaction that reverts on-chain with a real,
- * decodable error (see lib/contracts/decodeError.ts) — not an
+ * decodable error (see lib/contracts/decodeError.ts), not an
  * unauthorised action actually going through.
  *
- * Same storage pattern as employerLimits.ts / agentMode.ts.
+ * Stored in KV only. A read failure returns false, so the caller runs its
+ * own on-chain check instead of trusting a cache it can't read.
  */
 
-import { kvGet, kvSet, kvAvailable } from '@/lib/kv';
-
-const _memory = new Map<string, boolean>();
-
-function memKey(walletAddress: string): string {
-  return walletAddress.toLowerCase();
-}
+import { kvGetStrict, kvSet, kvAvailable } from '@/lib/kv';
 
 function kvKey(walletAddress: string): string {
-  return `agentPermissionsGranted:${memKey(walletAddress)}`;
+  return `agentPermissionsGranted:${walletAddress.toLowerCase()}`;
 }
 
-/** Returns true only once both on-chain grants have been confirmed and
- *  recorded via markAgentPermissionsGranted() below — false otherwise
- *  (including "never checked"), so the caller still runs its own
- *  on-chain verification the first time. */
+/** True only once both on-chain grants have been confirmed and recorded.
+ *  False otherwise, including when the store cannot be read. */
 export async function getAgentPermissionsGranted(walletAddress: string): Promise<boolean> {
-  const key = memKey(walletAddress);
-  if (_memory.get(key)) return true;
-
-  if (kvAvailable()) {
-    const stored = await kvGet<boolean>(kvKey(walletAddress));
-    if (stored === true) {
-      _memory.set(key, true);
-      return true;
-    }
+  try {
+    return (await kvGetStrict<boolean>(kvKey(walletAddress))) === true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
-export async function markAgentPermissionsGranted(walletAddress: string): Promise<void> {
-  const key = memKey(walletAddress);
-  _memory.set(key, true);
-  await kvSet(kvKey(walletAddress), true);
+/** Records a confirmed grant. Returns false if it could not be saved; the next
+ *  check then simply runs on-chain again. */
+export async function markAgentPermissionsGranted(walletAddress: string): Promise<boolean> {
+  if (!kvAvailable()) return false;
+  return kvSet(kvKey(walletAddress), true);
 }

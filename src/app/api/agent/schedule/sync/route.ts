@@ -1,8 +1,9 @@
+import { requirePro } from '@/lib/agent/tier';
 /**
  * @file app/api/agent/schedule/sync/route.ts
  * The client calls this whenever it opens "Manage AI Agent" (or right after
  * creating/editing a schedule), pushing its IndexedDB-held schedules into
- * the server-side store (see lib/agent/scheduleStore.ts — now KV-backed
+ * the server-side store (see lib/agent/scheduleStore.ts, now KV-backed
  * with an in-memory fallback, rather than memory-only).
  *
  * SECURITY NOTE: schedule.agentWalletId / agentWalletAddress /
@@ -15,8 +16,7 @@
  * lib/agent/agentIdentity.ts (server-verified: Circle refId lookup +
  * on-chain payrollOf read) and overwrites whatever the client sent before
  * anything is persisted. The cron route (run-schedules/route.ts) also
- * independently re-resolves these at execution time as defense in depth —
- * this route being correct is not the only thing standing between a
+ * independently re-resolves these at execution time as defense in depth, * this route being correct is not the only thing standing between a
  * malicious payload and a real transfer, but it should be correct anyway
  * so schedules display accurate data in the UI.
  */
@@ -31,6 +31,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as { walletAddress: string; schedules: AgentSchedule[] };
     const { walletAddress, schedules } = body;
+    const proBlock = await requirePro(walletAddress);
+    if (proBlock) return proBlock;
 
     if (!walletAddress || !Array.isArray(schedules)) {
       return NextResponse.json({ error: 'walletAddress and schedules are required' }, { status: 400 });
@@ -50,7 +52,7 @@ export async function POST(req: NextRequest) {
       .filter((s): s is AgentSchedule => !!s && typeof s === 'object' && typeof s.id === 'string' && s.walletAddress?.toLowerCase() === walletAddress.toLowerCase())
       .slice(0, 200);
 
-    // Re-derive the fields that decide where money goes — never trust the
+    // Re-derive the fields that decide where money goes, never trust the
     // client's claim, no matter what it put in the request body. Resolved
     // ONCE per request (not once per schedule) since every schedule in
     // this batch belongs to the same walletAddress.

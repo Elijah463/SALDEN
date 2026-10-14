@@ -8,8 +8,8 @@
  * ── SaldenRegistry permission model ──────────────────────────────────────────
  * There is NO OpenZeppelin AccessControl, NO `grantRole`, NO `OPERATOR_ROLE`.
  * The contract uses a custom two-role model:
- *   hrAdmin  — absolute owner; set once at clone initialisation
- *   isAgent  — mapping(address => bool); managed by hrAdmin only
+ *   hrAdmin, absolute owner; set once at clone initialisation
+ *   isAgent, mapping(address => bool); managed by hrAdmin only
  *
  * To grant the AI Agent permission to call `updateCID`:
  *   SaldenRegistry.addAgent(agentWallet)   ← called by hrAdmin (the employer)
@@ -29,12 +29,12 @@
  *
  * ── What the WRONG approach looked like ───────────────────────────────────────
  * A previous version called grantRole(keccak256("OPERATOR_ROLE"), agentAddr).
- * This is an OpenZeppelin AccessControl pattern — neither contract implements
+ * This is an OpenZeppelin AccessControl pattern, neither contract implements
  * AccessControl, so the call would revert with "function not found" at runtime.
  * Both fragments below have been verified against the actual Solidity source.
  */
 
-// ── SaldenRegistry — agent management ────────────────────────────────────────
+// ── SaldenRegistry, agent management ────────────────────────────────────────
 
 export const REGISTRY_ADD_AGENT_ABI = [
   {
@@ -96,7 +96,7 @@ export const REGISTRY_HR_ADMIN_ABI = [
   },
 ] as const;
 
-// ── SaldenMultiTokenPayroll — agent management ────────────────────────────────
+// ── SaldenMultiTokenPayroll, agent management ────────────────────────────────
 
 export const PAYROLL_ADD_AGENT_ABI = [
   {
@@ -131,7 +131,7 @@ export const PAYROLL_IS_AGENT_ABI = [
 /**
  * batchPay always takes three arguments in SaldenMultiTokenPayroll v2.0.0.
  * Passing address(0) for `token` defaults to USDC (per contract source).
- * There is no two-argument variant — an earlier enterprise contract had one,
+ * There is no two-argument variant, an earlier enterprise contract had one
  * but all current clones use this three-argument signature.
  */
 export const PAYROLL_BATCH_PAY_ABI = [

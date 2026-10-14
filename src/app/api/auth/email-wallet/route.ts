@@ -5,7 +5,7 @@
  * Body: { email: string }
  *
  * Called by OTPForm after successful OTP verification to provision a
- * Circle wallet for email-OTP users — equivalent to what /api/auth/google
+ * Circle wallet for email-OTP users, equivalent to what /api/auth/google
  * does for Google OAuth users.
  *
  * Response shapes:

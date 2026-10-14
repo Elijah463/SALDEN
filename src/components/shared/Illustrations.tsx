@@ -1,9 +1,9 @@
 /**
  * @file components/shared/Illustrations.tsx
  *
- * Premium SVG illustrations — layered depth, rich gradients, drop shadows.
+ * Salden Pro SVG illustrations, layered depth, rich gradients, drop shadows.
  * Brand palette: #4F46E5 (Deep Indigo) · #14B8A6 (Teal) · #6D28D9 (Purple) · #EEF2FF (Indigo-50)
- * No external dependencies — pure SVG shipped as zero runtime bytes.
+ * No external dependencies, pure SVG shipped as zero runtime bytes.
  */
 
 interface IllustrationProps {
@@ -106,15 +106,15 @@ export function PayrollHeroIllustration({ width = 480, height = 360 }: Illustrat
       <ellipse cx="380" cy="80"  rx="80"  ry="60"  fill={`url(#${id}-teal-blob)`} />
 
       {/* ── Card stack (depth layers) ── */}
-      {/* Layer 3 — deepest, most rotated */}
+      {/* Layer 3, deepest, most rotated */}
       <g transform="rotate(8, 200, 200)" filter={`url(#${id}-shadow-sm)`}>
         <rect x="50" y="110" width="300" height="180" rx="20" fill="#312E81" opacity="0.35" />
       </g>
-      {/* Layer 2 — middle */}
+      {/* Layer 2, middle */}
       <g transform="rotate(4, 200, 200)" filter={`url(#${id}-shadow-sm)`}>
         <rect x="40" y="100" width="300" height="180" rx="20" fill="#3730A3" opacity="0.55" />
       </g>
-      {/* Layer 1 — main card */}
+      {/* Layer 1, main card */}
       <g filter={`url(#${id}-shadow-lg)`}>
         <rect x="30" y="90" width="300" height="180" rx="20" fill={`url(#${id}-card)`} />
 
@@ -125,7 +125,7 @@ export function PayrollHeroIllustration({ width = 480, height = 360 }: Illustrat
 
         {/* Amount */}
         <text x="58" y="160" fill="#fff" fontSize="28" fontWeight="800" letterSpacing="-0.5">$24,800.00</text>
-        <text x="58" y="178" fill="rgba(255,255,255,0.55)" fontSize="11">USDC · Arc Testnet</text>
+        <text x="58" y="178" fill="rgba(255,255,255,0.55)" fontSize="11">USDC · Arc Network</text>
 
         {/* Subtle card shimmer line */}
         <line x1="58" y1="195" x2="312" y2="195" stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
@@ -513,7 +513,7 @@ export function TransactionIllustration({ width = 300, height = 240 }: Illustrat
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REMAINING ILLUSTRATIONS (Settings, Pricing, Error, Empty) — refined versions
+// REMAINING ILLUSTRATIONS (Settings, Pricing, Error, Empty), refined versions
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function EmptyIllustration({ width = 260, height = 200, label = 'No data yet' }: IllustrationProps & { label?: string }) {
@@ -544,7 +544,7 @@ export function PricingIllustration({ width = 280, height = 200 }: IllustrationP
       <g filter={`url(#${id}-shadow-lg)`}>
         <rect x="60" y="25" width="160" height="145" rx="18" fill={`url(#${id}-card)`} />
         <rect x="80" y="45" width="120" height="32" rx="10" fill="rgba(255,255,255,0.1)" />
-        <text x="140" y="66" textAnchor="middle" fill="#fff" fontSize="13" fontWeight="800">Premium</text>
+        <text x="140" y="66" textAnchor="middle" fill="#fff" fontSize="13" fontWeight="800">Salden Pro</text>
         <text x="140" y="100" textAnchor="middle" fill="#fff" fontSize="28" fontWeight="800">$10</text>
         <text x="140" y="115" textAnchor="middle" fill="rgba(255,255,255,0.6)" fontSize="9">ONE-TIME</text>
         {['Private Contract', 'AI Agent', '1,000 per batch', 'Multi-token'].map((f, i) => (

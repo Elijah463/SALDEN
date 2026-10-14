@@ -1,14 +1,14 @@
 /**
  * @file lib/validation.ts
  * Employee validation, address checks, and file import helpers.
- * Ported from the existing validation.js — logic preserved exactly.
+ * Ported from the existing validation.js, logic preserved exactly.
  */
 
 import { isAddress } from 'viem';
 import type { Employee } from '@/context/AppContext';
 
 // ── EIP-55 checksum validation via viem ──────────────────────────────────────
-// viem's isAddress also validates EIP-55 checksum — stronger than regex alone
+// viem's isAddress also validates EIP-55 checksum, stronger than regex alone
 
 export function isValidEthAddress(addr: string): boolean {
   if (!addr) return false;
@@ -120,7 +120,7 @@ export function normalizeEmployeeRows(
     .map(row => ({
       fullName:      cols.fullName      ? sanitizeImportValue(row[cols.fullName])      : '',
       department:    cols.department    ? sanitizeImportValue(row[cols.department])    : '',
-      walletAddress: cols.walletAddress ? String(row[cols.walletAddress] ?? '').trim() : '', // don't sanitize — addr may start with 0x
+      walletAddress: cols.walletAddress ? String(row[cols.walletAddress] ?? '').trim() : '', // don't sanitize, addr may start with 0x
       salaryAmount:  cols.salaryAmount  ? Number(row[cols.salaryAmount] ?? 0)          : 0,
       group:         cols.group         ? sanitizeImportValue(row[cols.group] ?? '')   : undefined,
     }))
@@ -134,7 +134,7 @@ export function sanitizeString(input: string): string {
   if (!input) return '';
   // Strip characters dangerous in HTML
   let cleaned = input.replace(/[<>"'`]/g, '').trim().slice(0, 200);
-  // Prevent CSV formula injection — strip leading =, +, -, @, tab, CR
+  // Prevent CSV formula injection, strip leading =, +, -, @, tab, CR
   // Attackers use these to inject spreadsheet formulas when data is exported
   cleaned = cleaned.replace(/^[=+\-@\t\r]+/, '');
   return cleaned;

@@ -9,23 +9,23 @@ import { useSignatureExplainer } from '@/context/SignatureExplainerContext';
  * @file lib/circle/useCachedSignMessage.ts
  *
  * A wallet's signature over a fixed message string is deterministic
- * (standard ECDSA signing) — the same wallet signing the same message
+ * (standard ECDSA signing), the same wallet signing the same message
  * always produces the exact same signature. Salden relies on this to
  * derive a per-wallet encryption key for IPFS-synced payroll data (see
  * context/AppContext.tsx's ENCRYPTION_KEY_MESSAGE / getEncryptionKey).
  *
  * Because it's deterministic, the wallet only ever needs to be prompted
- * for that signature ONCE per browser tab session — every other place in
+ * for that signature ONCE per browser tab session, every other place in
  * the app that needs it can safely reuse the cached result instead of
  * prompting again. Without this, "add an employee" (or save a group, or
  * finish onboarding) would mean two prompts every time: one for this
  * signature, one for the actual on-chain transaction that follows it.
  * With it, it's one prompt the first time or a session, and just the
- * (unavoidable — it's a real transaction) on-chain confirmation after
+ * (unavoidable, it's a real transaction) on-chain confirmation after
  * that.
  *
  * This applies identically to an external wallet (wagmi's signature
- * popup) and Circle social login (the SIGN_MESSAGE PIN challenge) — both
+ * popup) and Circle social login (the SIGN_MESSAGE PIN challenge), both
  * go through useUniversalWrite's signMessage underneath.
  *
  * Cached in sessionStorage (not localStorage) so it's automatically
@@ -33,12 +33,12 @@ import { useSignatureExplainer } from '@/context/SignatureExplainerContext';
  * disk long-term.
  */
 // btoa() only accepts Latin1 (0-255) code points and throws
-// InvalidCharacterError on anything outside that range — e.g. the em-dash
-// (—, U+2014) in ENCRYPTION_KEY_MESSAGE below. Since this function used to
+// InvalidCharacterError on anything outside that range, e.g. the em-dash
+// (, U+2014) in ENCRYPTION_KEY_MESSAGE below. Since this function used to
 // call btoa() directly on the raw message text, EVERY call for that message
 // threw synchronously, before a signature was ever requested. The caller
 // (AppContext.syncData) treats that as "encryption failed" and silently
-// falls back to storing employee data as PLAINTEXT — so encryption has
+// falls back to storing employee data as PLAINTEXT, so encryption has
 // never actually been engaging for any message containing a non-Latin1
 // character. This mirrors the same byte-loop encode already used in
 // AppContext.tsx's toBase64() and indexeddb.ts's getOrCreateDeviceKey() for
@@ -66,9 +66,9 @@ export function useCachedSignMessage() {
       if (cached) return cached;
     } catch { /* sessionStorage blocked (private browsing edge cases) */ }
 
-    // Not cached — about to prompt for a real signature. For an external
+    // Not cached, about to prompt for a real signature. For an external
     // wallet, show Salden's own explainer first (see
-    // context/SignatureExplainerContext.tsx) — the wallet's own popup only
+    // context/SignatureExplainerContext.tsx), the wallet's own popup only
     // renders plain text, so this is where the full explanation lives.
     // Circle/social-login sessions skip this: Circle's PIN challenge modal
     // already explains itself in its own UI.

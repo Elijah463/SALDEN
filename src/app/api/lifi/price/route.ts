@@ -15,8 +15,8 @@ export async function GET(req: NextRequest) {
 
   const price = await getTokenPrice(chainIdNum, token);
   if (!price) {
-    // Not a hard error — the token/chain just isn't priced by LI.FI right
-    // now (e.g. a brand-new testnet asset). Callers show no USD line.
+    // Not a hard error, the token/chain just isn't priced by LI.FI right
+    // now (e.g. a brand-new asset). Callers show no USD line.
     return NextResponse.json({ price: null });
   }
   return NextResponse.json({ price });

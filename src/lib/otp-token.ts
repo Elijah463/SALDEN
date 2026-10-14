@@ -2,7 +2,7 @@
  * @file lib/otp-token.ts
  *
  * Stateless HMAC-based OTP verification.
- * Works on Vercel, Netlify, AWS Lambda, Cloudflare Workers — ANY serverless
+ * Works on Vercel, Netlify, AWS Lambda, Cloudflare Workers, ANY serverless
  * platform. No shared state (Redis, DB) required.
  *
  * Flow:
@@ -15,7 +15,7 @@
  *   - OTP stored as SHA-256 hash inside token (not plaintext)
  *   - Both HMAC and OTP comparisons use crypto.timingSafeEqual (fixes timing attack)
  *   - 10-minute expiry baked into signed payload
- *   - No shared state — any Lambda instance can verify
+ *   - No shared state, any Lambda instance can verify
  */
 
 import crypto from 'crypto';
@@ -28,7 +28,7 @@ function getSecret(): string {
   return secret;
 }
 
-/** Cryptographically secure 6-digit OTP using rejection sampling — no modulo bias */
+/** Cryptographically secure 6-digit OTP using rejection sampling, no modulo bias */
 export function generateSecureOTP(): string {
   // Rejection sampling: discard values in the biased tail of the UInt32 range.
   // Accepted range: 0 to (floor(2^32 / 900000) * 900000 - 1) = 0..4294500000-1
@@ -40,7 +40,7 @@ export function generateSecureOTP(): string {
     if (val < MAX_SAFE) {
       return (100000 + (val % 900000)).toString();
     }
-    // val ≥ MAX_SAFE (probability ~0.0001%) — retry for uniform distribution
+    // val ≥ MAX_SAFE (probability ~0.0001%), retry for uniform distribution
   }
 }
 
@@ -78,7 +78,7 @@ export function verifyOTPToken(
 
     const [payload, sig] = parts;
 
-    // 1. Verify HMAC signature — timing-safe
+    // 1. Verify HMAC signature, timing-safe
     const expectedSig    = crypto.createHmac('sha256', getSecret()).update(payload).digest('base64url');
     const sigBuf         = Buffer.from(sig,         'base64url');
     const expectedSigBuf = Buffer.from(expectedSig, 'base64url');
@@ -105,7 +105,7 @@ export function verifyOTPToken(
       return { valid: false, error: 'Code has expired. Request a new one.' };
     }
 
-    // 5. Compare OTP hash — timing-safe
+    // 5. Compare OTP hash, timing-safe
     const submittedHash = crypto
       .createHash('sha256')
       .update(submittedOTP.trim())

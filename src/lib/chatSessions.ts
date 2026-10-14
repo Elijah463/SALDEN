@@ -1,7 +1,7 @@
 /**
  * @file lib/chatSessions.ts
  * Local persistence for AI Agent chat sessions. This is the write side that
- * was previously missing entirely — chat-history/page.tsx already reads
+ * was previously missing entirely, chat-history/page.tsx already reads
  * from `salden_agent_sessions_${addr}` (the metadata list) but nothing ever
  * wrote to it, so the page always showed "No chats yet". This file is the
  * single source of truth for the storage key/shape so ChatInterface.tsx
@@ -24,7 +24,7 @@ export interface ChatSessionMeta {
   msgCount:  number;
 }
 
-// Keep in sync with chat-history/page.tsx's own SESSION_KEY — duplicated
+// Keep in sync with chat-history/page.tsx's own SESSION_KEY, duplicated
 // there rather than imported to avoid a circular/coupling dependency on a
 // client page from a lib file; both must produce the identical key format.
 const metaKey    = (addr: string) => `salden_agent_sessions_${addr.toLowerCase()}`;
@@ -36,7 +36,7 @@ export function generateSessionId(): string {
   try {
     return crypto.randomUUID();
   } catch {
-    // crypto.randomUUID() requires a secure context — fall back for older/
+    // crypto.randomUUID() requires a secure context, fall back for older/
     // non-HTTPS environments rather than crashing session creation.
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   }
@@ -86,10 +86,10 @@ export function saveSession(
     if (existingIdx >= 0) list[existingIdx] = entry;
     else list.unshift(entry);
 
-    // Bound growth — drop the oldest sessions (by timestamp) beyond the cap.
+    // Bound growth, drop the oldest sessions (by timestamp) beyond the cap.
     const trimmed = list.sort((a, b) => b.timestamp - a.timestamp).slice(0, MAX_SESSIONS);
     localStorage.setItem(metaKey(walletAddress), JSON.stringify(trimmed));
   } catch {
-    /* metadata list write failed — messages themselves are still saved above */
+    /* metadata list write failed, messages themselves are still saved above */
   }
 }

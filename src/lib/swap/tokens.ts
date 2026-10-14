@@ -37,7 +37,7 @@ export function toRawAmount(amount: string, decimals: number): bigint {
 /** Raw on-chain integer amount (string, already scaled by `decimals`) ->
  *  a trimmed human-readable string, e.g. "12.5" (not "12.500000"). Caps
  *  displayed fractional digits at 6 regardless of the token's real
- *  decimals (cirBTC's 8) purely for readable UI — this is a display
+ *  decimals (cirBTC's 8) purely for readable UI, this is a display
  *  helper, not used for anything that needs full on-chain precision. */
 export function fromRawAmount(raw: string, decimals: number): string {
   try {

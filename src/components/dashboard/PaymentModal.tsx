@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file components/dashboard/PaymentModal.tsx
- * Premium payment modal — select token, group, and remark before confirming.
+ * Salden Pro payment modal, select token, group, and remark before confirming.
  * Remark is written into the Arc Memo JSON (ImportantUpdate #8).
  */
 
@@ -11,7 +11,7 @@ import { RefreshCw, ChevronDown, AlertTriangle, Loader2, Lock } from 'lucide-rea
 import { Modal }   from '@/components/shared/Modal';
 import { Button }  from '@/components/shared/Button';
 import { useApp }  from '@/context/AppContext';
-import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
+import { arcChain, CONTRACTS } from '@/lib/contracts/config';
 import { MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { getCachedTokens, setCachedTokens } from '@/lib/db/indexeddb';
 import { getToken, DEFAULT_TOKEN_REGISTRY, TOKEN_ICON_PATHS, tokenIconRenderSize, type TokenEntry } from '@/lib/token-registry';
@@ -69,7 +69,7 @@ interface PaymentModalProps {
 }
 
 export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone, isPremiumUser, onConfirm }: PaymentModalProps) {
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const { state, addToast } = useApp();
   const { tokenRegistry } = state;
 
@@ -96,7 +96,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
 
   const fetchTokens = useCallback(async (forceRefresh = false) => {
     if (!isPremiumUser || !payrollClone) {
-      // Non-premium: no multi-token contract to query — always USDC.
+      // Non-premium: no multi-token contract to query, always USDC.
       const usdcEntry = getToken(tokenRegistry, CONTRACTS.USDC) ?? DEFAULT_TOKEN_REGISTRY[CONTRACTS.USDC.toLowerCase()] ?? {
         address: CONTRACTS.USDC, name: 'USD Coin', symbol: 'USDC', decimals: 6, addedAt: new Date().toISOString(),
       };
@@ -136,7 +136,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
         functionName: 'getSupportedTokens',
       }) as `0x${string}`[];
       let addresses = raw as string[];
-      // Always ensure USDC is present even if not in contract list — restored
+      // Always ensure USDC is present even if not in contract list, restored
       // from the pre-upgrade version; the corrected-zip rewrite silently
       // dropped this safety net, which meant a contract that doesn't list
       // USDC would leave it unselectable in the dropdown despite USDC being
@@ -215,7 +215,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
             : <div style={{ position: 'relative' }}>
                 <button
                   onClick={() => {
-                    if (!isPremiumUser) { addToast('Upgrade to Premium to pay in other tokens.', 'info'); return; }
+                    if (!isPremiumUser) { addToast('Upgrade to Salden Pro to pay in other tokens.', 'info'); return; }
                     setTokenDropdownOpen(p => !p);
                   }}
                   style={{
@@ -262,7 +262,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
           }
           {!isPremiumUser && !loadingTokens && (
             <p style={{ fontSize: 11, color: '#94A3B8', marginTop: 6 }}>
-              Upgrade to Premium to pay in other tokens.
+              Upgrade to Salden Pro to pay in other tokens.
             </p>
           )}
           {fetchError && (
@@ -285,7 +285,7 @@ export function PaymentModal({ open, onClose, activeGroup, groups, payrollClone,
           </div>
         </div>
 
-        {/* Remark dropdown — written into Arc Memo JSON */}
+        {/* Remark dropdown, written into Arc Memo JSON */}
         <div>
           <label style={lbl}>Remark</label>
           <div style={{ position: 'relative' }}>

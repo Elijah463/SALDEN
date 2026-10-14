@@ -4,18 +4,18 @@
  * POST /api/circle/sign-message-challenge
  * Body: { email, message }
  *
- * Sibling to /api/circle/write-challenge — same structure, same
+ * Sibling to /api/circle/write-challenge, same structure, same
  * debugging approach (see that route's header comment), but for signing
  * a plain message instead of executing a contract call. Needed by any
  * flow that derives a signature-based encryption key rather than sending
- * a transaction — currently only lib/usePayrollSync.ts's IPFS
+ * a transaction, currently only lib/usePayrollSync.ts's IPFS
  * employee-data sync.
  *
- * Returns { challengeId, userToken, encryptionKey, walletId } — the
+ * Returns { challengeId, userToken, encryptionKey, walletId }, the
  * client uses these with executeCircleMessageSigningChallenge() (see
  * lib/circle/executeChallenge.ts) to prompt the user's PIN and get the
  * signature back directly (no polling needed here, unlike a
- * transaction — see that function's header for why).
+ * transaction, see that function's header for why).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     const { session, wallet } = await getUserFirstWallet(email);
 
     if (!wallet) {
-      return NextResponse.json({ error: 'No wallet found for this account yet — finish setting up your wallet first.' }, { status: 400 });
+      return NextResponse.json({ error: 'No wallet found for this account yet, finish setting up your wallet first.' }, { status: 400 });
     }
 
     const challengeId = await createMessageSigningChallenge({

@@ -1,3 +1,5 @@
+import { verifySessionToken } from '@/lib/agent/auth';
+import { requirePro } from '@/lib/agent/tier';
 /**
  * @file app/api/agent/activate/route.ts
  *
@@ -18,6 +20,14 @@ import { track } from '@/lib/analytics';
 export async function POST(req: NextRequest) {
   try {
     const { walletAddress, action, existingWalletId } = await req.json();
+
+    // Activation creates and assigns the agent wallet. It requires a signed
+    // session for this exact wallet and a Salden Pro wallet.
+    const authHeader = req.headers.get('authorization');
+    const session = verifySessionToken(authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null, walletAddress ?? '');
+    if (session.ok === false) return NextResponse.json({ error: session.error }, { status: 401 });
+    const proBlock = await requirePro(walletAddress);
+    if (proBlock) return proBlock;
 
     if (!walletAddress || !action) {
       return NextResponse.json(
@@ -46,7 +56,7 @@ export async function POST(req: NextRequest) {
             message:      'Agent wallet re-verified and ready.',
           });
         } catch {
-          // Wallet not found — fall through to create a new one
+          // Wallet not found, fall through to create a new one
         }
       }
 
@@ -55,7 +65,7 @@ export async function POST(req: NextRequest) {
       const idempotencyKey = `salden-agent-${walletAddress.toLowerCase()}`;
       const wallet = await createAgentWallet(idempotencyKey);
 
-      // Only fires here — the re-verify branch above returns early for an
+      // Only fires here, the re-verify branch above returns early for an
       // already-active agent, so this genuinely means "first activation".
       await track({ event: 'agent_activated', walletAddress });
 

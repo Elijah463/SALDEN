@@ -2,123 +2,152 @@
  * @file lib/agent/spendLimits.ts
  * SERVER-SIDE ONLY.
  *
- * Two checks:
- *   1. Per-transaction ceiling (MAX_SINGLE_PAYMENT) — a flat platform-wide
- *      sanity number, always enforced, never configurable per employer.
- *   2. Daily cumulative ceiling per wallet — now TWO layers:
- *        a. PLATFORM_MAX_DAILY_TOTAL: an absolute, env-configured backstop
- *           no employer can exceed no matter what they configure.
- *        b. The employer's own configured limit (lib/agent/employerLimits.ts,
- *           set from Settings), which is validated at set-time to never be
- *           lower than their current gross payroll total — so a legitimate
- *           full payroll run can never be blocked partway through by a
- *           limit the employer set too conservatively.
- *      The effective ceiling actually enforced is whichever of the two is
- *      LOWER. If an employer has never configured their own limit, the
- *      platform default is the only ceiling in effect (same behaviour as
- *      before this file supported per-employer limits at all).
+ * The AI agent's ONLY spending ceiling is the daily limit the employer sets in
+ * Settings. There is no per-payment cap and no platform-wide cap.
  *
- * Both are enforced at the point an unlisted-payment proposal is about to
- * be surfaced to the user — NOT at execution time, since execution
- * already requires a real wallet signature. This is a second, independent
- * line of defense, not the only one.
+ * Enforcement:
+ *   - checkSpendLimit() is a read-only pre-check. It tells the chat what to say
+ *     before a proposal is shown. It is advisory and never moves the budget.
+ *   - reserveSpend() is the enforcement point. It atomically adds the amount to
+ *     today's total in the shared KV store and rejects it if the total would
+ *     exceed the limit. It runs BEFORE any agent-wallet transaction is submitted,
+ *     so two concurrent payments cannot both pass.
+ *   - releaseSpend() returns a reservation when the payment fails before it is
+ *     submitted or fails on-chain.
  *
- * ⚠ The daily-spend COUNTER itself (`_spend`) is still an in-memory Map,
- * same in-memory caveat as rateLimiter.ts and auth.ts — under-counting
- * across serverless instances makes this check slightly too permissive in
- * rare multi-instance races, which is a real residual risk worth knowing
- * about, not something this file silently fixes. The employer's
- * CONFIGURED limit itself, however, is real persisted data (via
- * employerLimits.ts / lib/kv.ts) — those are two different things with
- * two different risk profiles, handled accordingly.
+ * Totals are stored in integer micro-USDC to avoid float drift. Each day has its
+ * own key (UTC), so the counter resets without any cleanup job.
+ *
+ * If no employer limit is set, the agent cannot spend. If the KV store is
+ * unavailable, the agent cannot spend. Both fail closed.
  */
-
+import { kvAvailable, kvGetStrict, kvIncrBy, kvSet, kvSetNX } from '@/lib/kv';
 import { getEmployerDailyLimit } from './employerLimits';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const MICRO = 1_000_000;
+const DAY_TTL_SECONDS = 2 * 24 * 60 * 60;
 
-export const MAX_SINGLE_PAYMENT = Number(process.env.AGENT_MAX_SINGLE_PAYMENT ?? 1_000_000);
-/** Platform-wide absolute ceiling — see file header. Kept under the same
- *  env var name as before (AGENT_MAX_DAILY_TOTAL); only its role changed,
- *  from "the only daily limit" to "the backstop no employer limit can
- *  exceed". */
-export const PLATFORM_MAX_DAILY_TOTAL = Number(process.env.AGENT_MAX_DAILY_TOTAL ?? 5_000_000);
+const toMicro = (usd: number): number => Math.round(usd * MICRO);
+const dayKey = (walletAddress: string): string =>
+  `agent:spend:${walletAddress.toLowerCase()}:${new Date().toISOString().slice(0, 10)}`;
 
-interface DailySpend { total: number; resetAt: number }
-const _spend = new Map<string, DailySpend>();
-
-// Same unbounded-growth concern as rateLimiter.ts — prune opportunistically.
-function pruneExpiredSpend(): void {
-  const now = Date.now();
-  for (const [key, value] of _spend) {
-    if (value.resetAt <= now) _spend.delete(key);
-  }
-}
-
-function todayKey(walletAddress: string): string {
-  return `${walletAddress.toLowerCase()}::${new Date().toISOString().slice(0, 10)}`;
-}
+/**
+ * Why a spend was refused:
+ *   daily_limit, the employer's configured daily limit would be exceeded
+ *   unavailable, the spend store is down, so the limit cannot be checked
+ */
+export type SpendBlockReason = 'daily_limit' | 'unavailable';
 
 export interface SpendCheck {
   allowed: boolean;
-  reason?: 'single_payment_ceiling' | 'daily_ceiling';
+  reason?: SpendBlockReason;
+  /** Spent today in USD, as far as the store knows. */
   dailyTotalSoFar: number;
-  /** The ceiling actually in effect for this wallet right now — either the
-   *  employer's own configured limit or the platform default, whichever
-   *  is lower. Useful for building an accurate error message. */
-  effectiveDailyLimit: number;
+  /** The employer's daily limit in USD, or null when no limit is set (unlimited). */
+  effectiveDailyLimit: number | null;
+}
+
+/** A user-facing explanation for a refused spend. */
+export function spendBlockMessage(check: SpendCheck): string {
+  if (check.reason === 'unavailable') {
+    return 'The agent cannot verify your spending right now, so this payment was not made. Please try again shortly.';
+  }
+  return `This would exceed your daily spend limit of $${(check.effectiveDailyLimit ?? 0).toFixed(2)} (already used $${check.dailyTotalSoFar.toFixed(2)} today).`;
+}
+
+/** Read-only pre-check. Reserves nothing. Unset limit means unlimited. */
+export async function checkSpendLimit(walletAddress: string, amount: number): Promise<SpendCheck> {
+  if (!kvAvailable()) return { allowed: false, reason: 'unavailable', dailyTotalSoFar: 0, effectiveDailyLimit: null };
+  try {
+    const limit = await getEmployerDailyLimit(walletAddress);
+    const soFarMicro = (await kvGetStrict<number>(dayKey(walletAddress))) ?? 0;
+    if (limit == null) return { allowed: true, dailyTotalSoFar: soFarMicro / MICRO, effectiveDailyLimit: null };
+    const allowed = soFarMicro + toMicro(amount) <= toMicro(limit);
+    return {
+      allowed,
+      reason: allowed ? undefined : 'daily_limit',
+      dailyTotalSoFar: soFarMicro / MICRO,
+      effectiveDailyLimit: limit,
+    };
+  } catch {
+    return { allowed: false, reason: 'unavailable', dailyTotalSoFar: 0, effectiveDailyLimit: null };
+  }
 }
 
 /**
- * Checks whether proposing this amount would be allowed. Does NOT commit
- * the amount yet — call `recordProposedSpend` only once the user actually
- * confirms (the proposal itself shouldn't count against the ceiling,
- * since most proposals that reach this point do get confirmed, but a
- * user could decline — we don't want declined proposals to eat the
- * daily budget).
- *
- * Async because it now consults the employer's configured limit
- * (employerLimits.ts), which may be a KV round-trip.
+ * Atomically counts `amount` against today's total and, if the employer has set a
+ * limit, rejects it when the total would exceed that limit. Every agent payment is
+ * counted, even when no limit is set, so a limit set later applies to the whole day.
+ * Returns null when the payment must not proceed. Release it if the payment does not go through.
  */
-export async function checkSpendLimit(walletAddress: string, amount: number): Promise<SpendCheck> {
-  if (_spend.size > 5000) pruneExpiredSpend();
-
-  const employerLimit = await getEmployerDailyLimit(walletAddress);
-  const effectiveDailyLimit = employerLimit != null
-    ? Math.min(employerLimit, PLATFORM_MAX_DAILY_TOTAL)
-    : PLATFORM_MAX_DAILY_TOTAL;
-
-  if (amount > MAX_SINGLE_PAYMENT) {
-    return {
-      allowed: false,
-      reason: 'single_payment_ceiling',
-      dailyTotalSoFar: peekDailySpend(walletAddress),
-      effectiveDailyLimit,
-    };
+export async function reserveSpend(walletAddress: string, amount: number): Promise<SpendReservation | null> {
+  if (!kvAvailable()) return null;
+  try {
+    const limit = await getEmployerDailyLimit(walletAddress);
+    const key = dayKey(walletAddress);
+    const micro = toMicro(amount);
+    const total = await kvIncrBy(key, micro, DAY_TTL_SECONDS);
+    if (total === null) return null;
+    if (limit != null && total > toMicro(limit)) {
+      await kvIncrBy(key, -micro);
+      return null;
+    }
+    return { key, micro };
+  } catch {
+    return null;
   }
-
-  const soFar = peekDailySpend(walletAddress);
-  if (soFar + amount > effectiveDailyLimit) {
-    return { allowed: false, reason: 'daily_ceiling', dailyTotalSoFar: soFar, effectiveDailyLimit };
-  }
-
-  return { allowed: true, dailyTotalSoFar: soFar, effectiveDailyLimit };
 }
 
-function peekDailySpend(walletAddress: string): number {
-  const key = todayKey(walletAddress);
-  const existing = _spend.get(key);
-  if (!existing || existing.resetAt <= Date.now()) return 0;
-  return existing.total;
+export interface SpendReservation { key: string; micro: number; }
+
+/** Returns a reservation to the day's total. Call when the payment did not go through. */
+export async function releaseSpend(reservation: SpendReservation): Promise<void> {
+  await kvIncrBy(reservation.key, -reservation.micro);
 }
 
-/** Call this ONLY after a payment is actually confirmed/executed. */
-export function recordProposedSpend(walletAddress: string, amount: number): void {
-  const key = todayKey(walletAddress);
-  const existing = _spend.get(key);
-  if (!existing || existing.resetAt <= Date.now()) {
-    _spend.set(key, { total: amount, resetAt: Date.now() + DAY_MS });
-    return;
+/**
+ * Like reserveSpend, but keyed by a run id (for example a scheduled run's
+ * idempotency key). Once a run has reserved, a retry of that same run returns
+ * the existing reservation and does not add to the day's total again.
+ *
+ * The claim-then-reserve sequence is made atomic with kvSetNX: only the
+ * caller that successfully creates the placeholder marker is allowed to
+ * actually reserve spend for this run id. A concurrent retry that loses the
+ * NX race briefly polls for the winner's real reservation instead of also
+ * calling reserveSpend, which would otherwise double-count a single run
+ * against the day's total if two retries landed close enough together.
+ */
+export async function reserveSpendForRun(
+  walletAddress: string, amount: number, runId: string,
+): Promise<SpendReservation | null> {
+  if (!kvAvailable()) return null;
+  const markerKey = `agent:spendrun:${runId}`;
+
+  let wonClaim: boolean;
+  try {
+    wonClaim = await kvSetNX(markerKey, { pending: true }, DAY_TTL_SECONDS);
+  } catch {
+    return null;
   }
-  existing.total += amount;
+
+  if (!wonClaim) {
+    // Someone else (a concurrent retry of this same run) is already
+    // reserving. Poll briefly for their real reservation to land rather
+    // than reserving again ourselves.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      try {
+        const existing = await kvGetStrict<SpendReservation>(markerKey);
+        if (existing && 'key' in existing) return existing;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  const reservation = await reserveSpend(walletAddress, amount);
+  if (!reservation) return null;
+  await kvSet(markerKey, reservation, DAY_TTL_SECONDS);
+  return reservation;
 }

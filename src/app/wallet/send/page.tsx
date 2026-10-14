@@ -3,10 +3,10 @@
  * @file app/wallet/send/page.tsx
  * Send USDC, EURC, or cirBTC to any EVM address with an optional memo.
  *
- * Memo strategy — CHANGED: the previous version fired a SEPARATE
+ * Memo strategy, CHANGED: the previous version fired a SEPARATE
  * writeContract() call to the Arc Memo contract right after the transfer
  * confirmed, purely to log the remark on-chain. Every writeContract call
- * prompts a real wallet signature — so a successful send was immediately
+ * prompts a real wallet signature, so a successful send was immediately
  * followed by a second, unexplained signature request for a purely
  * informational side-effect. That's confusing by design, not a bug in the
  * mechanism itself, so it's removed rather than reworked: the remark is
@@ -19,13 +19,14 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePublicClient, useReadContract } from 'wagmi';
 import { getAddress } from 'viem';
-import { ArrowLeft, ExternalLink, CheckCircle2, X, Loader2, Send, ChevronDown } from 'lucide-react';
+import { ArrowLeft, ExternalLink, X, Loader2, Send, ChevronDown } from 'lucide-react';
 import { AppLayout }  from '@/components/layout/AppLayout';
 import { NetworkGuard } from '@/components/shared/NetworkGuard';
+import { SuccessCheck } from '@/components/shared/SuccessCheck';
 import { useApp } from '@/context/AppContext';
 import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAddress';
 import { ERC20_ABI } from '@/lib/contracts/abis';
-import { CONTRACTS, arcTestnet, txLink } from '@/lib/contracts/config';
+import { CONTRACTS, arcChain, txLink } from '@/lib/contracts/config';
 import { waitForSuccessfulReceipt } from '@/lib/txReceipt';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
@@ -53,7 +54,7 @@ function TokenIconImg({ symbol, size }: { symbol: string; size: number }) {
 }
 
 // Next.js only statically replaces `process.env.NEXT_PUBLIC_X` when it sees
-// that exact literal — see wallet/page.tsx for the fuller note. Same
+// that exact literal, see wallet/page.tsx for the fuller note. Same
 // pattern here, kept in sync with that file's token list.
 const ENV_TOKEN_ADDRESSES: Record<string, string | undefined> = {
   NEXT_PUBLIC_EURC_ADDRESS:   process.env.NEXT_PUBLIC_EURC_ADDRESS,
@@ -73,7 +74,7 @@ const SEND_TOKENS: SendToken[] = [
   { symbol: 'cirBTC', name: 'Circle Bitcoin',  address: ENV_TOKEN_ADDRESSES.NEXT_PUBLIC_CIRBTC_ADDRESS, decimals: 8 },
 ].filter((t): t is SendToken & { address: string } => !!t.address);
 
-// Pure validators — defined outside component so they are stable references
+// Pure validators, defined outside component so they are stable references
 function validateAddress(val: string): string {
   try { getAddress(val); return ''; }
   catch { return 'Invalid wallet address.'; }
@@ -90,7 +91,7 @@ type SendStatus = 'idle' | 'sending' | 'confirming';
 export default function SendPage() {
   const router       = useRouter();
   const { address, loginMethod } = useEffectiveAddress();
-  const pc           = usePublicClient({ chainId: arcTestnet.id });
+  const pc           = usePublicClient({ chainId: arcChain.id });
   const { saveTxRecord } = useApp();
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
 
@@ -111,7 +112,7 @@ export default function SendPage() {
   const [statusMessage, setStatusMessage] = useState('');
   const [successTx, setSuccessTx] = useState<string | null>(null);
 
-  // Real ERC-20 balance of the SELECTED token — the previous version read
+  // Real ERC-20 balance of the SELECTED token, the previous version read
   // wagmi's native-token useBalance() unconditionally and labeled it
   // "USDC", but Arc's native balance (18 decimals) and the ERC-20 USDC
   // interface actually transferred here (6 decimals) are two different
@@ -148,7 +149,7 @@ export default function SendPage() {
       const ref = genRef();
 
       setStatus('sending');
-      // Direct ERC-20 transfer — msg.sender is the user's wallet (correct)
+      // Direct ERC-20 transfer, msg.sender is the user's wallet (correct)
       const txHash = await universalWrite({
         address: tokenAddr,
         abi: ERC20_ABI,
@@ -161,7 +162,7 @@ export default function SendPage() {
       setSuccessTx(txHash);
       refetchBalance();
 
-      // Record locally so it shows up in Transaction History — this was
+      // Record locally so it shows up in Transaction History, this was
       // never being saved anywhere before, which is why sent transfers
       // never appeared there.
       await saveTxRecord({
@@ -179,7 +180,7 @@ export default function SendPage() {
     } catch (err) {
       const msg = (err as Error).message ?? '';
       if (/reject|cancel|denied/i.test(msg)) setAmtErr('Transaction cancelled.');
-      else setAmtErr('Send failed — please try again.');
+      else setAmtErr('Send failed, please try again.');
     } finally {
       setSending(false);
       setStatus('idle');
@@ -216,7 +217,7 @@ export default function SendPage() {
 
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24 }}>
             <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>Send {token?.symbol ?? 'Tokens'}</h2>
-            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 24 }}>Transfer tokens to any wallet on Arc Testnet.</p>
+            <p style={{ fontSize: 14, color: '#64748B', marginBottom: 24 }}>Transfer tokens to any wallet on Arc Network.</p>
 
             <div style={{ marginBottom: 16 }}>
               <label style={labelStyle}>Recipient Address *</label>
@@ -230,7 +231,7 @@ export default function SendPage() {
             <div style={{ marginBottom: 16 }}>
               <label style={labelStyle}>Amount *</label>
               <div style={{ position: 'relative', display: 'flex', border: `1.5px solid ${amtErr ? '#FCA5A5' : '#E2E8F0'}`, borderRadius: 10, overflow: 'visible' }}>
-                {/* Token selector — left side of the amount field */}
+                {/* Token selector, left side of the amount field */}
                 <div style={{ position: 'relative', flexShrink: 0 }}>
                   <button
                     type="button"
@@ -247,7 +248,7 @@ export default function SendPage() {
                     disabled={SEND_TOKENS.length <= 1}
                   >
                     <TokenIconImg symbol={token?.symbol ?? ''} size={18} />
-                    {token?.symbol ?? '—'}
+                    {token?.symbol ?? ', '}
                     {SEND_TOKENS.length > 1 && <ChevronDown size={13} color="#94A3B8" />}
                   </button>
 
@@ -296,7 +297,7 @@ export default function SendPage() {
             </div>
 
             <div style={{ marginBottom: 24 }}>
-              <label style={labelStyle}>Remark <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#94A3B8' }}>(optional — shown in transaction history)</span></label>
+              <label style={labelStyle}>Remark <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#94A3B8' }}>(optional, shown in transaction history)</span></label>
               <textarea value={remark} onChange={e => setRemark(e.target.value)}
                 placeholder="e.g. Freelance payment, October" rows={2}
                 style={{ ...inp, resize: 'vertical', minHeight: 72 }}
@@ -318,10 +319,8 @@ export default function SendPage() {
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
-              {/* Filled green circle, white check, faded glow — was an
-                  outlined check on a pale background before. */}
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <CheckCircle2 size={34} color="#fff" fill="#059669" />
+              <div style={{ marginBottom: 16 }}>
+                <SuccessCheck size={56} />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Sent Successfully</h3>
               <p style={{ fontSize: 13, color: '#64748B', marginBottom: 16 }}>{amount} {token?.symbol} sent to {to.slice(0, 8)}…{to.slice(-6)}</p>

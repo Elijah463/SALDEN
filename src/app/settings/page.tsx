@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file app/settings/page.tsx
- * Settings — company profile, contract functions, premium tools, danger zone.
+ * Settings, company profile, contract functions, premium tools, danger zone.
  * Cooldown removed per spec. Restructured to match new design.
  */
 
@@ -16,7 +16,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
 import { Modal } from '@/components/shared/Modal';
-import { addressLink, arcTestnet } from '@/lib/contracts/config';
+import { addressLink, arcChain } from '@/lib/contracts/config';
 import { REGISTRY_ABI } from '@/lib/contracts/abis';
 import { truncAddr, sanitizeString } from '@/lib/validation';
 import { useAgentSession } from '@/lib/agent/useAgentSession';
@@ -43,7 +43,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-// ── Editable field — plain text + edit icon by default; the input only
+// ── Editable field, plain text + edit icon by default; the input only
 //    appears once the edit icon is clicked (saved via the section's own
 //    Save button, same as before) ──────────────────────────────────────────
 
@@ -107,21 +107,21 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
 // ── Main settings page ────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  // useEffectiveAddress resolves wagmi OR Circle session — without this,
+  // useEffectiveAddress resolves wagmi OR Circle session, without this
   // `address` was always undefined for Google/email social-login users
   // (useAccount only ever tracks an externally-connected wagmi wallet),
   // which silently broke profile save + group add/remove sync on this
   // page for every non-external-wallet login.
   const { address }      = useEffectiveAddress();
-  const publicClient     = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient     = usePublicClient({ chainId: arcChain.id });
   const { state, dispatch, addToast, syncData, hydrateFromCache } = useApp();
   const { payrollSetup, isPremiumUser, payrollClone, registryClone, groups, employees } = state;
   usePayrollSync({ registryClone, address, publicClient });
-  // Settings never had its own resolution for either clone address — it
+  // Settings never had its own resolution for either clone address, it
   // only ever read state.payrollClone/state.registryClone as populated by
   // whatever page the person happened to visit earlier this session (or
-  // payrollSetup's cached/synced value). Landing here directly — a fresh
-  // browser/device, or opening Settings straight from a bookmark — left
+  // payrollSetup's cached/synced value). Landing here directly, a fresh
+  // browser/device, or opening Settings straight from a bookmark, left
   // both null, which is why Contract Information's rows disappeared
   // entirely rather than showing stale-but-correct data. These two hooks
   // are the same self-healing lookups dashboard/ai-agent already rely on
@@ -131,7 +131,7 @@ export default function SettingsPage() {
 
   // BUG FIX: this page is the primary place users check/edit their company
   // name and receipt email, so it should show whatever is already saved as
-  // fast and reliably as possible — straight from the local cache, not
+  // fast and reliably as possible, straight from the local cache, not
   // gated behind usePayrollSync's full flow (which needs registryClone AND
   // publicClient ready before its own "instant local cache" step even
   // starts). Runs as soon as the wallet address is known, independent of
@@ -141,18 +141,18 @@ export default function SettingsPage() {
   }, [address, hydrateFromCache]);
 
   // Used for sync/anchor (profile + groups) below and by the shared
-  // cached-sign hook — branches to a Circle SIGN_MESSAGE/PIN challenge for
+  // cached-sign hook, branches to a Circle SIGN_MESSAGE/PIN challenge for
   // social login, wagmi for an external wallet.
   const { writeContract: universalWrite, signMessage: universalSignMessage, canWrite } = useUniversalWrite();
 
-  // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
+  // Latest CID we've successfully anchored Onchain, lets anchorCid skip a
   // redundant transaction if the data hasn't actually changed since.
   // (IPFS "previousCid" bookkeeping for Pinata cleanup is handled centrally
-  // by AppContext's syncData/loadData — no need to duplicate it here.)
+  // by AppContext's syncData/loadData, no need to duplicate it here.)
   const lastAnchoredCidRef = useRef<string | null>(null);
 
   /** Anchors a freshly-synced IPFS CID Onchain. Mirrors the dashboard's
-   *  anchorCid — without this, group/profile/token-registry edits made here
+   *  anchorCid, without this, group/profile/token-registry edits made here
    *  would sync to IPFS but never update the Onchain pointer, so they'd be
    *  invisible after a reload or from another device. */
   const anchorCid = async (cid?: string) => {
@@ -190,7 +190,7 @@ export default function SettingsPage() {
   const profileHydrated = useRef(false);
 
   // payrollSetup can arrive asynchronously (usePayrollSync's cache/IPFS
-  // hydration above happens after this component's first render) — the
+  // hydration above happens after this component's first render), the
   // useState initializers only ever see whatever was in AppContext at
   // mount time. Without this, company name and receipt email rendered
   // blank on any page load where this was the first page visited this
@@ -207,12 +207,12 @@ export default function SettingsPage() {
 
   // Fast cross-device/browser path: the IPFS hydration above needs a
   // wallet signature (to derive the decryption key) plus an IPFS fetch, so
-  // on a brand-new browser or device it can take a few seconds — or never
+  // on a brand-new browser or device it can take a few seconds, or never
   // resolve at all until the wallet reconnects. This reads the same two
   // fields from the server-side cache (lib/serverProfileCache.ts, kept in
   // sync by the write-through below and by the setup wizard) so they
-  // render immediately instead of blank. Whichever source — this cache or
-  // the IPFS effect above — resolves first with real data wins and marks
+  // render immediately instead of blank. Whichever source, this cache or
+  // the IPFS effect above, resolves first with real data wins and marks
   // profileHydrated so the other is a no-op, same "hydrate once" guard
   // already protecting the user's active typing.
   useEffect(() => {
@@ -226,7 +226,7 @@ export default function SettingsPage() {
         setEmail(data.email ?? '');
         profileHydrated.current = true;
       })
-      .catch(() => { /* best-effort fast path — IPFS hydration above is unaffected */ });
+      .catch(() => { /* best-effort fast path, IPFS hydration above is unaffected */ });
   }, [address]);
 
   // Group management
@@ -234,10 +234,10 @@ export default function SettingsPage() {
   const [groupError,   setGroupError]   = useState('');
   const [groupSaving,  setGroupSaving]  = useState(false);
 
-  // AI Agent execution mode — 'confirm' (default, human always signs from
+  // AI Agent execution mode, 'confirm' (default, human always signs from
   // their own wallet) vs 'autonomous' (agent's own Circle-managed wallet
   // executes execute_* actions with no per-action human signature). See
-  // lib/agent/agentMode.ts and app/api/agent/mode/route.ts — both already
+  // lib/agent/agentMode.ts and app/api/agent/mode/route.ts, both already
   // fully wired into chat/route.ts's tool selection; this section is the
   // missing piece that actually lets an employer control it.
   const [agentMode,      setAgentModeState] = useState<'confirm' | 'autonomous'>('confirm');
@@ -257,7 +257,7 @@ export default function SettingsPage() {
         const data = await res.json() as { mode?: 'confirm' | 'autonomous' };
         if (!cancelled && data.mode) setAgentModeState(data.mode);
       } catch {
-        // Non-fatal — the toggle still renders at the safe 'confirm'
+        // Non-fatal, the toggle still renders at the safe 'confirm'
         // default even if we couldn't fetch the actual current value.
       } finally {
         if (!cancelled) setModeLoading(false);
@@ -266,7 +266,7 @@ export default function SettingsPage() {
     return () => { cancelled = true; };
   }, [address]);
 
-  // AI Agent daily spend limit — per-employer configurable ceiling, see
+  // AI Agent daily spend limit, per-employer configurable ceiling, see
   // app/api/agent/limits/route.ts and lib/agent/employerLimits.ts. This
   // sits BELOW the platform-wide absolute limit (AGENT_MAX_DAILY_TOTAL);
   // it can never be used to exceed that, only to set something tighter
@@ -302,7 +302,6 @@ export default function SettingsPage() {
   }
 
   const [dailyLimitInput, setDailyLimitInput] = useState('');
-  const [platformCeiling, setPlatformCeiling] = useState<number | null>(null);
   const [limitLoading,    setLimitLoading]    = useState(false);
   const [limitSaving,     setLimitSaving]     = useState(false);
   const [limitError,      setLimitError]      = useState('');
@@ -318,13 +317,12 @@ export default function SettingsPage() {
       try {
         const res = await fetch(`/api/agent/limits?wallet=${address}`);
         if (!res.ok) throw new Error('Could not load current limit.');
-        const data = await res.json() as { employerLimit: number | null; platformCeiling: number };
+        const data = await res.json() as { employerLimit: number | null };
         if (!cancelled) {
-          setPlatformCeiling(data.platformCeiling);
           setDailyLimitInput(data.employerLimit != null ? String(data.employerLimit) : '');
         }
       } catch {
-        // Non-fatal — the section still renders and lets them set a fresh
+        // Non-fatal, the section still renders and lets them set a fresh
         // value even if we couldn't fetch the existing one.
       } finally {
         if (!cancelled) setLimitLoading(false);
@@ -344,8 +342,8 @@ export default function SettingsPage() {
     setLimitError('');
     setLimitSaved(false);
     try {
-      // Signature is requested here — the first (and only) time this
-      // section needs one — not when the page/section merely loads.
+      // Signature is requested here, the first (and only) time this
+      // section needs one, not when the page/section merely loads.
       const token = await getToken(address, universalSignMessage);
       const res = await fetch('/api/agent/limits', {
         method: 'POST',
@@ -384,7 +382,7 @@ export default function SettingsPage() {
       dispatch({ type: 'SET_COMPANY_NAME', payload: updated.companyName });
       await syncAndAnchor(updated);
       // Best-effort write-through to the cross-device/browser fast-path
-      // cache (lib/serverProfileCache.ts) — never blocks or fails the
+      // cache (lib/serverProfileCache.ts), never blocks or fails the
       // save itself; the IPFS record above is already the real save.
       if (address) {
         fetch('/api/profile', {
@@ -414,7 +412,7 @@ export default function SettingsPage() {
       const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg, groups: next });
       await anchorCid(cid);
       addToast(`Group "${g}" created.`, 'success');
-    } catch { addToast('Saved locally — sync failed.', 'warning'); }
+    } catch { addToast('Saved locally, sync failed.', 'warning'); }
     finally { setGroupSaving(false); }
   }
 
@@ -426,7 +424,7 @@ export default function SettingsPage() {
       const { cid } = await syncData({ walletAddress: address ?? '', signMessage: signMsg, groups: next });
       await anchorCid(cid);
       addToast(`Group "${g}" removed.`, 'success');
-    } catch { addToast('Saved locally — sync failed.', 'warning'); }
+    } catch { addToast('Saved locally, sync failed.', 'warning'); }
     finally { setGroupSaving(false); }
   }
 
@@ -624,7 +622,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <p style={{ fontSize: 14, fontWeight: 700, color: '#0F172A', margin: '0 0 2px' }}>Contract Functions</p>
-                <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Requires the Premium plan</p>
+                <p style={{ fontSize: 12, color: '#64748B', margin: 0 }}>Requires the Salden Pro plan</p>
               </div>
             </div>
             <a href="/pricing" style={{
@@ -641,11 +639,7 @@ export default function SettingsPage() {
         {/* ── AI Agent Execution Mode ──────────────────────────────────────── */}
         <Section title="AI Agent Execution Mode">
           <p style={{ fontSize: 13, color: '#64748B', marginBottom: 16, lineHeight: 1.6 }}>
-            By default the AI Agent always <strong>proposes</strong> a transaction and waits for you to
-            confirm and sign it yourself — whether you're using an external wallet (MetaMask, Rabby,
-            etc.) or a Salden social-login wallet. Turning this on lets the agent also{' '}
-            <strong>execute</strong> clear, unambiguous chat requests immediately from its own
-            dedicated agent wallet, with no signature from you for that action.
+            By default the AI Agent always proposes a transaction and waits for you to confirm and sign it yourself whether you're using an external wallet (MetaMask, Rabby, etc.) or a Salden social-login wallet. Turning this on lets the agent also execute clear, unambiguous chat requests immediately from its own dedicated agent wallet, with no signature from you for that action.
           </p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             <div>
@@ -687,10 +681,10 @@ export default function SettingsPage() {
               marginTop: 14, padding: '10px 12px', background: '#FFFBEB', border: '1px solid #FDE68A',
               borderRadius: 10, fontSize: 12, color: '#92400E', lineHeight: 1.5,
             }}>
-              Keep the agent wallet funded with USDC so it can pay autonomously —{' '}
+              Keep the agent wallet funded with USDC so it can pay autonomously, {' '}
               <a href="/ai-agent/agent-wallet" style={{ color: '#92400E', fontWeight: 700 }}>view/fund it here</a>.
               Note: scheduled/recurring payments always run from the agent wallet regardless of this
-              setting, since a schedule has to execute with no one present by definition — this toggle
+              setting, since a schedule has to execute with no one present by definition, this toggle
               only controls whether the agent can also skip your confirmation for immediate chat requests.
             </div>
           )}
@@ -702,10 +696,6 @@ export default function SettingsPage() {
             The most the AI Agent may move in a single day, across every payment it makes on your behalf.
             This must be at least your current gross payroll total (${grossPayrollTotal.toFixed(2)}) so a
             full payroll run is never blocked partway through.
-            {platformCeiling != null && (
-              <> The platform-wide maximum is ${platformCeiling.toLocaleString()} — you can set anything up
-                to that, but never above it.</>
-            )}
           </p>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <div style={{ flex: 1 }}>

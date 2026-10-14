@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file app/ai-agent/agent-wallet/page.tsx
- * Agent wallet view — shows agent balance (no action cards), deposit link,
+ * Agent wallet view, shows agent balance (no action cards), deposit link
  * and token balances for USDC, EURC, cirBTC. (ImportantUpdate #13i)
  */
 
@@ -11,7 +11,7 @@ import { ArrowDownToLine, Eye, EyeOff, Copy, Loader2, CheckCircle2 } from 'lucid
 import { AgentLayout } from '@/components/agent/AgentLayout';
 import { useAgentStatus } from '@/lib/useAgentStatus';
 import { ERC20_ABI }     from '@/lib/contracts/abis';
-import { arcTestnet, CONTRACTS } from '@/lib/contracts/config';
+import { arcChain, CONTRACTS } from '@/lib/contracts/config';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useBalanceVisibility } from '@/lib/useBalanceVisibility';
 import { TOKEN_ICON_PATHS, tokenIconRenderSize } from '@/lib/token-registry';
@@ -21,7 +21,7 @@ const TOKEN_ICON_SIZE = 38;
 const TOKENS = [
   { symbol: 'USDC',   name: 'USD Coin',      bg: '#EFF6FF', decimals: 6, displayDecimals: 2 },
   { symbol: 'EURC',   name: 'Euro Coin',      bg: '#EEF2FF', decimals: 6, displayDecimals: 2 },
-  // cirBTC trades at BTC-scale value — real balances are commonly small
+  // cirBTC trades at BTC-scale value, real balances are commonly small
   // fractions that a 2-decimal display would round away to "0.00" entirely.
   { symbol: 'cirBTC', name: 'Circle Bitcoin', bg: '#FFF7ED', decimals: 8, displayDecimals: 6 },
 ];
@@ -54,7 +54,7 @@ function tokenAddress(symbol: string): `0x${string}` | undefined {
 export default function AgentWalletPage() {
   const { status, agentInfo }  = useAgentStatus();
   const agentAddr = agentInfo?.agentWallet as `0x${string}` | undefined;
-  const pc = usePublicClient({ chainId: arcTestnet.id });
+  const pc = usePublicClient({ chainId: arcChain.id });
 
   const [showBal, setShowBal] = useBalanceVisibility();
   const [copied,  setCopied]  = useState(false);
@@ -67,8 +67,8 @@ export default function AgentWalletPage() {
 
   // Retries a failed balanceOf() read before giving up, and on total
   // failure keeps the last known-good value instead of overwriting it with
-  // a fake "0.00" — same fix applied to wallet/page.tsx's fetchErc20 for
-  // the same reason: Arc's public testnet RPC intermittently rate-limits,
+  // a fake "0.00", same fix applied to wallet/page.tsx's fetchErc20 for
+  // the same reason: Arc's public RPC intermittently rate-limits
   // and collapsing that into a fake zero was indistinguishable from a
   // genuinely empty wallet.
   const fetchTokens = useCallback(async () => {
@@ -101,7 +101,7 @@ export default function AgentWalletPage() {
 
   useEffect(() => { if (agentAddr) fetchTokens(); }, [agentAddr, fetchTokens]);
 
-  // Live USD prices via LI.FI — same source/endpoint as wallet/page.tsx, so
+  // Live USD prices via LI.FI, same source/endpoint as wallet/page.tsx, so
   // the dollar value shown here matches the user wallet exactly.
   const [tokenPrices, setTokenPrices] = useState<Record<string, number>>({});
   useEffect(() => {
@@ -111,7 +111,7 @@ export default function AgentWalletPage() {
         const addr = tokenAddress(t.symbol);
         if (!addr) return [t.symbol, null] as const;
         try {
-          const res = await fetch(`/api/lifi/price?chainId=${arcTestnet.id}&token=${addr}`);
+          const res = await fetch(`/api/lifi/price?chainId=${arcChain.id}&token=${addr}`);
           const data = await res.json() as { price: { priceUSD: string } | null };
           return [t.symbol, data.price ? Number(data.price.priceUSD) : null] as const;
         } catch {
@@ -165,7 +165,7 @@ export default function AgentWalletPage() {
             <button
               onClick={copy}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', color: '#fff', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
-              <ArrowDownToLine size={14} /> Deposit — copy address above
+              <ArrowDownToLine size={14} /> Deposit, copy address above
             </button>
           </div>
         </div>

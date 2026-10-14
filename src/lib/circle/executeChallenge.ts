@@ -5,7 +5,7 @@
  *
  * Shared utility for executing a Circle Web SDK challenge.
  * Used by both LoginModal (Google OAuth) and OTPForm (email OTP).
- * Uses @circle-fin/w3s-pw-web-sdk — the same SDK as LoginModal.
+ * Uses @circle-fin/w3s-pw-web-sdk, the same SDK as LoginModal.
  *
  * Flow:
  *  1. Load Circle SDK dynamically (client-side only)
@@ -36,7 +36,7 @@ export async function executeCircleChallenge({
 
   onStatusChange?.('Setting up your secure wallet…');
 
-  // Dynamic import — same as LoginModal — keeps it out of SSR bundle
+  // Dynamic import, same as LoginModal, keeps it out of SSR bundle
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { W3SSdk } = await import('@circle-fin/w3s-pw-web-sdk') as any;
 
@@ -55,15 +55,15 @@ export async function executeCircleChallenge({
 
   onStatusChange?.('Fetching your wallet address…');
 
-  // Poll for the wallet address — Circle provisions it asynchronously after
+  // Poll for the wallet address, Circle provisions it asynchronously after
   // the PIN-setup challenge completes. BUG FIX: this used to give up after
-  // 30s total (20 polls x 1.5s) — tight enough that a normal-but-slightly-
+  // 30s total (20 polls x 1.5s), tight enough that a normal-but-slightly-
   // slow provision (still very plausible right after the user's very first
   // PIN entry, vs. a warm returning-user session) threw here even though
   // the PIN was genuinely accepted and the wallet was still being created
   // in the background. The caller (LoginModal) had no way to distinguish
   // that from a real failure, so it dropped the user back to an
-  // unauthenticated "Login" button — the wallet then showed up moments
+  // unauthenticated "Login" button, the wallet then showed up moments
   // later, which is exactly why logging in again immediately afterward
   // found it as an existing account. Extended to 90s, with a status update
   // partway through so a genuinely-slow (not stuck) provision doesn't look
@@ -75,7 +75,7 @@ export async function executeCircleChallenge({
   for (let i = 0; i < MAX_POLLS; i++) {
     await new Promise(r => setTimeout(r, POLL_INTERVAL));
     if (i === REASSURANCE_AT) {
-      onStatusChange?.('Still setting up your wallet — this can take a little longer on a first-time setup…');
+      onStatusChange?.('Still setting up your wallet, this can take a little longer on a first-time setup…');
     }
     try {
       const res = await fetch(
@@ -90,14 +90,13 @@ export async function executeCircleChallenge({
 
   throw new Error(
     'Your PIN was accepted, but your wallet is taking longer than usual to finish setting up. ' +
-    'Please wait a few seconds and try logging in again — it should be ready.'
+    'Please wait a few seconds and try logging in again, it should be ready.'
   );
 }
 
-// ── Transaction (contract execution) challenge — used by useUniversalWrite ────
+// ── Transaction (contract execution) challenge, used by useUniversalWrite ────
 //
-// Separate from executeCircleChallenge() above (which is wallet SETUP —
-// polls for a wallet address). This is for actually SIGNING AND SENDING A
+// Separate from executeCircleChallenge() above (which is wallet SETUP, // polls for a wallet address). This is for actually SIGNING AND SENDING A
 // TRANSACTION via a social-login wallet's PIN. See lib/circle/user-wallet.ts's
 // getMostRecentTransaction() doc comment for why this tries a direct field
 // first and falls back to a wallet lookup rather than assuming one
@@ -170,7 +169,7 @@ export async function executeCircleTransactionChallenge({
       }
     } catch (err) {
       // A single failed poll (network blip) shouldn't abort the whole
-      // wait — only a genuine terminal failure state (thrown above, as a
+      // wait, only a genuine terminal failure state (thrown above, as a
       // CircleTxFailedError) or exhausting MAX_POLLS should. Checking
       // instanceof here (rather than matching on the error message, the
       // original approach) means this can't silently swallow a DENIED or
@@ -180,13 +179,13 @@ export async function executeCircleTransactionChallenge({
     }
   }
 
-  throw new Error('Transaction submitted but did not confirm within the monitoring window — check the block explorer before assuming it failed.');
+  throw new Error('Transaction submitted but did not confirm within the monitoring window, check the block explorer before assuming it failed.');
 }
 
-// ── Message-signing challenge — used by useUniversalWrite's signMessage ───────
+// ── Message-signing challenge, used by useUniversalWrite's signMessage ───────
 //
 // Simpler than executeCircleTransactionChallenge above: a signature isn't
-// an on-chain event, so there's nothing to poll for — Circle's own SDK
+// an on-chain event, so there's nothing to poll for, Circle's own SDK
 // sample code confirms the signature comes back directly as
 // `result.data.signature` in the challenge callback.
 interface MessageChallengeParams {
@@ -233,7 +232,7 @@ export async function executeCircleMessageSigningChallenge({
 
 // ── Transaction-SIGNING challenge (not execution) ──────────────────────────────
 //
-// Pairs with /api/circle/sign-transaction-challenge — see that route's
+// Pairs with /api/circle/sign-transaction-challenge, see that route's
 // header for why this replaced the contractExecution-based approach.
 // Returns the SIGNED raw transaction; the caller (useUniversalWrite)
 // broadcasts it themselves via publicClient.sendRawTransaction(), same as
@@ -280,8 +279,7 @@ export async function executeCircleSignTransactionChallenge({
 
   // Defensive: EVM raw transactions are 0x-prefixed hex. This endpoint is
   // shared across EVM/SOL/NEAR (see user-wallet.ts's doc comment), so the
-  // exact encoding for EVM specifically wasn't independently confirmed —
-  // this normalises the one plausible variant (missing 0x prefix) rather
+  // exact encoding for EVM specifically wasn't independently confirmed, // this normalises the one plausible variant (missing 0x prefix) rather
   // than silently passing through something sendRawTransaction would
   // reject with a confusing low-level error.
   return (signedTransaction.startsWith('0x') ? signedTransaction : `0x${signedTransaction}`) as `0x${string}`;

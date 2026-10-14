@@ -1,6 +1,6 @@
 /**
  * @file app/api/inngest/route.ts
- * Inngest's HTTP endpoint — this is what Inngest calls (both to discover
+ * Inngest's HTTP endpoint, this is what Inngest calls (both to discover
  * this app's functions on deploy/sync, and to actually invoke them on
  * cron ticks / events). Must live at exactly this path for Inngest's
  * automated discovery; see lib/inngest/client.ts for why this replaces

@@ -6,7 +6,7 @@
  * The ONLY path by which a browser can cause an analytics event to reach
  * the external Salden Analytics service. lib/analytics.ts's `track()` is
  * server-only (it holds ANALYTICS_INGEST_SECRET) and cannot be called
- * directly from client components — this route exists specifically for
+ * directly from client components, this route exists specifically for
  * the three events that genuinely originate client-side (the user signs
  * the underlying transaction with their own wallet, in the browser):
  *
@@ -18,7 +18,7 @@
  *     the manual batchPay confirms)
  *
  * `agent_activated` and `payroll_executed` are deliberately NOT accepted
- * here — those only ever happen server-side (activate/route.ts and the
+ * here, those only ever happen server-side (activate/route.ts and the
  * autonomous execution paths in chat/route.ts + lib/inngest/functions.ts)
  * and call lib/analytics.ts's track() directly. Accepting them here would
  * let anyone inflate those two metrics from the browser with no
@@ -33,7 +33,7 @@
  * The submitted txHash must be a real, confirmed, successful transaction,
  * and its `from` address must match the claimed walletAddress. A caller
  * can only "spoof" an event by pointing at a transaction that genuinely
- * happened from a wallet they don't control — at which point they've
+ * happened from a wallet they don't control, at which point they've
  * gained nothing (the metric reflects a real event either way) rather
  * than fabricating one from nothing.
  *
@@ -43,7 +43,7 @@
  * stops the SAME real, valid txHash from being recorded more than once if
  * this route is called for it repeatedly. The in-memory dedup set below
  * closes the accidental case (double-click, a retried fetch, React
- * effects firing twice) on a best-effort, single-instance basis — same
+ * effects firing twice) on a best-effort, single-instance basis, same
  * caveat as every other in-memory Map in this codebase (rateLimiter.ts,
  * lib/agent/auth.ts's nonce store, etc.), not a cross-instance or
  * adversarial guarantee. If you need real dedup, add a unique index on
@@ -63,7 +63,7 @@ const ALLOWED_EVENTS: ReadonlySet<string> = new Set<ClientTriggerableEvent>([
 ]);
 
 // Same lightweight, single-instance, best-effort pattern as
-// api/payroll-receipt/send/route.ts's own limiter — deliberately not shared with
+// api/payroll-receipt/send/route.ts's own limiter, deliberately not shared with
 // that module's instance so the two endpoints' limits stay independently
 // tunable.
 const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
@@ -82,7 +82,7 @@ function checkIPRateLimit(ip: string): boolean {
   return true;
 }
 
-// Best-effort replay guard — see "Known limitation" above. Bounded so it
+// Best-effort replay guard, see "Known limitation" above. Bounded so it
 // can't grow forever on a long-lived instance.
 const SEEN_TX_HASHES = new Set<string>();
 const MAX_SEEN_TX_HASHES = 5_000;
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'employeeCount and volumeUsdc are required for batch_paid.' }, { status: 400 });
     }
 
-    // ── On-chain verification — see file header ───────────────────────────
+    // ── On-chain verification, see file header ───────────────────────────
     let receipt;
     try {
       receipt = await getServerPublicClient().getTransactionReceipt({ hash: txHash as `0x${string}` });
@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!markSeen(txHash)) {
-      // Already forwarded this exact tx — treat as a harmless duplicate,
+      // Already forwarded this exact tx, treat as a harmless duplicate
       // not an error, so a retried client fetch doesn't surface a failure
       // toast for an event that already succeeded.
       return NextResponse.json({ ok: true, deduped: true });

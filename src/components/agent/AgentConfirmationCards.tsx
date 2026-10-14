@@ -4,7 +4,7 @@
  *
  * The execution layer behind the G1 structured marker protocol in
  * app/api/agent/chat/route.ts. The chat route NEVER moves money or writes
- * to the employee database itself — it only proposes an action via a
+ * to the employee database itself, it only proposes an action via a
  * structured SSE event after independently re-verifying the address
  * against the real employee allowlist. These two cards are where that
  * proposal becomes a real, human-confirmed, wallet-signed transaction.
@@ -36,7 +36,7 @@ import { useEffectiveAddress, walletRequiredMessage } from '@/lib/useEffectiveAd
 import { useUniversalWrite } from '@/lib/circle/useUniversalWrite';
 import { useTokenApproval } from '@/lib/approvals/useTokenApproval';
 import { useCachedSignMessage } from '@/lib/circle/useCachedSignMessage';
-import { CONTRACTS, txLink, arcTestnet } from '@/lib/contracts/config';
+import { CONTRACTS, txLink, arcChain } from '@/lib/contracts/config';
 import { chunkForBatchPay } from '@/lib/contracts/batchLimits';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
 import { saveAgentSchedule, deleteAgentSchedule, type AgentSchedule } from '@/lib/db/indexeddb';
@@ -51,16 +51,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '/api';
 function CardShell({
   tone, title, children,
 }: { tone: 'warn' | 'success' | 'error'; title: string; children: React.ReactNode }) {
-  // 'warn' = still awaiting a decision — this is the actual confirmation
+  // 'warn' = still awaiting a decision, this is the actual confirmation
   // card, and it stays a visually distinct card since the user still has
   // an action to take. Recoloured to Salden's own indigo instead of the
   // amber/brown it used to be.
   //
-  // 'success'/'error' = a RESOLVED outcome — per explicit design
+  // 'success'/'error' = a RESOLVED outcome, per explicit design
   // feedback, these should read as a plain sentence in the flow of the
   // conversation, not another bordered tile competing for attention right
   // after the card that was just there. Text colour is unchanged (still
-  // green for success, red for error) — only the card chrome is gone.
+  // green for success, red for error), only the card chrome is gone.
   if (tone !== 'warn') {
     const color = tone === 'success' ? '#059669' : '#DC2626';
     return (
@@ -125,41 +125,41 @@ function ActionButtons({
 // usePayrollSync.ts's status is the one authoritative signal for whether
 // state.employees/payrollSetup genuinely reflect this wallet's real data
 // yet. Several cards below (add/edit employee, payroll run, schedule
-// payment) read state.employees at confirm-time — on a fresh
+// payment) read state.employees at confirm-time, on a fresh
 // browser/device, that data can still be mid-load (or waiting on an
 // explicit "Unlock my data" click) when an autoConfirm proposal fires
 // with no human reaction time to cover the gap. Two distinct failure
 // modes were possible before this existed:
 //   1. A false "not found"/"no employees" error that "self-corrected" a
-//      moment later once loading finished on a subsequent render — a
+//      moment later once loading finished on a subsequent render, a
 //      confusing but otherwise harmless display bug (EditEmployeeCard).
 //   2. Actually proceeding with a still-empty state.employees and writing
-//      that incomplete snapshot to IPFS + anchoring it on-chain — silent
+//      that incomplete snapshot to IPFS + anchoring it on-chain, silent
 //      data loss of every real employee not yet loaded into this session
 //      (AddEmployeeCard).
 // A plain `employees.length > 0` check or a short fixed timeout can't
 // tell these apart from "this is genuinely a brand-new company with zero
-// employees" — only the real hydration status can. This hook centralises
+// employees", only the real hydration status can. This hook centralises
 // that logic once instead of every card re-deriving its own guess.
 const HYDRATION_SAFETY_VALVE_MS = 6000;
 
 interface HydrationGateResult {
   /** True once it's safe to trust state.employees/payrollSetup as
-   *  genuinely settled — either it actually finished loading (or failed,
-   *  which is equally "settled" — nothing further is coming
+   *  genuinely settled, either it actually finished loading (or failed
+   *  which is equally "settled", nothing further is coming
    *  automatically), the caller didn't pass a status at all (backward
-   *  compatible — treated as already settled so nothing regresses for
+   *  compatible, treated as already settled so nothing regresses for
    *  any call site that doesn't thread this prop through), or a bounded
    *  safety-valve wait has elapsed so a genuinely stuck signal can never
    *  hang a card forever. Deliberately does NOT become true purely from
-   *  the safety valve while status is 'needs-unlock' — see
+   *  the safety valve while status is 'needs-unlock', see
    *  blockedReason below for why that case needs a person, not a timer. */
   ready: boolean;
-  /** Set only when hydrationStatus is 'needs-unlock' — there is real,
+  /** Set only when hydrationStatus is 'needs-unlock', there is real
    *  known unsynced data on IPFS that requires an explicit "Unlock my
    *  data" click to load (see usePayrollSync.ts's header comment for why
    *  that can't happen automatically). No amount of waiting resolves
-   *  this — only the person clicking Unlock does — so callers should
+   *  this, only the person clicking Unlock does, so callers should
    *  show this message and stop rather than retrying on a timer or
    *  silently proceeding with whatever's currently in state. */
   blockedReason: string | null;
@@ -181,7 +181,7 @@ function useHydrationGate(hydrationStatus: PayrollSyncStatus | undefined): Hydra
   return {
     ready: isSettled || (isTransient && safetyValveElapsed),
     blockedReason: isBlocked
-      ? 'Your existing data hasn\'t been loaded on this device yet — click "Unlock my data" on the AI Agent page first, then try again.'
+      ? 'Your existing data hasn\'t been loaded on this device yet, click "Unlock my data" on the AI Agent page first, then try again.'
       : null,
   };
 }
@@ -193,13 +193,13 @@ export interface UnlistedPaymentCardProps {
   amount:  string;
   token:   string;
   walletAddress: string;
-  /** Bearer session token — required to call the protected spend/record
+  /** Bearer session token, required to call the protected spend/record
    *  endpoint after a confirmed payment so the daily spend ceiling actually
-   *  tracks unlisted-address payments. Without it, recordProposedSpend is
-   *  silently never invoked and G-daily-limit only ever sees $0 spent today. */
+   *  tracks unlisted-address payments. Without it, the spend record is
+   *  never written and the daily limit only sees $0 spent today. */
   sessionToken?: string;
   /** When true, signs and sends immediately on mount with no review UI or
-   *  button click — set by the model when the instruction was fully
+   *  button click, set by the model when the instruction was fully
    *  explicit (see AUTOCONFIRM in the chat route's system prompt). The
    *  wallet signature prompt itself is still the human-in-the-loop step;
    *  this only skips the extra "are you sure" click before it. */
@@ -215,13 +215,13 @@ export function UnlistedPaymentCard({
   const { state, saveTxRecord } = useApp();
   const { payrollClone, tokenRegistry, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const { ensureApproval, invalidateApproval } = useTokenApproval();
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
   const [txHash,   setTxHash]   = useState('');
-  // Synchronous guard — state updates are async so disabled={busy} alone
+  // Synchronous guard, state updates are async so disabled={busy} alone
   // can't prevent a fast double-click from firing handleConfirm twice.
   const executing = useRef(false);
 
@@ -243,13 +243,13 @@ export function UnlistedPaymentCard({
     }
     if (!tokenEntry) {
       executing.current = false;  // reset so user can retry once the registry resolves
-      setError(`Could not resolve "${token}" in the token registry — refusing to guess decimals for a real payment.`);
+      setError(`Could not resolve "${token}" in the token registry, refusing to guess decimals for a real payment.`);
       setPayState('error'); return;
     }
     // The AI agent is only ever reachable by premium users who have
     // already deployed their own SaldenMultiTokenPayroll clone (the
     // /ai-agent page itself gates on isPremiumUser before any of these
-    // cards can render) — so the agent must only ever call batchPay on
+    // cards can render), so the agent must only ever call batchPay on
     // that clone, never the free-tier standalone SaldenEnterprisePayroll
     // contract (whose batchPay doesn't even take a token argument). This
     // is a defensive guard, not an expected path: it should be
@@ -258,7 +258,7 @@ export function UnlistedPaymentCard({
     // wrong contract if that assumption is ever violated.
     if (!payrollClone) {
       executing.current = false;
-      setError('No payroll clone found for this account — the AI agent can only process payments through your deployed clone contract.');
+      setError('No payroll clone found for this account, the AI agent can only process payments through your deployed clone contract.');
       setPayState('error'); return;
     }
 
@@ -268,7 +268,7 @@ export function UnlistedPaymentCard({
       const amountUnits = BigInt(Math.round(Number(amount) * tokenScale));
       const contractAddr = payrollClone as `0x${string}`;
 
-      // Allowance check + approval — see lib/approvals/useTokenApproval.ts
+      // Allowance check + approval, see lib/approvals/useTokenApproval.ts
       // for the unified cache-check-then-approve flow shared across every
       // approval call site in the app.
       setPayState('approving');
@@ -279,7 +279,7 @@ export function UnlistedPaymentCard({
       const memoJson = JSON.stringify({
         protocol: 'salden', type: 'batchPay', ref,
         date: new Date().toISOString(),
-        remark: 'AI Agent — unlisted address payment (user-confirmed)',
+        remark: 'AI Agent, unlisted address payment (user-confirmed)',
         token, totalAmount: amount, recipients: 1, employer: walletAddress,
       });
       const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
@@ -295,7 +295,7 @@ export function UnlistedPaymentCard({
         args: [
           [address as `0x${string}`],
           [amountUnits],
-          tokenAddr,  // never address(0) here — we already resolved tokenAddr above
+          tokenAddr,  // never address(0) here, we already resolved tokenAddr above
         ],
       });
 
@@ -303,7 +303,7 @@ export function UnlistedPaymentCard({
         address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
         functionName: 'memo',
         args: [contractAddr, batchData as `0x${string}`, keccak256(memoHex), memoHex],
-        // Clear description: "Send <amount> <token> to <shortAddr> — AI Agent proposed, you approved"
+        // Clear description: "Send <amount> <token> to <shortAddr>, AI Agent proposed, you approved"
       });
 
       setPayState('confirming');
@@ -323,18 +323,17 @@ export function UnlistedPaymentCard({
         }).catch(() => {});
       }
 
-      // ── Record + receipt (executedBy: 'ai_agent' — proposed by the agent,
+      // ── Record + receipt (executedBy: 'ai_agent', proposed by the agent
       //    confirmed and signed by the human) ──────────────────────────────
       const receiptEmail = payrollSetup?.email ?? null;
       await saveTxRecord({
         id: hash, hash, ref,
         type: 'batchPay', status: 'success',
         amount, token,
-        remark: 'AI Agent — unlisted address payment',
+        remark: 'AI Agent, unlisted address payment',
         recipientCount: 1,
         timestamp: Date.now(),
-        // Only 'pending' if we're actually about to attempt a send below —
-        // otherwise this stayed 'pending' forever with nothing left to
+        // Only 'pending' if we're actually about to attempt a send below, // otherwise this stayed 'pending' forever with nothing left to
         // ever move it to 'sent'/'failed'.
         receiptEmailStatus: receiptEmail ? 'pending' : null,
         executedBy: 'ai_agent',
@@ -346,13 +345,13 @@ export function UnlistedPaymentCard({
           body: JSON.stringify({
             txHash: hash, walletAddress, recipientEmail: receiptEmail,
             recipientCount: 1, amount, token,
-            remark: 'AI Agent — unlisted address payment',
+            remark: 'AI Agent, unlisted address payment',
             ref, timestamp: Date.now(), executedBy: 'ai_agent',
           }),
         }).then(async res => {
           await saveTxRecord({
             id: hash, hash, ref, type: 'batchPay', status: 'success',
-            amount, token, remark: 'AI Agent — unlisted address payment',
+            amount, token, remark: 'AI Agent, unlisted address payment',
             recipientCount: 1, timestamp: Date.now(),
             receiptEmailStatus: res.ok ? 'sent' : 'failed',
             executedBy: 'ai_agent',
@@ -368,7 +367,7 @@ export function UnlistedPaymentCard({
       // Allowance-related revert. This call goes through the memo() relay
       // contract (MEMO_ABI), which wraps every underlying failure as
       // MemoFailed(bytes returnData) rather than exposing TransferFromFailed
-      // directly (confirmed against MEMO_ABI's own error definitions) — so
+      // directly (confirmed against MEMO_ABI's own error definitions), so
       // this checks for MemoFailed, not TransferFromFailed. Since this call
       // site only ever executes a payment, any MemoFailed here plausibly
       // means the underlying transfer failed, and clearing the cache on it
@@ -384,7 +383,7 @@ export function UnlistedPaymentCard({
         : /insufficient|balance/i.test(raw)
         ? 'Insufficient balance to complete this payment.'
         : /network|fetch|rpc/i.test(raw)
-        ? 'Network error — check your connection and try again.'
+        ? 'Network error, check your connection and try again.'
         : friendlyErrorMessage(err, 'Payment failed. Please try again.');
       setError(msg);
       setPayState('error');
@@ -393,7 +392,7 @@ export function UnlistedPaymentCard({
   }, [canWrite, universalWrite, ensureApproval, invalidateApproval, publicClient, tokenEntry, token, amount, payrollClone, address, walletAddress, sessionToken, saveTxRecord, payrollSetup, onResolved, loginMethod]);
 
   // Previously fired handleConfirm() exactly once on mount, keyed only to
-  // [autoConfirm] — if canWrite/publicClient hadn't resolved yet on that
+  // [autoConfirm], if canWrite/publicClient hadn't resolved yet on that
   // very first render (a real, observed timing gap on brand-new component
   // instances), this closure permanently captured `canWrite = false` and
   // never re-evaluated it, surfacing a false "Wallet not connected" even
@@ -472,12 +471,12 @@ export interface AddEmployeeCardProps {
   group:      string;
   salary:     string;
   walletAddress: string;
-  /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
+  /** See UnlistedPaymentCardProps.autoConfirm, same meaning here. */
   autoConfirm?: boolean;
-  /** See useHydrationGate's comment above — without this, an autoConfirm
+  /** See useHydrationGate's comment above, without this, an autoConfirm
    *  add could fire while state.employees is still mid-hydration and
    *  silently overwrite the real employee list with just the one new
-   *  hire. Optional/backward-compatible — omitting it is treated as
+   *  hire. Optional/backward-compatible, omitting it is treated as
    *  "already settled," matching this card's original behavior. */
   hydrationStatus?: PayrollSyncStatus;
   onResolved: (outcome: 'confirmed' | 'declined' | 'error', detail?: string) => void;
@@ -492,7 +491,7 @@ export function AddEmployeeCard({
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [addState, setAddState] = useState<AddState>('idle');
@@ -505,19 +504,19 @@ export function AddEmployeeCard({
   }, [onResolved]);
 
   const handleConfirm = useCallback(async () => {
-    if (executing.current) return;   // prevent double-click race — must be FIRST
+    if (executing.current) return;   // prevent double-click race, must be FIRST
     executing.current = true;
     if (!canWrite || !publicClient) {
       executing.current = false;     // reset so user can retry after reconnecting wallet
       setError('Wallet not connected.'); setAddState('error'); return;
     }
     // BUG FIX: state.employees can still be mid-hydration on a fresh
-    // browser/device — writing [...employees, newEmployee] while it's
+    // browser/device, writing [...employees, newEmployee] while it's
     // still empty would anchor a database containing only this one new
     // hire on-chain, silently discarding every real employee not yet
     // loaded into this session. hydrationGate.blockedReason specifically
     // means there's real known data waiting on an explicit "Unlock my
-    // data" click — retrying this exact click won't fix it, so fail with
+    // data" click, retrying this exact click won't fix it, so fail with
     // that specific guidance rather than the generic message below.
     if (hydrationGate.blockedReason) {
       executing.current = false;
@@ -527,19 +526,19 @@ export function AddEmployeeCard({
     }
     if (!hydrationGate.ready) {
       executing.current = false;
-      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      const msg = 'Still loading your existing employee data, please wait a moment and try again.';
       setError(msg); setAddState('error');
       onResolved('error', msg);
       return;
     }
 
     try {
-      // `salary` arrives as a string (see AddEmployeeCardProps below) — the
+      // `salary` arrives as a string (see AddEmployeeCardProps below), the
       // server already validated it's a clean positive numeric string
       // before ever sending it to the client (see propose_add_employee in
       // chat/route.ts), but Employee.salaryAmount is a real `number`. The
       // previous `as Employee` cast silently forced a string into that
-      // field instead of converting it — anything downstream doing
+      // field instead of converting it, anything downstream doing
       // arithmetic (payroll totals, .toFixed() for display, etc.) on this
       // employee's salary would have hit a runtime error or NaN instead of
       // a clear failure at the point of the actual mistake.
@@ -558,31 +557,30 @@ export function AddEmployeeCard({
       setAddState('syncing');
       // Routes through useUniversalWrite (wagmi popup for an external
       // wallet, Circle's PIN challenge for social login) and is cached in
-      // sessionStorage — see lib/circle/useCachedSignMessage.ts. This used
+      // sessionStorage, see lib/circle/useCachedSignMessage.ts. This used
       // to require a raw wagmi walletClient directly, which silently
       // broke this card for every Circle/social-login user ("Wallet not
       // connected" even when connected) and re-prompted a fresh signature
       // every single time for everyone else.
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
       // syncData legitimately returns { cid: undefined } if walletAddress
-      // was empty or the server response omitted it — writing that through
+      // was empty or the server response omitted it, writing that through
       // to updateCID would anchor a bad/empty reference on-chain, breaking
       // this wallet's data loading from then on. Fail loudly instead;
       // caught below and shown the same way any other sync failure is.
-      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
+      if (!cid) throw new Error('Sync did not return a CID, nothing was anchored on-chain.');
 
-      // BUG FIX: this used to be `if (registryClone) { ...anchor... }` —
-      // silently SKIPPING the on-chain anchor (and still reporting
+      // BUG FIX: this used to be `if (registryClone) { ...anchor... }`, // silently SKIPPING the on-chain anchor (and still reporting
       // "confirmed"/"done") whenever registryClone hadn't loaded into
       // state yet. The new employee was saved to IPFS but the on-chain CID
       // pointer never moved, so every other device/session (and a fresh
-      // load of this one) would never see them — while the person who
+      // load of this one) would never see them, while the person who
       // just added them saw a success card and had no reason to think
       // anything was wrong. Failing loudly here means the same retry the
       // user would already do for any other sync failure also recovers
       // this case, instead of a silent, hard-to-detect data gap.
       if (!registryClone) {
-        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
+        throw new Error('Registry not found for this account yet, please refresh the page and try again.');
       }
       setAddState('anchoring');
       const hash = await universalWrite({
@@ -601,7 +599,7 @@ export function AddEmployeeCard({
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
-        ? 'Network error — check your connection and try again.'
+        ? 'Network error, check your connection and try again.'
         : friendlyErrorMessage(err, 'Could not save employee. Please try again.');
       setError(msg);
       setAddState('error');
@@ -611,13 +609,13 @@ export function AddEmployeeCard({
 
   // See the identical comment on this pattern in UnlistedPaymentCard above
   // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
-  // now — see useHydrationGate's comment above for why: this used to fire
+  // now, see useHydrationGate's comment above for why: this used to fire
   // handleConfirm() the instant canWrite/publicClient were ready with no
   // regard for whether state.employees had actually finished loading yet,
   // risking silent data loss for an autoConfirm add (see the comment
   // inside handleConfirm). blockedReason resolves as an error immediately
   // rather than waiting, since a 'needs-unlock' status will never clear on
-  // its own — no amount of retrying fixes it, only a person clicking
+  // its own, no amount of retrying fixes it, only a person clicking
   // "Unlock my data" does.
   const autoConfirmedRef = useRef(false);
   useEffect(() => {
@@ -692,7 +690,7 @@ export interface EditEmployeeCardProps {
   newAddress?:    string;
   walletAddress:  string;
   /** When true, applies the update immediately on mount with no review UI
-   *  or button click — used for execute_edit_employee (explicit
+   *  or button click, used for execute_edit_employee (explicit
    *  instructions). The underlying sign+sync+anchor flow is identical
    *  either way; only whether a human has to click "confirm" differs. */
   autoConfirm?:   boolean;
@@ -708,7 +706,7 @@ export function EditEmployeeCard({
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const hydrationGate = useHydrationGate(hydrationStatus);
 
   const [editState, setEditState] = useState<AddState>('idle');
@@ -730,11 +728,11 @@ export function EditEmployeeCard({
       setError('Wallet not connected.'); setEditState('error'); return;
     }
     // BUG FIX: employees can still be mid-hydration (loaded async from
-    // IPFS/cache — see usePayrollSync.ts) here — checked BEFORE !existing
+    // IPFS/cache, see usePayrollSync.ts) here, checked BEFORE !existing
     // below specifically so a genuinely-existing employee that just
     // hasn't loaded yet is reported as "still loading", never as a false
     // "not found". blockedReason (a real 'needs-unlock' status) gets its
-    // own specific message since retrying this click can't fix it — only
+    // own specific message since retrying this click can't fix it, only
     // clicking "Unlock my data" can.
     if (hydrationGate.blockedReason) {
       executing.current = false;
@@ -744,7 +742,7 @@ export function EditEmployeeCard({
     }
     if (!hydrationGate.ready) {
       executing.current = false;
-      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      const msg = 'Still loading your existing employee data, please wait a moment and try again.';
       setError(msg); setEditState('error');
       onResolved('error', msg);
       return;
@@ -768,15 +766,14 @@ export function EditEmployeeCard({
 
       setEditState('syncing');
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
-      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
+      if (!cid) throw new Error('Sync did not return a CID, nothing was anchored on-chain.');
 
-      // See AddEmployeeCard's identical fix above for the full writeup —
-      // silently skipping the anchor here (the old `if (registryClone)`)
+      // See AddEmployeeCard's identical fix above for the full writeup, // silently skipping the anchor here (the old `if (registryClone)`)
       // meant an "employee updated" success card could be shown even
       // though the change never actually reached the on-chain registry
       // other devices/sessions read from.
       if (!registryClone) {
-        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
+        throw new Error('Registry not found for this account yet, please refresh the page and try again.');
       }
       setEditState('anchoring');
       const hash = await universalWrite({
@@ -794,7 +791,7 @@ export function EditEmployeeCard({
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
-        ? 'Network error — check your connection and try again.'
+        ? 'Network error, check your connection and try again.'
         : friendlyErrorMessage(err, 'Could not update employee. Please try again.');
       setError(msg);
       setEditState('error');
@@ -804,9 +801,9 @@ export function EditEmployeeCard({
 
   // See the identical comment on this pattern in UnlistedPaymentCard above
   // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
-  // now — this is the specific card behind both the repeated "update
-  // failed — connect wallet first" reports AND the false "EMPLOYEE NOT
-  // FOUND" that "self-corrected" a moment later — see useHydrationGate's
+  // now, this is the specific card behind both the repeated "update
+  // failed, connect wallet first" reports AND the false "EMPLOYEE NOT
+  // FOUND" that "self-corrected" a moment later, see useHydrationGate's
   // comment above and handleConfirm's identical guard for the full
   // reasoning. blockedReason resolves as an error immediately (updating
   // this card's own local state, not just onResolved, so the card itself
@@ -874,7 +871,7 @@ export function EditEmployeeCard({
 }
 
 // ── Remove employee confirmation card ───────────────────────────────────────
-// ALWAYS requires human confirmation — deletion is never autonomous
+// ALWAYS requires human confirmation, deletion is never autonomous
 // regardless of how explicit the instruction was, per explicit product
 // requirement (irreversible action).
 
@@ -890,7 +887,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   const [removeState, setRemoveState] = useState<AddState>('idle');
   const [error,       setError]       = useState('');
@@ -915,7 +912,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
 
       setRemoveState('syncing');
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
-      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
+      if (!cid) throw new Error('Sync did not return a CID, nothing was anchored on-chain.');
 
       // See AddEmployeeCard's identical fix above for the full writeup.
       // Especially important for a removal: silently skipping the anchor
@@ -923,7 +920,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       // reading from the last-anchored CID, which is the opposite of what
       // an employer confirming a removal expects.
       if (!registryClone) {
-        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
+        throw new Error('Registry not found for this account yet, please refresh the page and try again.');
       }
       setRemoveState('anchoring');
       const hash = await universalWrite({
@@ -941,7 +938,7 @@ export function RemoveEmployeeCard({ address, fullName, walletAddress, onResolve
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
-        ? 'Network error — check your connection and try again.'
+        ? 'Network error, check your connection and try again.'
         : friendlyErrorMessage(err, 'Could not remove employee. Please try again.');
       setError(msg);
       setRemoveState('error');
@@ -992,7 +989,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
   const { employees, registryClone } = state;
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign = useCachedSignMessage();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   const [addState, setAddState] = useState<AddState>('idle');
   const [error,    setError]    = useState('');
@@ -1030,14 +1027,14 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
 
       setAddState('syncing');
       const { cid } = await syncData({ employees: next, walletAddress, signMessage: sign });
-      if (!cid) throw new Error('Sync did not return a CID — nothing was anchored on-chain.');
+      if (!cid) throw new Error('Sync did not return a CID, nothing was anchored on-chain.');
 
-      // See AddEmployeeCard's identical fix for the full writeup — this
+      // See AddEmployeeCard's identical fix for the full writeup, this
       // used to silently skip anchoring (and still report success) for a
       // whole batch of newly-added employees whenever registryClone hadn't
       // loaded into state yet.
       if (!registryClone) {
-        throw new Error('Registry not found for this account yet — please refresh the page and try again.');
+        throw new Error('Registry not found for this account yet, please refresh the page and try again.');
       }
       setAddState('anchoring');
       const hash = await universalWrite({
@@ -1055,7 +1052,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       const msg = /reject|cancel|denied/i.test(raw)
         ? 'Transaction cancelled.'
         : /network|fetch|rpc/i.test(raw)
-        ? 'Network error — check your connection and try again.'
+        ? 'Network error, check your connection and try again.'
         : friendlyErrorMessage(err, 'Could not add employees. Please try again.');
       setError(msg);
       setAddState('error');
@@ -1083,7 +1080,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 4 }}>
         {drafts.map((d, i) => (
           <div key={i} style={{ fontSize: 12, color: '#E0E7FF', borderBottom: i < drafts.length - 1 ? '1px solid rgba(255,255,255,0.15)' : 'none', paddingBottom: 4 }}>
-            <strong>{d.fullName}</strong> — {d.department} / {d.group} — {d.salary} USDC/mo
+            <strong>{d.fullName}</strong>, {d.department} / {d.group}, {d.salary} USDC/mo
             <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: '#B45309' }}>
               {d.walletAddress.slice(0, 10)}…{d.walletAddress.slice(-6)}
             </div>
@@ -1092,7 +1089,7 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
       </div>
       {!!skippedCount && (
         <div style={{ fontSize: 11, color: '#B45309', marginBottom: 8 }}>
-          {skippedCount} record{skippedCount === 1 ? '' : 's'} skipped — missing a valid name, address, or salary.
+          {skippedCount} record{skippedCount === 1 ? '' : 's'} skipped, missing a valid name, address, or salary.
         </div>
       )}
       {busy && <div style={{ fontSize: 12, color: '#E0E7FF', marginTop: 6 }}>{busyLabel}</div>}
@@ -1102,15 +1099,14 @@ export function BulkAddEmployeesCard({ employeesJson, skippedCount, walletAddres
 }
 
 // ── Payroll run confirmation card ───────────────────────────────────────────────
-// Full in-chat execution — mirrors UnlistedPaymentCard's approve → batchPay →
+// Full in-chat execution, mirrors UnlistedPaymentCard's approve → batchPay →
 // wait-for-receipt → save record → send receipt pattern, generalized to a
 // group of employees instead of one custom address. USDC-only, matching
 // execute_payroll_run's own scope (the fully-autonomous sibling of this
 // human-confirmed flow).
 //
 // The employee list and amounts shown here come from the client's OWN
-// `state.employees` — the same trusted, already-synced data Dashboard uses —
-// not from anything the model said. `group` is just which subset to select;
+// `state.employees`, the same trusted, already-synced data Dashboard uses, // not from anything the model said. `group` is just which subset to select;
 // an LLM can propose the wrong group name, but it cannot fabricate who's in
 // it or what they're owed.
 
@@ -1118,7 +1114,7 @@ export interface PayrollRunCardProps {
   group: string;
   walletAddress: string;
   sessionToken?: string;
-  /** See UnlistedPaymentCardProps.autoConfirm — same meaning here. */
+  /** See UnlistedPaymentCardProps.autoConfirm, same meaning here. */
   autoConfirm?: boolean;
   /** See useHydrationGate's comment above. */
   hydrationStatus?: PayrollSyncStatus;
@@ -1129,7 +1125,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   const { state, saveTxRecord } = useApp();
   const { employees, payrollClone, payrollSetup } = state;
   const { loginMethod } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const { ensureApproval, invalidateApproval } = useTokenApproval();
   const hydrationGate = useHydrationGate(hydrationStatus);
@@ -1137,7 +1133,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   const [payState, setPayState] = useState<PayState>('idle');
   const [error,    setError]    = useState('');
   const [txHash,   setTxHash]   = useState('');
-  // Tracks whether a receipt could even be attempted — see the comment
+  // Tracks whether a receipt could even be attempted, see the comment
   // right where this gets set, in handleConfirm below.
   const [receiptSkipped, setReceiptSkipped] = useState(false);
   const executing = useRef(false);
@@ -1160,8 +1156,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       executing.current = false;
       setError(walletRequiredMessage(loginMethod)); setPayState('error'); return;
     }
-    // BUG FIX: checked BEFORE targetEmployees.length === 0 below —
-    // employees can still be mid-hydration here (see
+    // BUG FIX: checked BEFORE targetEmployees.length === 0 below, // employees can still be mid-hydration here (see
     // useHydrationGate's comment above), which would otherwise make a
     // group that genuinely has people in it look empty and misreport
     // "no employees found". blockedReason (a real 'needs-unlock' status)
@@ -1174,7 +1169,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
     }
     if (!hydrationGate.ready) {
       executing.current = false;
-      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      const msg = 'Still loading your existing employee data, please wait a moment and try again.';
       setError(msg); setPayState('error');
       onResolved('error', msg);
       return;
@@ -1185,24 +1180,23 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
     }
     if (dupWallets.length) {
       executing.current = false;
-      setError('Duplicate wallet addresses in this group — resolve in the dashboard before running payroll.');
+      setError('Duplicate wallet addresses in this group, resolve in the dashboard before running payroll.');
       setPayState('error'); return;
     }
     // The AI agent is only ever reachable by premium users who have
     // already deployed their own SaldenMultiTokenPayroll clone (the
     // /ai-agent page itself gates on isPremiumUser before any of these
-    // cards can render) — so the agent must only ever call batchPay on
+    // cards can render), so the agent must only ever call batchPay on
     // that clone, never the free-tier standalone SaldenEnterprisePayroll
-    // contract. Defensive guard, not an expected path — see identical
+    // contract. Defensive guard, not an expected path, see identical
     // comment in UnlistedPaymentCard above.
     if (!payrollClone) {
       executing.current = false;
-      setError('No payroll clone found for this account — the AI agent can only run payroll through your deployed clone contract.');
+      setError('No payroll clone found for this account, the AI agent can only run payroll through your deployed clone contract.');
       setPayState('error'); return;
     }
 
-    // batchPay reverts on-chain above the clone's MAX_BATCH_SIZE (1,000 —
-    // see lib/contracts/batchLimits.ts). Split into sequential batches so a
+    // batchPay reverts on-chain above the clone's MAX_BATCH_SIZE (1,000, // see lib/contracts/batchLimits.ts). Split into sequential batches so a
     // payroll run of any size completes as a series of on-chain batches
     // instead of one oversized call.
     const chunks = chunkForBatchPay(targetEmployees, true);
@@ -1215,7 +1209,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         (sum, e) => sum + BigInt(Math.round(Number(e.salaryAmount) * 1e6)), 0n,
       );
 
-      // One approval for the FULL total covers every batch below — ERC-20
+      // One approval for the FULL total covers every batch below, ERC-20
       // allowance persists across multiple sequential transferFrom calls.
       // See lib/approvals/useTokenApproval.ts for the unified cache-check-
       // then-approve flow shared across every approval call site.
@@ -1225,11 +1219,11 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       const receiptEmail = payrollSetup?.email ?? null;
       // BUG FIX: payrollSetup.email is only ever populated by an explicit
       // "Unlock your data" / "Sync now" click (see usePayrollSync.ts's
-      // header comment) — on a browser/device with no local cache yet for
+      // header comment), on a browser/device with no local cache yet for
       // this wallet, it can genuinely still be empty here even though
       // employees are already visible (e.g. freshly imported this same
       // session). This used to run to completion in total silence: no
-      // receipt attempt, no error, nothing — which is exactly why
+      // receipt attempt, no error, nothing, which is exactly why
       // "Payroll Receipt" showed as a blank row with no retry option in
       // Transaction History instead of a "Failed" state. Surfaced in this
       // card's own success message below instead of staying silent.
@@ -1248,7 +1242,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         const memoJson = JSON.stringify({
           protocol: 'salden', type: 'batchPay', ref,
           date: new Date().toISOString(),
-          remark: 'AI Agent — payroll run (user-confirmed)',
+          remark: 'AI Agent, payroll run (user-confirmed)',
           token: 'USDC', totalAmount: chunkHuman,
           recipients: chunk.length, group, employer: walletAddress,
           ...(chunks.length > 1 ? { batch: chunkIndex + 1, batchCount: chunks.length } : {}),
@@ -1286,7 +1280,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
           id: hash, hash, ref,
           type: 'batchPay', status: 'success',
           amount: chunkHuman, token: 'USDC',
-          remark: `AI Agent — payroll run (${group})`,
+          remark: `AI Agent, payroll run (${group})`,
           recipientCount: chunk.length,
           timestamp: Date.now(),
           receiptEmailStatus: receiptEmail ? 'pending' : null,
@@ -1299,7 +1293,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
             body: JSON.stringify({
               txHash: hash, walletAddress, recipientEmail: receiptEmail,
               recipientCount: chunk.length, amount: chunkHuman, token: 'USDC',
-              remark: `AI Agent — payroll run (${group})`,
+              remark: `AI Agent, payroll run (${group})`,
               ref, timestamp: Date.now(), executedBy: 'ai_agent',
               employees: chunk.map(e => ({
                 fullName: e.fullName, department: e.department,
@@ -1311,7 +1305,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
           }).then(async res => {
             await saveTxRecord({
               id: hash, hash, ref, type: 'batchPay', status: 'success',
-              amount: chunkHuman, token: 'USDC', remark: `AI Agent — payroll run (${group})`,
+              amount: chunkHuman, token: 'USDC', remark: `AI Agent, payroll run (${group})`,
               recipientCount: chunk.length, timestamp: Date.now(),
               receiptEmailStatus: res.ok ? 'sent' : 'failed',
               executedBy: 'ai_agent',
@@ -1327,11 +1321,10 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       const raw = err instanceof Error ? err.message : '';
       const cancelled = /reject|cancel|denied/i.test(raw);
       // A run split into multiple batches can fail partway through with
-      // some batches already confirmed on-chain — see the identical
+      // some batches already confirmed on-chain, see the identical
       // handling and reasoning in dashboard/page.tsx's handleExecutePayroll.
       const partial = completedHashes.length > 0 && completedHashes.length < chunks.length;
-      // Same allowance-cache invalidation as UnlistedPaymentCard above —
-      // checks for MemoFailed (not TransferFromFailed — see that
+      // Same allowance-cache invalidation as UnlistedPaymentCard above, // checks for MemoFailed (not TransferFromFailed, see that
       // component's comment for why), and only when NOT partial (a
       // partial failure means the allowance was genuinely fine for at
       // least the first batch).
@@ -1341,7 +1334,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
       const msg = cancelled
         ? 'Transaction cancelled.'
         : partial
-          ? `${completedHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice — only the remaining employees need to be run again.`
+          ? `${completedHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice, only the remaining employees need to be run again.`
           : friendlyErrorMessage(err, 'Payroll run failed. Please try again.');
       setError(msg);
       setPayState('error');
@@ -1351,9 +1344,9 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
 
   // See the identical comment on this pattern in UnlistedPaymentCard above
   // for the canWrite/publicClient wait. Also gated on hydrationGate.ready
-  // now — this is the specific card behind both the repeated "payroll run
-  // failed — connect wallet first" reports AND the false "No employees
-  // found" that could fire while employees was still mid-hydration — see
+  // now, this is the specific card behind both the repeated "payroll run
+  // failed, connect wallet first" reports AND the false "No employees
+  // found" that could fire while employees was still mid-hydration, see
   // useHydrationGate's comment above and handleConfirm's identical guard.
   // blockedReason resolves as an error immediately (updating this card's
   // own local state, not just onResolved) rather than waiting, since a
@@ -1384,7 +1377,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
         <div>Paid {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'} in &ldquo;{group}&rdquo;.</div>
         {receiptSkipped && (
           <div style={{ fontSize: 11, color: '#FDE68A', marginTop: 4 }}>
-            No payroll receipt email on file — no receipt was sent. Add one in Settings to enable automatic receipts.
+            No payroll receipt email on file, no receipt was sent. Add one in Settings to enable automatic receipts.
           </div>
         )}
         <a href={txLink(txHash)} target="_blank" rel="noreferrer" style={{ color: '#059669', fontSize: 12, fontWeight: 600 }}>
@@ -1410,12 +1403,12 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
     );
   }
 
-  // Same reasoning as EditEmployeeCard's identical check — without this,
+  // Same reasoning as EditEmployeeCard's identical check, without this
   // a manually-confirmed (non-autoConfirm) card could briefly show "0
   // employees, $0.00 total" for a group that genuinely has people in it,
   // while employees is still mid-hydration. handleConfirm's own guard
   // above already prevents anything unsafe from actually executing during
-  // this window — this only fixes what gets displayed in the meantime.
+  // this window, this only fixes what gets displayed in the meantime.
   if (payState === 'idle' && targetEmployees.length === 0) {
     if (hydrationGate.blockedReason) {
       return <CardShell tone="warn" title="⏸ DATA NOT LOADED"><div>{hydrationGate.blockedReason}</div></CardShell>;
@@ -1437,7 +1430,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
   return (
     <CardShell tone="warn" title={autoConfirm ? '⚠ RUNNING PAYROLL…' : '⚠ PAYROLL RUN READY'}>
       <div>
-        Run payroll for <strong>{group}</strong> — <strong>{targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</strong>, total <strong>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDC</strong>?
+        Run payroll for <strong>{group}</strong>, <strong>{targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</strong>, total <strong>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDC</strong>?
       </div>
 
       {targetEmployees.length > 0 && (
@@ -1461,7 +1454,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
 
       {dupWallets.length > 0 && (
         <div style={{ color: '#DC2626', fontSize: 12, marginTop: 6 }}>
-          Duplicate wallet addresses found in this group — resolve in the dashboard before running payroll.
+          Duplicate wallet addresses found in this group, resolve in the dashboard before running payroll.
         </div>
       )}
 
@@ -1484,7 +1477,7 @@ export function PayrollRunCard({ group, walletAddress, sessionToken, autoConfirm
 
 // ── Schedule payment confirmation card ─────────────────────────────────────────
 // Saves a ONE-TIME future payment locally (IndexedDB) plus a best-effort
-// server-side mirror sync — no wallet signature needed here at all; the
+// server-side mirror sync, no wallet signature needed here at all; the
 // actual signature happens automatically later, when the agent runs the
 // payment at its scheduled time. Mirrors
 // components/agent/SetSchedulePaymentModal.tsx's handleSchedule() exactly,
@@ -1524,7 +1517,7 @@ export function ScheduleConfirmationCard({
     executing.current = true;
     setBusy(true); setError('');
 
-    // BUG FIX: checked BEFORE targetEmployees.length === 0 below — same
+    // BUG FIX: checked BEFORE targetEmployees.length === 0 below, same
     // reasoning as PayrollRunCard's identical guard. employees can still
     // be mid-hydration here, which would otherwise make a group that
     // genuinely has people in it look empty.
@@ -1536,7 +1529,7 @@ export function ScheduleConfirmationCard({
     }
     if (!hydrationGate.ready) {
       executing.current = false; setBusy(false);
-      const msg = 'Still loading your existing employee data — please wait a moment and try again.';
+      const msg = 'Still loading your existing employee data, please wait a moment and try again.';
       setError(msg); onResolved('error', msg);
       return;
     }
@@ -1575,7 +1568,7 @@ export function ScheduleConfirmationCard({
         id: crypto.randomUUID(),
         walletAddress,
         type: 'scheduled',
-        label: `${group} — ${targetEmployees.length} employee${targetEmployees.length === 1 ? '' : 's'} — ${token}`,
+        label: `${group}, ${targetEmployees.length} employee${targetEmployees.length === 1 ? '' : 's'}, ${token}`,
         group: (group === ALL_EMPLOYEES_LABEL || group === 'All Employees') ? undefined : group,
         employees: targetEmployees.map(e => e.walletAddress),
         token,
@@ -1611,11 +1604,10 @@ export function ScheduleConfirmationCard({
     }
   }, [targetEmployees, group, whenMs, token, agentInfo, walletAddress, sessionToken, payrollClone, state.tokenRegistry, state.payrollSetup, onResolved, hydrationGate.ready, hydrationGate.blockedReason]);
 
-  // Same bounded-wait autoConfirm pattern as the other cards above —
-  // agentInfo (from useAgentStatus) can resolve a tick after this
+  // Same bounded-wait autoConfirm pattern as the other cards above, // agentInfo (from useAgentStatus) can resolve a tick after this
   // component's first render, same class of timing gap as
   // useEffectiveAddress elsewhere in this file. Also gated on
-  // hydrationGate.ready now — see useHydrationGate's comment above and
+  // hydrationGate.ready now, see useHydrationGate's comment above and
   // handleConfirm's identical guard for the full reasoning. blockedReason
   // resolves as an error immediately (updating this card's own local
   // state) rather than waiting, since a 'needs-unlock' status never
@@ -1643,17 +1635,17 @@ export function ScheduleConfirmationCard({
   const handleDecline = useCallback(() => onResolved('declined'), [onResolved]);
 
   if (done) {
-    return <CardShell tone="success" title="✓ PAYMENT SCHEDULED"><div>Scheduled for {new Date(whenMs).toLocaleString()} — {group}, {token}.</div></CardShell>;
+    return <CardShell tone="success" title="✓ PAYMENT SCHEDULED"><div>Scheduled for {new Date(whenMs).toLocaleString()}, {group}, {token}.</div></CardShell>;
   }
   if (error) {
     return <CardShell tone="error" title="✗ COULD NOT SCHEDULE"><div>{error}</div></CardShell>;
   }
 
-  // Same reasoning as PayrollRunCard's identical check — without this, a
+  // Same reasoning as PayrollRunCard's identical check, without this, a
   // manually-confirmed card could briefly show "0 employees" for a group
   // that genuinely has people in it while employees is still
   // mid-hydration. handleConfirm's own guard above already prevents
-  // anything unsafe from executing during this window — this only fixes
+  // anything unsafe from executing during this window, this only fixes
   // what gets displayed in the meantime.
   if (!busy && targetEmployees.length === 0) {
     if (hydrationGate.blockedReason) {
@@ -1667,10 +1659,10 @@ export function ScheduleConfirmationCard({
   const totalAmount = targetEmployees.reduce((s, e) => s + Number(e.salaryAmount || 0), 0);
   return (
     <CardShell tone="warn" title="⏱ CONFIRM SCHEDULED PAYMENT">
-      <div style={{ marginBottom: 4 }}>{group} — {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</div>
+      <div style={{ marginBottom: 4 }}>{group}, {targetEmployees.length} employee{targetEmployees.length === 1 ? '' : 's'}</div>
       <div style={{ marginBottom: 4 }}>{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} {token} total</div>
       <div style={{ marginBottom: 4 }}>Runs: {new Date(whenMs).toLocaleString()}</div>
-      <div style={{ fontSize: 11, color: '#C7D2FE' }}>Saved now, signed automatically at the scheduled time — no signature needed to confirm this.</div>
+      <div style={{ fontSize: 11, color: '#C7D2FE' }}>Saved now, signed automatically at the scheduled time, no signature needed to confirm this.</div>
       <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Schedule" />
     </CardShell>
   );
@@ -1679,8 +1671,8 @@ export function ScheduleConfirmationCard({
 // ── Cancel schedule confirmation card ──────────────────────────────────────────
 // Mirrors app/ai-agent/manage/page.tsx's handleCancelSchedule() exactly:
 // server-side removal (so the cron executor stops picking it up) plus a
-// local IndexedDB removal (so the Manage AI Agent page — whose own list is
-// sourced from local IndexedDB, not the server mirror — reflects it too).
+// local IndexedDB removal (so the Manage AI Agent page, whose own list is
+// sourced from local IndexedDB, not the server mirror, reflects it too).
 
 export interface CancelScheduleCardProps {
   scheduleId: string;
@@ -1705,7 +1697,7 @@ export function CancelScheduleCard({
     setBusy(true); setError('');
 
     // Local removal is what the person actually sees and what matters for
-    // whether this counts as "done" — the server call is best-effort sync
+    // whether this counts as "done", the server call is best-effort sync
     // so the cron executor also stops picking it up, same tolerance as
     // Manage AI Agent's own handleCancelSchedule (which shows a soft
     // "cancelled locally" toast rather than a hard error in this exact
@@ -1728,7 +1720,7 @@ export function CancelScheduleCard({
     try {
       await deleteAgentSchedule(scheduleId);
       setDone(true); setBusy(false);
-      onResolved('confirmed', serverSynced ? scheduleId : `${scheduleId} — removed locally; will finish syncing next time Manage AI Agent loads`);
+      onResolved('confirmed', serverSynced ? scheduleId : `${scheduleId}, removed locally; will finish syncing next time Manage AI Agent loads`);
     } catch (err) {
       setBusy(false);
       const msg = friendlyErrorMessage(err, 'Could not cancel schedule.');
@@ -1754,7 +1746,7 @@ export function CancelScheduleCard({
 
   return (
     <CardShell tone="warn" title="⏱ CONFIRM CANCELLATION">
-      <div style={{ marginBottom: 8 }}>Cancel "{label}"? This cannot be undone — you'd need to schedule it again from scratch.</div>
+      <div style={{ marginBottom: 8 }}>Cancel "{label}"? This cannot be undone, you'd need to schedule it again from scratch.</div>
       <ActionButtons onConfirm={handleConfirm} onDecline={handleDecline} busy={busy} confirmLabel="Cancel Schedule" />
     </CardShell>
   );

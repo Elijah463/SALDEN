@@ -1,6 +1,6 @@
 /**
  * @file lib/circle/agent-wallet.ts
- * SERVER-SIDE ONLY — never import in client components.
+ * SERVER-SIDE ONLY, never import in client components.
  *
  * Manages the AI Agent's developer-controlled Circle wallet using:
  * - CIRCLE_API_KEY (developer API key)
@@ -12,19 +12,18 @@
  * It can be authorised (via addAgent on the payroll contract) to execute
  * batch payments on behalf of the employer.
  *
- * ── Entity secret ciphertext — this file's biggest fix ────────────────────
- * Every "critical" (mutating) Developer-Controlled Wallets endpoint —
- * create wallet, execute a contract call, transfer — requires an
+ * ── Entity secret ciphertext, this file's biggest fix ────────────────────
+ * Every "critical" (mutating) Developer-Controlled Wallets endpoint, * create wallet, execute a contract call, transfer, requires an
  * `entitySecretCiphertext` field IN THE REQUEST BODY: the raw 32-byte
  * entity secret, RSA-OAEP(SHA-256) encrypted with Circle's published
  * public key, then base64-encoded. It must be freshly generated for
- * EVERY request — Circle rejects a reused ciphertext outright as a
+ * EVERY request, Circle rejects a reused ciphertext outright as a
  * replay-attack guard. See:
  *   https://developers.circle.com/wallets/dev-controlled/entity-secret-management
  *   https://github.com/circlefin/w3s-entity-secret-sample-code
  *
  * A previous version of this file sent the RAW entity secret as an
- * `X-Entity-Secret-Ciphertext` HTTP header — not encrypted, and not even
+ * `X-Entity-Secret-Ciphertext` HTTP header, not encrypted, and not even
  * in the body. That was never going to work; Circle's API has no such
  * header at all. Combined with a missing `walletSetId` and a
  * non-UUID `idempotencyKey` (also required, also rejected), every single
@@ -33,8 +32,7 @@
  * UUID format" errors this was built to fix.
  *
  * getEntitySecretCiphertext() below implements the real encryption using
- * Node's built-in `crypto` module (no SDK dependency needed for this —
- * it's ~15 lines once you have the algorithm right, which is the part
+ * Node's built-in `crypto` module (no SDK dependency needed for this, * it's ~15 lines once you have the algorithm right, which is the part
  * that actually took verifying against Circle's docs). Circle's public
  * key is fetched once and cached in module scope (the KEY itself is
  * static; only the ciphertext must be fresh per-request, which this
@@ -47,7 +45,7 @@ import { isCircleTxTerminal } from './txState';
 const CIRCLE_API_BASE = 'https://api.circle.com/v1/w3s';
 
 /** Build headers per-call so env vars are resolved at runtime, not build time.
- *  NOTE: entitySecretCiphertext is deliberately NOT a header — see
+ *  NOTE: entitySecretCiphertext is deliberately NOT a header, see
  *  entitySecret.ts. It belongs in the body of each individual mutating
  *  request, freshly generated every time. */
 function getHeaders(): Record<string, string> {
@@ -73,7 +71,7 @@ export async function createAgentWallet(
   idempotencyKey: string
 ): Promise<AgentWalletInfo> {
   const walletSetId = process.env.CIRCLE_WALLET_SET_ID ?? '';
-  if (!walletSetId) throw new Error('CIRCLE_WALLET_SET_ID is not set — create one via POST /v1/w3s/developer/walletSets once and store its id');
+  if (!walletSetId) throw new Error('CIRCLE_WALLET_SET_ID is not set, create one via POST /v1/w3s/developer/walletSets once and store its id');
 
   const entitySecretCiphertext = await getEntitySecretCiphertext();
 
@@ -81,7 +79,7 @@ export async function createAgentWallet(
     method:  'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      // Circle requires real UUID syntax here — `idempotencyKey` as passed
+      // Circle requires real UUID syntax here, `idempotencyKey` as passed
       // in by callers (e.g. `salden-agent-0xbe2e...`) is not one, so it's
       // deterministically mapped to a UUID. The original string is still
       // used as `refId` below unchanged, so getAgentWalletByRefId() lookups
@@ -89,7 +87,7 @@ export async function createAgentWallet(
       idempotencyKey: toUUIDv5(idempotencyKey),
       walletSetId,
       entitySecretCiphertext,
-      blockchains: ['ARC-TESTNET'],    // Circle has a native identifier for Arc Testnet — see https://developers.circle.com/api-reference/wallets/developer-controlled-wallets/get-wallets for the full enum. Using 'ETH' here was wrong on two counts: it's Ethereum MAINNET (hence "TEST_API key cannot be used with blockchain mainnets"), and Arc Testnet doesn't need an ETH-compatible stand-in — Circle supports it directly.
+      blockchains: ['ARC'],    // Circle has a native identifier for Arc Network, see https://developers.circle.com/api-reference/wallets/developer-controlled-wallets/get-wallets for the full enum. Using 'ETH' here was wrong on two counts: it's Ethereum MAINNET (hence "TEST_API key cannot be used with blockchain mainnets"), and Arc Network doesn't need an ETH-compatible stand-in, Circle supports it directly.
       accountType: 'EOA',
       metadata: [{ name: 'Salden AI Agent Wallet', refId: idempotencyKey }],
     }),
@@ -135,14 +133,14 @@ export async function getAgentWallet(walletId: string): Promise<AgentWalletInfo>
 // where idempotencyKey is deterministically derived from the employer's
 // wallet address (see lib/agent/agentIdentity.ts). That means the server
 // can always ask Circle "which wallet did I create for this employer?"
-// instead of trusting a client-supplied walletId/address — this is what
+// instead of trusting a client-supplied walletId/address, this is what
 // closes the authorisation gap where a request body could otherwise claim
 // any agentWalletId it wanted (see agentIdentity.ts for the full writeup).
 //
 // NOTE: this filters Circle's wallet-list endpoint by the `refId` query
 // parameter. This matches Circle's documented metadata/refId lookup
-// pattern, but — like the check_ofac_compliance endpoint shape elsewhere
-// in this codebase — it has not been exercised against a live Circle
+// pattern, but, like the check_ofac_compliance endpoint shape elsewhere
+// in this codebase, it has not been exercised against a live Circle
 // account by this author. Verify the exact query param name and response
 // shape against your Circle Developer-Controlled Wallets API docs/sandbox
 // before relying on this in production; if the param name differs, this
@@ -246,8 +244,7 @@ export async function pollTxStatus(
 // exactly what you want for a short, blocking, best-effort check inside a
 // single synchronous request (see autonomousExecution.ts). It is NOT what
 // you want when the caller itself is driving a poll loop externally (e.g.
-// Inngest's step.run + step.sleep pattern in lib/inngest/functions.ts) —
-// looping internally there would either block Vercel compute for the
+// Inngest's step.run + step.sleep pattern in lib/inngest/functions.ts), // looping internally there would either block Vercel compute for the
 // entire wait, or throw a "timed out" error on every single check that
 // hasn't confirmed yet, which the caller would then have to specifically
 // swallow. This does exactly one fetch and returns whatever state Circle

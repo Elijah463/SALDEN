@@ -14,36 +14,36 @@
  *     signature request for a call that's guaranteed to fail.
  *   - 'circle'   → Circle's user-controlled wallets now support
  *     /user/transactions/contractExecution directly, now that Arc
- *     Testnet wallets are created under Circle's real `ARC-TESTNET`
+ *     Wallets are created under Circle's real `ARC`
  *     chain code (see lib/circle/user-wallet.ts's initializeUserWallet
- *     doc comment for the full history — this used to be blocked by a
+ *     doc comment for the full history, this used to be blocked by a
  *     wrong chain classification, not an actual Circle limitation).
  *     Circle handles simulation, gas estimation, signing and
- *     broadcasting server-side — this hook just creates the challenge
+ *     broadcasting server-side, this hook just creates the challenge
  *     (POST /api/circle/contract-execution-challenge) and hands it to
  *     the Circle Web SDK for the user's PIN
  *     (executeCircleTransactionChallenge), then polls for the on-chain
  *     result the same way the external-wallet path waits for a receipt.
  *
- * Deliberately NOT wired into Swap — see app/wallet/swap/page.tsx's own
+ * Deliberately NOT wired into Swap, see app/wallet/swap/page.tsx's own
  * external-wallet notice; Circle's Swap adapter needs a standard EIP-1193
  * provider, which a Circle social-login session doesn't expose (see that
  * file's comments for the fuller reasoning). Every other on-chain write
- * in the app — registry/payroll deployment, batchPay, send, agent
- * confirmations — should route through this hook.
+ * in the app, registry/payroll deployment, batchPay, send, agent
+ * confirmations, should route through this hook.
  *
  * Debugging a failure: each layer below is independently checkable.
  *   1. Is `canWrite` false? → loginMethod/email/walletClient problem,
  *      check useEffectiveAddress().
  *   2. Does the simulateContract preflight throw (external) / does
  *      Circle's own contractExecution call reject synchronously
- *      (circle)? → the call would genuinely revert — check
+ *      (circle)? → the call would genuinely revert, check
  *      decodeContractError()'s output / the API error message, both are
  *      now decoded against the real contract ABI (see
  *      lib/contracts/abis.ts and lib/contracts/decodeError.ts).
  *   3. Does POST /api/circle/contract-execution-challenge fail? →
  *      problem in lib/circle/user-wallet.ts (session/challenge creation)
- *      or lib/circle/entitySecret.ts (encryption) — test that route
+ *      or lib/circle/entitySecret.ts (encryption), test that route
  *      alone.
  *   4. Does the SDK challenge itself error? → problem in the
  *      challengeId/userToken/encryptionKey handoff, or the user
@@ -57,7 +57,7 @@ import { useCallback } from 'react';
 import { useWalletClient, usePublicClient } from 'wagmi';
 import { encodeFunctionData, type Abi } from 'viem';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { arcTestnet } from '@/lib/contracts/config';
+import { arcChain } from '@/lib/contracts/config';
 import { decodeContractError } from '@/lib/contracts/decodeError';
 import {
   executeCircleMessageSigningChallenge,
@@ -70,7 +70,7 @@ export interface UniversalWriteParams {
   functionName:  string;
   args?:         readonly unknown[];
   /** Native-token value to send with the call, in wei. Rare in this app
-   *  (no current write flow sends native value) — included for
+   *  (no current write flow sends native value), included for
    *  completeness. */
   value?:        bigint;
 }
@@ -84,24 +84,23 @@ export interface UniversalSendTransactionParams {
 }
 
 export interface UniversalWriteResult {
-  /** Performs the write. Throws on failure — same contract as wagmi's
+  /** Performs the write. Throws on failure, same contract as wagmi's
    *  writeContract, so existing try/catch call sites don't need to
    *  change their error handling. Errors are decoded against the real
-   *  contract ABI where possible (see lib/contracts/decodeError.ts) —
-   *  callers get `AlreadyDeployed`-style messages, not raw revert data. */
+   *  contract ABI where possible (see lib/contracts/decodeError.ts), *  callers get `AlreadyDeployed`-style messages, not raw revert data. */
   writeContract: (params: UniversalWriteParams, onStatusChange?: (msg: string) => void) => Promise<`0x${string}`>;
   /** Sends a pre-built raw transaction (to/data/value already encoded by
-   *  the caller — e.g. LI.FI's quote.transactionRequest) instead of an
+   *  the caller, e.g. LI.FI's quote.transactionRequest) instead of an
    *  ABI+functionName+args writeContract needs to encode itself. Same
-   *  wallet branching as writeContract underneath — no ABI decoding here
+   *  wallet branching as writeContract underneath, no ABI decoding here
    *  since there's no ABI to decode against. */
   sendTransaction: (params: UniversalSendTransactionParams, onStatusChange?: (msg: string) => void) => Promise<`0x${string}`>;
-  /** Signs a plain message. Same branch logic as writeContract — wagmi
+  /** Signs a plain message. Same branch logic as writeContract, wagmi
    *  for external wallets, a Circle SIGN_MESSAGE challenge for social
    *  login. Needed by flows that derive a signature-based key rather
    *  than sending a transaction (e.g. lib/usePayrollSync.ts). */
   signMessage: (message: string, onStatusChange?: (msg: string) => void) => Promise<string>;
-  /** Whether a write is even possible right now — use this instead of
+  /** Whether a write is even possible right now, use this instead of
    *  the old `!walletClient` check, which was always true (and
    *  therefore always blocked) for social-login users. */
   canWrite: boolean;
@@ -110,18 +109,18 @@ export interface UniversalWriteResult {
 
 export function useUniversalWrite(): UniversalWriteResult {
   const { loginMethod, email, address } = useEffectiveAddress();
-  const { data: walletClient } = useWalletClient({ chainId: arcTestnet.id });
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const { data: walletClient } = useWalletClient({ chainId: arcChain.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   const canWrite =
     loginMethod === 'external' ? !!walletClient :
     loginMethod === 'circle'   ? !!email :
     false;
 
-  // Circle contractExecution path — shared by writeContract and
+  // Circle contractExecution path, shared by writeContract and
   // sendTransaction's 'circle' branches. Takes already-ABI-encoded
   // calldata (callData) rather than re-deriving Circle's
-  // abiFunctionSignature format — see the API route's doc comment for
+  // abiFunctionSignature format, see the API route's doc comment for
   // why. Circle handles simulation/gas/signing/broadcast; this just
   // creates the challenge, runs it through the user's PIN, and polls for
   // the resulting on-chain status.
@@ -164,7 +163,7 @@ export function useUniversalWrite(): UniversalWriteResult {
       if (!address) throw new Error('No wallet address available.');
 
       // Preflight simulate so a revert shows its real decoded reason
-      // (AlreadyDeployed, TransferFromFailed, etc. — see
+      // (AlreadyDeployed, TransferFromFailed, etc., see
       // lib/contracts/decodeError.ts) instead of raw viem/RPC text, and
       // so the wallet never prompts for a signature on a call that's
       // guaranteed to fail.

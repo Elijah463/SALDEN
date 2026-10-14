@@ -6,13 +6,13 @@
  * the hardcoded guess in lib/swap/tokens.ts.
  *
  * Why this matters: USDC and EURC are Circle-issued stablecoins, both
- * reliably 6 decimals — safe to hardcode. cirBTC's "8" in tokens.ts is a
+ * reliably 6 decimals, safe to hardcode. cirBTC's "8" in tokens.ts is a
  * guess based on real Bitcoin's convention, but nothing here confirms the
- * actual deployed Arc Testnet contract uses 8 rather than, say, 18 (common
+ * actual deployed Arc Network contract uses 8 rather than, say, 18 (common
  * for ERC-20s that don't intentionally mirror BTC's own precision). If
  * that guess is wrong, every raw-amount calculation for cirBTC (the amount
  * sent to LI.FI's /quote endpoint, and the amount actually swapped)
- * silently comes out 10^n too large or too small — which can easily look
+ * silently comes out 10^n too large or too small, which can easily look
  * like "no route available" (LI.FI correctly finding no viable route for
  * a request that's asking to swap either dust or an absurdly large amount)
  * even though the pair itself routes fine at the correct amount.
@@ -26,14 +26,14 @@
 
 import { useEffect, useState } from 'react';
 import { usePublicClient } from 'wagmi';
-import { arcTestnet } from '@/lib/contracts/config';
+import { arcChain } from '@/lib/contracts/config';
 import { ERC20_ABI } from '@/lib/contracts/abis';
 import type { TokenMeta } from './tokens';
 
 const decimalsCache = new Map<string, number>();
 
 export function useTokenDecimals(tokens: (TokenMeta | null)[]): Record<string, number> {
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const [resolved, setResolved] = useState<Record<string, number>>({});
 
   const addressKey = tokens.filter(Boolean).map(t => t!.address).join(',');
@@ -47,7 +47,7 @@ export function useTokenDecimals(tokens: (TokenMeta | null)[]): Record<string, n
     );
 
     if (toFetch.length === 0) {
-      // Everything requested is already cached — surface it immediately.
+      // Everything requested is already cached, surface it immediately.
       const fromCache: Record<string, number> = {};
       for (const t of tokens) {
         if (t?.address && decimalsCache.has(t.address)) fromCache[t.address] = decimalsCache.get(t.address)!;
@@ -65,7 +65,7 @@ export function useTokenDecimals(tokens: (TokenMeta | null)[]): Record<string, n
           decimalsCache.set(t.address!, d);
           return [t.address!, d] as const;
         } catch {
-          // On-chain read failed (bad address, RPC hiccup, etc.) — keep the
+          // On-chain read failed (bad address, RPC hiccup, etc.), keep the
           // hardcoded fallback rather than blocking the swap flow entirely.
           return null;
         }

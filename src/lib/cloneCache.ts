@@ -3,7 +3,7 @@
  * @file lib/cloneCache.ts
  * CLIENT-SIDE.
  *
- * Thin fetch wrappers around GET/POST /api/clones — see
+ * Thin fetch wrappers around GET/POST /api/clones, see
  * lib/serverCloneCache.ts for the full reasoning. Every call site that
  * looks up a registryClone/payrollClone (dashboard, ai-agent, pricing,
  * useCloneAccess) should call `readCloneCache()` FIRST and only fall back
@@ -11,7 +11,7 @@
  * `writeCloneCache()` (fire-and-forget) right after a fresh on-chain
  * discovery so the next lookup for that address is instant everywhere.
  *
- * Both functions are deliberately silent on failure — a cache miss and a
+ * Both functions are deliberately silent on failure, a cache miss and a
  * cache error look identical to the caller (null / no-op), since the
  * correct behaviour is the same either way: fall through to on-chain.
  */
@@ -32,7 +32,7 @@ export async function readCloneCache(address: string): Promise<CloneCacheEntry> 
   }
 }
 
-/** Fire-and-forget — callers never await the result. A failed cache write
+/** Fire-and-forget, callers never await the result. A failed cache write
  *  only means the NEXT fresh browser/device pays the on-chain lookup again
  *  instead of hitting the cache; it never affects the current session,
  *  which already has the value in local state. */

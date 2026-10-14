@@ -9,25 +9,25 @@
  * Hydration safety:
  *   During SSR and the first client render, `mounted` is false and we return
  *   `isConnected: false` with `address: undefined`. This prevents a flash where
- *   the app thinks no one is logged in and redirects — it simply waits until
+ *   the app thinks no one is logged in and redirects, it simply waits until
  *   the useEffect has read localStorage before making auth decisions.
  *   Callers that gate navigation on `isConnected` should also gate on `mounted`.
  *
- * BUG FIX — stale session after switching social-login accounts:
+ * BUG FIX, stale session after switching social-login accounts:
  *   This used to read localStorage exactly once, in a `useEffect(() => {...}, [])`
  *   with an empty dependency array. Logging out and back in with a DIFFERENT
  *   social/email account writes a new session to localStorage, but any
  *   component using this hook that was already mounted before the switch
  *   (e.g. a persistent layout/sidebar that survives Next.js's client-side
- *   route navigation — logout/login here both use router.push, not a full
+ *   route navigation, logout/login here both use router.push, not a full
  *   reload) never re-ran that effect, so it kept serving the FIRST account's
  *   address/email from memory indefinitely. Any on-chain write made through
- *   that stale hook instance — including Pricing's upgrade flow — was
+ *   that stale hook instance, including Pricing's upgrade flow, was
  *   silently signed as the OLD account, which is exactly why "upgrade"
  *   could revert with AlreadyDeployed() for what looked like a brand-new
  *   account: it wasn't actually acting as the new account at all. External
  *   wallets never had this problem because useAccount() is wagmi's own
- *   live, event-driven state — it updates automatically.
+ *   live, event-driven state, it updates automatically.
  *
  *   Fix: every place that writes or clears `salden_session` now also
  *   dispatches a same-tab 'salden-session-changed' event (localStorage's
@@ -42,7 +42,7 @@ import { useAccount } from 'wagmi';
 export interface EffectiveSession {
   address:     `0x${string}` | undefined;
   isConnected: boolean;
-  /** false until localStorage has been read — use this to suppress auth redirects */
+  /** false until localStorage has been read, use this to suppress auth redirects */
   mounted:     boolean;
   loginMethod: 'external' | 'circle' | null;
   email?:      string;
@@ -118,7 +118,7 @@ export function useEffectiveAddress(): EffectiveSession {
 /** Writes a session to localStorage AND notifies every mounted
  *  useEffectiveAddress() instance in this tab immediately (the native
  *  'storage' event only reaches other tabs). Use this instead of calling
- *  localStorage.setItem('salden_session', ...) directly — a raw setItem
+ *  localStorage.setItem('salden_session', ...) directly, a raw setItem
  *  silently leaves already-mounted components on the previous session. */
 export function setStoredSession(session: StoredSession): void {
   try {
@@ -140,7 +140,7 @@ export function clearCircleSession(): void {
  * which signs through Circle's own challenge/PIN flow for social-login
  * users instead of wagmi. This message is now mainly seen for the flows
  * that still can't: Swap (needs a standard EIP-1193 provider Circle's
- * social-login sessions don't expose — see app/wallet/swap/page.tsx) and
+ * social-login sessions don't expose, see app/wallet/swap/page.tsx) and
  * any flow that needs a raw message signature rather than a contract
  * call (e.g. the IPFS employee-data sync's encryption-key derivation),
  * which would need a separate SIGN_MESSAGE challenge type, not yet built.

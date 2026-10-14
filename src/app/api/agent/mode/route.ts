@@ -1,8 +1,9 @@
+import { requirePro } from '@/lib/agent/tier';
 /**
  * @file app/api/agent/mode/route.ts
  *
- * GET  /api/agent/mode?wallet=<address>                        — read-only, no auth (see reasoning below)
- * POST /api/agent/mode  { walletAddress, mode }  Bearer <token> — requires a signed session
+ * GET  /api/agent/mode?wallet=<address>, read-only, no auth (see reasoning below)
+ * POST /api/agent/mode  { walletAddress, mode }  Bearer <token>, requires a signed session
  *
  * Same auth reasoning as /api/agent/limits/route.ts: reading which mode is
  * active grants no capability and exposes nothing sensitive, so GET isn't
@@ -45,9 +46,14 @@ export async function POST(req: NextRequest) {
     }
 
     const session = getSession(req, walletAddress);
-    if (!session.ok) return NextResponse.json({ error: session.error }, { status: 401 });
+    if (session.ok === false) return NextResponse.json({ error: session.error }, { status: 401 });
+    const proBlock = await requirePro(walletAddress);
+    if (proBlock) return proBlock;
 
-    await setAgentMode(walletAddress, mode as AgentMode);
+    const saved = await setAgentMode(walletAddress, mode as AgentMode);
+    if (!saved) {
+      return NextResponse.json({ error: 'Could not save your agent mode. Please try again.' }, { status: 503 });
+    }
     return NextResponse.json({ ok: true, mode });
   } catch (err) {
     console.error('[agent/mode POST] Error:', err);

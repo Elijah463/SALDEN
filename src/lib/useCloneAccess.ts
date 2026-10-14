@@ -7,7 +7,7 @@
  *
  * ── History, so nobody re-deletes this by accident ─────────────────────
  * This file previously read a contract called `SaldenPayrollFactory` via
- * `NEXT_PUBLIC_PAYROLL_FACTORY_ADDRESS` — a contract that was never
+ * `NEXT_PUBLIC_PAYROLL_FACTORY_ADDRESS`, a contract that was never
  * actually deployed. That env var was unset, so the read always resolved
  * against the zero address and silently fell through to `payrollClone`
  * anyway. Its only caller (ai-agent/page.tsx) removed it, and since that
@@ -16,7 +16,7 @@
  * That deletion surfaced a real, separate gap though: `payrollClone` had
  * NO on-chain fallback at all. It only ever comes from (a) pricing/page.tsx
  * right after a fresh deploy, or (b) whatever was last synced into
- * payrollSetup (IPFS/local storage) — both a CACHE, not a live check. A
+ * payrollSetup (IPFS/local storage), both a CACHE, not a live check. A
  * failed sync, a cleared browser, or a new device all left it empty with
  * nothing to recover it, unlike `registryClone`, which already has this
  * exact kind of self-healing effect in both ai-agent/page.tsx and
@@ -24,16 +24,15 @@
  *
  * The fix was written inline as a duplicated useEffect in both of those
  * pages first. This file replaces both copies with the one, correctly-
- * wired version — reading the REAL, actually-deployed
+ * wired version, reading the REAL, actually-deployed
  * SaldenMultiTokenPayrollFactory via NEXT_PUBLIC_MULTI_TOKEN_FACTORY_ADDRESS
- * (CONTRACTS.MULTI_TOKEN_FACTORY) — so there's exactly one place to
+ * (CONTRACTS.MULTI_TOKEN_FACTORY), so there's exactly one place to
  * maintain if the ABI or contract ever changes, instead of two copies that
  * could quietly drift apart.
  *
  * Usage: call `useCloneAccess()` once per page that needs this (no
  * arguments, matching the hook's original calling convention). It writes
- * straight into AppContext via SET_PAYROLL_CLONE when it finds something —
- * callers keep reading `state.payrollClone` as before; nothing about how
+ * straight into AppContext via SET_PAYROLL_CLONE when it finds something, * callers keep reading `state.payrollClone` as before; nothing about how
  * pages consume the value has changed, only where the fallback lookup
  * itself lives.
  */
@@ -42,20 +41,22 @@ import { useEffect } from 'react';
 import { usePublicClient } from 'wagmi';
 import { useApp } from '@/context/AppContext';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
-import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
+import { CONTRACTS, arcChain } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { readCloneCache, writeCloneCache } from '@/lib/cloneCache';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export function useCloneAccess(): void {
+  // Every page that calls this also gets live subscription status (see useProStatusSync).
+  useProStatusSync();
   const { state, dispatch } = useApp();
   const { payrollClone } = state;
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
 
   useEffect(() => {
-    // Never overrides a value we already have — this is ONLY a fallback
+    // Never overrides a value we already have, this is ONLY a fallback
     // for when payrollSetup's cached/synced value is missing.
     if (payrollClone || !address || !publicClient) return;
     let cancelled = false;
@@ -63,7 +64,7 @@ export function useCloneAccess(): void {
     const RETRY_DELAY_MS = 1200;
 
     (async () => {
-      // ── Cache-first — see lib/serverCloneCache.ts. Same reasoning as the
+      // ── Cache-first, see lib/serverCloneCache.ts. Same reasoning as the
       // registryClone check in dashboard/page.tsx: a cache hit resolves
       // instantly with no RPC call, which is what makes this reliable on a
       // fresh browser/device instead of depending on a cold RPC connection.
@@ -74,7 +75,7 @@ export function useCloneAccess(): void {
           dispatch({ type: 'SET_PAYROLL_CLONE', payload: cached.payrollClone });
           return;
         }
-      } catch { /* cache is best-effort — fall through to the on-chain check */ }
+      } catch { /* cache is best-effort, fall through to the on-chain check */ }
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
@@ -97,13 +98,12 @@ export function useCloneAccess(): void {
             await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
             continue;
           }
-          // Still non-fatal after retries — every page that calls this
+          // Still non-fatal after retries, every page that calls this
           // already handles a missing clone gracefully (free-tier /
           // upgrade-to-premium paths), so an exhausted lookup here just
           // means staying in that same state rather than silently
           // recovering. Matches the registryClone self-healing effect's
-          // error handling right next to where this hook is called —
-          // same retry treatment, for the same reason: a transient RPC
+          // error handling right next to where this hook is called, // same retry treatment, for the same reason: a transient RPC
           // hiccup is more likely on exactly the fresh-page-load moment
           // this fallback exists for, so it's worth a few attempts before
           // giving up rather than treating one failure as final.
@@ -114,4 +114,49 @@ export function useCloneAccess(): void {
 
     return () => { cancelled = true; };
   }, [payrollClone, address, publicClient, dispatch]);
+}
+
+/**
+ * Keeps `isPremiumUser` in step with the chain. Reads the clone's expiry live on every
+ * change, never from a cache, and schedules a re-read for the moment it runs out, so a
+ * session that stays open cannot keep Pro past its end.
+ */
+export function useProStatusSync(): void {
+  const { state, dispatch } = useApp();
+  const { payrollClone } = state;
+  const publicClient = usePublicClient({ chainId: arcChain.id });
+
+  useEffect(() => {
+    if (!payrollClone || !publicClient) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const MAX_TIMER_MS = 2_147_483_000;
+
+    const sync = async () => {
+      try {
+        const expiresAt = Number(await publicClient.readContract({
+          address:      CONTRACTS.MULTI_TOKEN_FACTORY,
+          abi:          MULTI_TOKEN_FACTORY_ABI,
+          functionName: 'proExpiry',
+          args:         [payrollClone as `0x${string}`],
+        }) as bigint);
+        if (cancelled) return;
+        dispatch({ type: 'SET_PRO_STATUS', payload: { expiresAt } });
+
+        const msLeft = expiresAt * 1000 - Date.now();
+        if (msLeft > 0) {
+          timer = setTimeout(sync, Math.min(msLeft + 1000, MAX_TIMER_MS));
+        }
+      } catch {
+        // Unknown is not Pro: keep isPremiumUser as it is and retry shortly.
+        if (!cancelled) timer = setTimeout(sync, 15_000);
+      }
+    };
+
+    void sync();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [payrollClone, publicClient, dispatch]);
 }

@@ -2,21 +2,21 @@
  * @file lib/circle/entitySecret.ts
  * SERVER-SIDE ONLY.
  *
- * Every "critical" (mutating) Circle Wallets endpoint — creating a
+ * Every "critical" (mutating) Circle Wallets endpoint, creating a
  * developer-controlled wallet, executing a contract call on either wallet
- * type, initializing a user-controlled wallet — requires an
+ * type, initializing a user-controlled wallet, requires an
  * `entitySecretCiphertext` field in the request body: the raw 32-byte
  * entity secret, RSA-OAEP(SHA-256) encrypted with Circle's published
  * public key, then base64-encoded. It must be freshly generated for
- * EVERY request — Circle rejects a reused ciphertext as a replay attempt.
+ * EVERY request, Circle rejects a reused ciphertext as a replay attempt.
  * See:
  *   https://developers.circle.com/wallets/dev-controlled/entity-secret-management
  *   https://github.com/circlefin/w3s-entity-secret-sample-code
  *
- * This used to be duplicated (incorrectly — sent as a raw HTTP header,
+ * This used to be duplicated (incorrectly, sent as a raw HTTP header
  * unencrypted) only in agent-wallet.ts. Pulled out here as its own module
  * so both agent-wallet.ts (developer-controlled) and user-wallet.ts
- * (user-controlled — needed once user-controlled wallets started signing
+ * (user-controlled, needed once user-controlled wallets started signing
  * real transactions, not just registering) share one implementation
  * instead of two copies that could drift.
  */
@@ -46,7 +46,7 @@ async function fetchEntityPublicKey(apiKey: string): Promise<string> {
 /**
  * Encrypts CIRCLE_ENTITY_SECRET (32-byte hex string) with Circle's public
  * key using RSA-OAEP/SHA-256, per their documented algorithm. MUST be
- * called fresh for every mutating request — never cache or reuse the
+ * called fresh for every mutating request, never cache or reuse the
  * returned ciphertext, Circle rejects reused ones as replay attempts.
  */
 export async function getEntitySecretCiphertext(): Promise<string> {
@@ -59,7 +59,7 @@ export async function getEntitySecretCiphertext(): Promise<string> {
   const entitySecretBuffer = Buffer.from(entitySecretHex, 'hex');
   if (entitySecretBuffer.length !== 32) {
     throw new Error(
-      `CIRCLE_ENTITY_SECRET must be a 32-byte hex-encoded string (64 hex chars) — got ${entitySecretBuffer.length} bytes.`,
+      `CIRCLE_ENTITY_SECRET must be a 32-byte hex-encoded string (64 hex chars), got ${entitySecretBuffer.length} bytes.`
     );
   }
 
@@ -77,7 +77,7 @@ export async function getEntitySecretCiphertext(): Promise<string> {
   return ciphertext.toString('base64');
 }
 
-// ── Deterministic UUID v5 — Circle requires idempotencyKey to be a real
+// ── Deterministic UUID v5, Circle requires idempotencyKey to be a real
 // UUID, not an arbitrary string. See agent-wallet.ts for the fuller
 // writeup; shared here too since write-challenge creation needs the same
 // treatment.

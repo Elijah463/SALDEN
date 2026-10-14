@@ -4,15 +4,14 @@
  * POST /api/circle/contract-execution-challenge
  * Body: { email, contractAddress, callData, value? }
  *
- * THE current write path for user-controlled (social-login) wallets —
- * replaces /api/circle/sign-transaction-challenge (see that route's
+ * THE current write path for user-controlled (social-login) wallets, * replaces /api/circle/sign-transaction-challenge (see that route's
  * header for why it existed and why it's no longer used). That route
  * was a workaround for wallets created under the generic "Other EVM
  * blockchains" classification, which genuinely doesn't support
  * /user/transactions/contractExecution for user-controlled wallets.
  * Now that lib/circle/user-wallet.ts creates wallets under the real
- * `ARC-TESTNET` chain code (verified against Circle's own supported-
- * blockchains doc — Arc has full Wallets API support, it was never
+ * `ARC` chain code (verified against Circle's own supported-
+ * blockchains doc, Arc has full Wallets API support, it was never
  * actually restricted), contractExecution works directly: Circle
  * handles simulation, gas estimation, signing and broadcasting
  * server-side, and we just create the challenge and hand it to the
@@ -20,10 +19,10 @@
  * executeCircleTransactionChallenge).
  *
  * `callData` (not `abiFunctionSignature`/`abiParameters`) is required
- * here — the caller already has ABI-encoded calldata built by viem's
+ * here, the caller already has ABI-encoded calldata built by viem's
  * encodeFunctionData (see lib/circle/useUniversalWrite.ts), and Circle's
  * docs list callData as an equally valid, mutually-exclusive alternative
- * to abiFunctionSignature — no need for a second, redundant encoding
+ * to abiFunctionSignature, no need for a second, redundant encoding
  * path that could get a signature string wrong.
  */
 
@@ -77,7 +76,7 @@ export async function POST(req: NextRequest) {
     const { session, wallet } = await getUserFirstWallet(email);
 
     if (!wallet) {
-      return NextResponse.json({ error: 'No wallet found for this account yet — finish setting up your wallet first.' }, { status: 400 });
+      return NextResponse.json({ error: 'No wallet found for this account yet, finish setting up your wallet first.' }, { status: 400 });
     }
 
     const challengeId = await createContractExecutionChallenge({

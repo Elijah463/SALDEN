@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file context/AppContext.tsx
- * Global application state — migrated from ThirdWeb to wagmi + Circle.
+ * Global application state, migrated from ThirdWeb to wagmi + Circle.
  * Preserves all existing data patterns: IPFS + encryption + IndexedDB.
  */
 
@@ -51,6 +51,8 @@ interface AppState {
   registryClone:      string | null;
   payrollClone:       string | null;   // premium clone (MultiTokenPayroll)
   isPremiumUser:      boolean;
+  /** Unix seconds when the Pro subscription ends, read live from the factory. null = not read yet. */
+  proExpiresAt:       number | null;
   payrollSetup:       PayrollSetup | null;
   employees:          Employee[];
   groups:             string[];
@@ -61,7 +63,7 @@ interface AppState {
   /** True when checkCidFreshness (via usePayrollSync) has detected that the
    *  on-chain CID hash no longer matches what's currently loaded/cached,
    *  AND there's local data on screen that a silent overwrite could clobber.
-   *  Drives a "Newer data available — Sync now" prompt rather than a silent
+   *  Drives a "Newer data available, Sync now" prompt rather than a silent
    *  background overwrite. */
   syncAvailable:      boolean;
   pendingCid:         string | null;
@@ -75,7 +77,7 @@ type Action =
   | { type: 'SET_ENCRYPTION_KEY'; payload: string }
   | { type: 'SET_REGISTRY';       payload: string }
   | { type: 'SET_PAYROLL_CLONE';  payload: string }
-  | { type: 'SET_PREMIUM';        payload: boolean }
+  | { type: 'SET_PRO_STATUS';     payload: { expiresAt: number } }
   | { type: 'SET_PAYROLL_DATA';   payload: Partial<AppState> }
   | { type: 'SET_EMPLOYEES';      payload: Employee[] }
   | { type: 'SET_GROUPS';         payload: string[] }
@@ -98,6 +100,7 @@ const initial: AppState = {
   registryClone:     null,
   payrollClone:      null,
   isPremiumUser:     false,
+  proExpiresAt:      null,
   payrollSetup:      null,
   employees:         [],
   groups:            [...DEFAULT_GROUPS],
@@ -120,10 +123,17 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, encryptionKey: action.payload, hasSignedMessage: true };
     case 'SET_REGISTRY':
       return { ...state, registryClone: action.payload };
+    // Holding a clone does NOT make a user Pro. Only a live, unexpired subscription does.
     case 'SET_PAYROLL_CLONE':
-      return { ...state, payrollClone: action.payload, isPremiumUser: true };
-    case 'SET_PREMIUM':
-      return { ...state, isPremiumUser: action.payload };
+      return { ...state, payrollClone: action.payload };
+    case 'SET_PRO_STATUS': {
+      const nowSec = Math.floor(Date.now() / 1000);
+      return {
+        ...state,
+        proExpiresAt: action.payload.expiresAt,
+        isPremiumUser: action.payload.expiresAt > nowSec,
+      };
+    }
     case 'SET_PAYROLL_DATA':
       return { ...state, ...action.payload };
     case 'SET_EMPLOYEES':
@@ -169,7 +179,7 @@ interface AppContextValue {
     walletAddress: string;
     /** Pass walletClient.signMessage to enable authenticated sync */
     signMessage?:  (msg: string) => Promise<string>;
-    /** Previous IPFS CID — server unpins it after successful upload */
+    /** Previous IPFS CID, server unpins it after successful upload */
     previousCid?:  string;
   }) => Promise<{ cid?: string }>;
   /** Loads + decrypts previously-synced data from IPFS (via a known CID,
@@ -186,7 +196,7 @@ interface AppContextValue {
    *  round trip. Returns the cached CID hash (if any) so the caller
    *  (usePayrollSync) can cheaply compare it against the on-chain
    *  getCIDHash() to decide whether a background sync is needed. This never
-   *  talks to the network — it only reads local browser storage. */
+   *  talks to the network, it only reads local browser storage. */
   hydrateFromCache: (walletAddress: string) => Promise<{ hydrated: boolean; cid: string | null; cidHash: string | null }>;
   saveTxRecord: (record: Omit<TxRecord, 'walletAddress'>, walletAddress: string) => Promise<void>;
 }
@@ -223,11 +233,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toastTimers.current.set(id, timer);
   }, []);
 
-  // Cached derived encryption key — derived once per session, reset on page reload
+  // Cached derived encryption key, derived once per session, reset on page reload
   const encryptionKeyRef  = useRef<CryptoKey | null>(null);
-  // Track which wallet the cached key belongs to — reset if wallet changes
+  // Track which wallet the cached key belongs to, reset if wallet changes
   const encryptionWallet  = useRef<string | null>(null);
-  // Latest known IPFS CID, shared across every page — keeps "previousCid"
+  // Latest known IPFS CID, shared across every page, keeps "previousCid"
   // bookkeeping correct regardless of which page last synced or loaded data.
   const lastCidRef = useRef<string | null>(null);
 
@@ -244,19 +254,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   /**
    * Fixed, non-timestamped message used ONLY to derive the local data
    * encryption key. Ethereum personal-message signatures are deterministic
-   * (RFC 6979) — signing this exact same string always reproduces the exact
+   * (RFC 6979), signing this exact same string always reproduces the exact
    * same signature (and therefore the exact same derived key) for a given
    * wallet, forever, across every session and device.
    *
    * IMPORTANT: this must NEVER include a timestamp, nonce, or anything else
    * that changes between calls. The auth signature used for sync/load
    * requests (`Salden Sync: {timestamp}`) is intentionally a SEPARATE,
-   * freshly-signed message — reusing it for key material (as a previous
+   * freshly-signed message, reusing it for key material (as a previous
    * version of this file did) meant the derived key rotated on every single
    * sync, permanently locking out any previously-uploaded data.
    */
   const ENCRYPTION_KEY_MESSAGE =
-    'Salden Payroll: sign to derive your local data-encryption key.\n\nThis signature is never sent anywhere — it only unlocks your own encrypted data on this device.';
+    'Salden Payroll: sign to derive your local data-encryption key.\n\nThis signature is never sent anywhere, it only unlocks your own encrypted data on this device.';
 
   /** Derive AES-GCM key from a signature's bytes. */
   async function deriveKeyFromSignature(signature: string): Promise<CryptoKey> {
@@ -286,7 +296,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return key;
   }
 
-  /** Browser-safe base64 encode — no spread operator (avoids call-stack limits on large payloads). */
+  /** Browser-safe base64 encode, no spread operator (avoids call-stack limits on large payloads). */
   function toBase64(input: ArrayBuffer | Uint8Array): string {
     const arr    = input instanceof Uint8Array ? input : new Uint8Array(input);
     let   binary = '';
@@ -318,7 +328,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }
 
-  /** Symmetric counterpart to encryptPayload — decrypts a previously-encrypted blob. */
+  /** Symmetric counterpart to encryptPayload, decrypts a previously-encrypted blob. */
   async function decryptPayload<T = unknown>(
     blob: { iv: string; ciphertext: string; encoding?: string },
     key:  CryptoKey,
@@ -341,17 +351,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     employees?:    Employee[];
     // BUG FIX: without this, a caller that dispatches a payrollSetup
     // update and then immediately calls syncData (same synchronous tick,
-    // no render in between — exactly what handleSaveProfile in
+    // no render in between, exactly what handleSaveProfile in
     // settings/page.tsx does) would have this function read
     // stateRef.current.payrollSetup, which is still the PREVIOUS value:
     // stateRef.current is only updated during a render pass (see
     // `stateRef.current = state` above), and dispatch() doesn't force one
     // synchronously. The result was a real, consistently-reproducible bug
-    // — every profile save silently persisted the company name/email from
+    // every profile save silently persisted the company name/email from
     // BEFORE the save, not the one just typed, which is exactly why it
     // looked "forgotten" on refresh (the correct new value was never
     // actually the one written to IPFS/cache in the first place). Same
-    // fix pattern the `employees` param above already used — just never
+    // fix pattern the `employees` param above already used, just never
     // extended to payrollSetup.
     payrollSetup?: PayrollSetup;
     groups?:       string[];
@@ -386,7 +396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // ── Encryption key: STABLE per wallet, derived from a fixed
           //    message (never the timestamped auth signature above) so the
           //    same key can re-derive and decrypt this data in any future
-          //    session. Cached after first use — only prompts once.
+          //    session. Cached after first use, only prompts once.
           if (encryptionWallet.current !== opts.walletAddress) {
             encryptionKeyRef.current = null;
           }
@@ -418,9 +428,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_SYNC_ERROR',  payload: null });
       dispatch({ type: 'SET_SYNC_AVAILABLE', payload: { available: false, cid: null } });
 
-      // Cache what we just wrote — a syncData call always reflects the
+      // Cache what we just wrote, a syncData call always reflects the
       // current in-memory state, so this is by definition fresh. Encrypted
-      // at rest with the device key (see getOrCreateDeviceKey) — this is
+      // at rest with the device key (see getOrCreateDeviceKey), this is
       // the same employee/salary data the app deliberately encrypts before
       // it ever touches IPFS, so it must not sit in plaintext in
       // IndexedDB either.
@@ -437,8 +447,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             cachedAt:      Date.now(),
           });
         } catch (cacheErr) {
-          // Never let a local-cache write failure surface as a sync failure —
-          // the actual IPFS sync already succeeded at this point.
+          // Never let a local-cache write failure surface as a sync failure, // the actual IPFS sync already succeeded at this point.
           console.warn('[AppContext] Failed to update local payroll cache:', cacheErr);
         }
       }
@@ -456,7 +465,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ── Load data back from IPFS (via a known CID) and hydrate state ────────────
-  // This is the read-side counterpart to syncData — without it, employees /
+  // This is the read-side counterpart to syncData, without it, employees /
   // groups / payrollSetup only ever existed in memory for the current tab,
   // and reset to empty on every reload or new session.
   const loadData = useCallback(async (opts: {
@@ -532,7 +541,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       payload = await decryptPayload(entry.payload, deviceKey);
     } catch (err) {
       // Envelope unreadable (corrupted, or a device key generated by a
-      // different browser profile/environment) — treat as a cache miss
+      // different browser profile/environment), treat as a cache miss
       // rather than crashing the app on a bad local cache entry.
       console.warn('[AppContext] Failed to decrypt local payroll cache, ignoring it:', err);
       return { hydrated: false, cid: null, cidHash: null };

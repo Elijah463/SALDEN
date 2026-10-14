@@ -4,12 +4,12 @@
  *
  * Manages the short-lived session token required by app/api/agent/chat
  * (see lib/agent/auth.ts on the server for the full flow). Tokens are
- * cached in sessionStorage (cleared when the tab closes — deliberately
+ * cached in sessionStorage (cleared when the tab closes, deliberately
  * not localStorage, since this is a bearer credential, even a short-lived
  * one) and re-signed automatically when missing or expired.
  *
  * SESSION_TTL_MS_CLIENT must stay <= the server's actual TTL
- * (lib/agent/auth.ts SESSION_TTL_MS, currently 30 minutes) — kept a
+ * (lib/agent/auth.ts SESSION_TTL_MS, currently 30 minutes), kept a
  * minute under it here so the client never tries to use a token the
  * server has already expired.
  */
@@ -39,7 +39,7 @@ function readCached(walletAddress: string): CachedSession | null {
 
 function writeCached(session: CachedSession): void {
   try { sessionStorage.setItem(storageKey(session.walletAddress), JSON.stringify(session)); }
-  catch { /* sessionStorage unavailable — caller will just re-sign next time */ }
+  catch { /* sessionStorage unavailable, caller will just re-sign next time */ }
 }
 
 function clearCached(walletAddress: string): void {
@@ -49,7 +49,7 @@ function clearCached(walletAddress: string): void {
 export function useAgentSession() {
   // Prevents two concurrent calls from both kicking off a sign request
   // (e.g. two tool calls firing in quick succession before either resolves).
-  // Keyed per wallet address — a single shared ref would incorrectly hand
+  // Keyed per wallet address, a single shared ref would incorrectly hand
   // back wallet A's in-flight sign-in promise to a caller asking for wallet
   // B's token if the connected account changes mid-flow.
   const inFlight = useRef<Map<string, Promise<string>>>(new Map());
@@ -79,13 +79,13 @@ export function useAgentSession() {
         const { message } = await startRes.json() as { message: string };
 
         // Each call gets a fresh, server-issued one-time message (a nonce,
-        // not a fixed string), so — unlike the IPFS encryption-key
-        // signature — this one genuinely can't be cached across calls;
+        // not a fixed string), so, unlike the IPFS encryption-key
+        // signature, this one genuinely can't be cached across calls;
         // only the resulting token can be (see writeCached below). Routes
         // through useUniversalWrite underneath: wagmi's popup for an
         // external wallet, Circle's PIN challenge for social login.
         // Wallet will show the full message including:
-        // "Sign in to the Salden AI Payroll Agent — proves wallet ownership, no payment authorised"
+        // "Sign in to the Salden AI Payroll Agent, proves wallet ownership, no payment authorised"
         const signature = await signMessage(message);
 
         const verifyRes = await fetch(`${API_BASE}/agent/session`, {

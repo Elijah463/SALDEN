@@ -1,14 +1,13 @@
 'use client';
 /**
  * @file components/layout/Footer.tsx
- * Persistent footer — matches the original React version structure exactly.
+ * Persistent footer, matches the original React version structure exactly.
  * Logo · Contacts (X, Discord, GitHub, Dev contact) · Copyright
  */
 
-import Link from 'next/link';
 import { SaldenLogo } from '@/components/shared/Logo';
 
-// ── Social icon SVGs (inline — no Phosphor dependency) ────────────────────────
+// ── Social icon SVGs (inline, no Phosphor dependency) ────────────────────────
 function XIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -35,7 +34,7 @@ function GitHubIcon() {
 
 export function Footer() {
   const twitterCompanyUrl = process.env.NEXT_PUBLIC_TWITTER_COMPANY_URL ?? 'https://x.com/SaldenPayroll';
-  const twitterDevUrl     = process.env.NEXT_PUBLIC_TWITTER_DEV_URL     ?? 'https://x.com/Elijah463_';
+  const docsUrl            = 'https://salden.xyz/docs';
   const githubUrl         = process.env.NEXT_PUBLIC_GITHUB_URL           ?? 'https://github.com/Elijah463/Salden-Dapp';
 
   const linkStyle: React.CSSProperties = {
@@ -129,7 +128,7 @@ export function Footer() {
           <span style={{ color: '#E2E8F0', margin: '0 4px', fontSize: 16 }}>|</span>
 
           <a
-            href={twitterDevUrl}
+            href={docsUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={{ ...linkStyle, color: '#4F46E5' }}
@@ -142,7 +141,7 @@ export function Footer() {
               (e.currentTarget as HTMLAnchorElement).style.background = 'transparent';
             }}
           >
-            Contact Developer
+            Documentation
           </a>
         </div>
 

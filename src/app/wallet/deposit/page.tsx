@@ -1,22 +1,23 @@
 'use client';
 /**
  * @file app/wallet/deposit/page.tsx
- * Deposit options: From Other Wallet (QR + address), With Cards (soon), Via Bank Transfer (soon).
+ * Deposit options: From Other Wallet (QR + address) and Deposit fiat (Circle onramp).
  */
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Copy, CheckCircle2, CreditCard, Building2, Wallet } from 'lucide-react';
+import { ArrowLeft, Copy, CheckCircle2, Banknote, Wallet } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { copyToClipboard } from '@/lib/clipboard';
+import { FiatDepositModal } from '@/components/onramp/FiatDepositModal';
 
 function QRCode({ address }: { address: string }) {
   // Real, scannable QR code (previously a hand-drawn decorative SVG that
-  // wasn't actually encoding the address at all — scanning it with any
+  // wasn't actually encoding the address at all, scanning it with any
   // real QR reader would return nothing usable). Generated client-side via
   // the `qrcode` package (pure JS, no native deps, MIT licensed, the
-  // standard choice for this — github.com/soldair/node-qrcode).
+  // standard choice for this, github.com/soldair/node-qrcode).
   const size = 200;
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
@@ -46,7 +47,7 @@ function QRCode({ address }: { address: string }) {
     }}>
       {error ? (
         <p style={{ fontSize: 12, color: '#94A3B8', textAlign: 'center' }}>
-          Couldn&apos;t generate QR code — use the address below instead.
+          Couldn&apos;t generate QR code, use the address below instead.
         </p>
       ) : dataUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -59,15 +60,15 @@ function QRCode({ address }: { address: string }) {
 }
 
 function OptionTile({
-  icon, label, subtitle, onClick, soon,
+  icon, label, subtitle, onClick, soon, disabled
 }: {
   icon: React.ReactNode; label: string; subtitle?: string;
-  onClick?: () => void; soon?: boolean;
+  onClick?: () => void; soon?: boolean; disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      disabled={soon}
+      disabled={soon || disabled}
       style={{
         width: '100%', textAlign: 'left',
         display: 'flex', alignItems: 'center', gap: 16,
@@ -108,6 +109,7 @@ export default function DepositPage() {
   const { address } = useEffectiveAddress();
   const [view, setView] = useState<'options' | 'qr'>('options');
   const [copied, setCopied] = useState(false);
+  const [fiatOpen, setFiatOpen] = useState(false);
 
   async function handleCopy() {
     if (!address) return;
@@ -118,11 +120,15 @@ export default function DepositPage() {
   return (
     <AppLayout title="Deposit">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {/* Back — styled to match wallet/swap and wallet/bridge's back button */}
+        {/* Back, styled to match wallet/swap and wallet/bridge's back button */}
         <button onClick={() => view === 'qr' ? setView('options') : router.push('/wallet')}
           style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#64748B', fontFamily: 'inherit', padding: 0 }}>
           <ArrowLeft size={15} /> {view === 'qr' ? 'Back' : 'Back to Wallet'}
         </button>
+
+        {fiatOpen && address && (
+          <FiatDepositModal walletAddress={address} onClose={() => setFiatOpen(false)} />
+        )}
 
         {view === 'options' ? (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24 }}>
@@ -137,16 +143,11 @@ export default function DepositPage() {
                 onClick={() => setView('qr')}
               />
               <OptionTile
-                icon={<CreditCard size={20} color="#4F46E5" />}
-                label="With Cards"
-                subtitle="Pay with debit or credit card"
-                soon
-              />
-              <OptionTile
-                icon={<Building2 size={20} color="#4F46E5" />}
-                label="Via Bank Transfer"
-                subtitle="ACH / SWIFT bank transfer"
-                soon
+                icon={<Banknote size={20} color="#4F46E5" />}
+                label="Deposit fiat"
+                subtitle="Card, Apple Pay, Google Pay or bank transfer"
+                onClick={() => setFiatOpen(true)}
+                disabled={!address}
               />
             </div>
           </div>
@@ -154,7 +155,7 @@ export default function DepositPage() {
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24, textAlign: 'center' }}>
             <h2 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>Your Deposit Address</h2>
             <p style={{ fontSize: 14, color: '#64748B', marginBottom: 24 }}>
-              Send USDC on Arc Testnet to this address. Only send supported assets.
+              Send USDC on Arc Network to this address. Only send supported assets.
             </p>
 
             {address ? (

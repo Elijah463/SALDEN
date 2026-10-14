@@ -9,12 +9,13 @@
  *   failed    → red X + "Transaction Failed" + error message + close X
  *
  * For payroll runs split into multiple on-chain batches (recipient count
- * over the active contract's per-transaction cap — see
+ * over the active contract's per-transaction cap, see
  * lib/contracts/batchLimits.ts):
  *   Shows a progress bar: "Batch N of M" + percentage
  */
 
-import { X, CheckCircle2, XCircle, ExternalLink } from 'lucide-react';
+import { X, XCircle, ExternalLink } from 'lucide-react';
+import { SuccessCheck } from '@/components/shared/SuccessCheck';
 import { txLink } from '@/lib/contracts/config';
 
 export interface ExecutionProgress {
@@ -28,15 +29,14 @@ export interface PaymentSummary {
   recipientCount: number;
   amount:         string;  // human-formatted total, e.g. "4.00"
   token:          string;  // "USDC", "EURC", etc.
-  /** USD-equivalent value of `amount` when `token` isn't USDC — e.g. "3.98"
+  /** USD-equivalent value of `amount` when `token` isn't USDC, e.g. "3.98"
    *  to render "worth ~3.98 USDC". Only set once a live price quote is
    *  available (see LI.FI integration); left undefined otherwise, in
    *  which case that line is simply omitted rather than showing a
    *  fabricated/stale conversion. */
   usdEquivalent?: string;
   /** Present when a payroll run exceeded the active contract's
-   *  per-transaction recipient cap (100 standalone / 1,000 premium clone —
-   *  see lib/contracts/batchLimits.ts) and was split into this many
+   *  per-transaction recipient cap (100 standalone / 1,000 premium clone, *  see lib/contracts/batchLimits.ts) and was split into this many
    *  sequential on-chain batches. */
   batchCount?: number;
 }
@@ -46,7 +46,7 @@ interface ExecutionModalProps {
   statusText:  string;
   progress?:   ExecutionProgress | null;
   txHash?:     string;
-  /** All on-chain tx hashes for this run, in order — set when a run was
+  /** All on-chain tx hashes for this run, in order, set when a run was
    *  split into multiple batches. When present and longer than one entry,
    *  this is shown instead of the single `txHash` link below. */
   txHashes?:   string[];
@@ -81,7 +81,7 @@ export function ExecutionModal({ state, statusText, progress, txHash, txHashes, 
         boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
         position: 'relative',
       }}>
-        {/* Close button — only appears after terminal state */}
+        {/* Close button, only appears after terminal state */}
         {showClose && (
           <button onClick={onClose} style={{
             position: 'absolute', top: 16, right: 16,
@@ -104,17 +104,7 @@ export function ExecutionModal({ state, statusText, progress, txHash, txHashes, 
               animation: 'exec-spin 0.9s linear infinite',
             }} />
           )}
-          {state === 'success' && (
-            <div style={{
-              width: 72, height: 72, borderRadius: '50%',
-              background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              margin: '0 auto',
-              animation: 'exec-pop 0.3s cubic-bezier(0.34,1.56,0.64,1)',
-            }}>
-              <CheckCircle2 size={38} color="#fff" fill="#059669" />
-            </div>
-          )}
+          {state === 'success' && <SuccessCheck size={64} />}
           {state === 'failed' && (
             <div style={{
               width: 72, height: 72, borderRadius: '50%',
@@ -142,18 +132,18 @@ export function ExecutionModal({ state, statusText, progress, txHash, txHashes, 
         <p style={{ fontSize: 14, color: '#64748B', marginBottom: progress ? 20 : 0, lineHeight: 1.6 }}>
           {state === 'failed' && error ? error
            : state === 'success' && summary
-             ? `Paid ${summary.recipientCount} employee${summary.recipientCount !== 1 ? 's' : ''} — ${summary.amount} ${summary.token}${summary.batchCount && summary.batchCount > 1 ? ` (in ${summary.batchCount} batches)` : ''}`
+             ? `Paid ${summary.recipientCount} employee${summary.recipientCount !== 1 ? 's' : ''}, ${summary.amount} ${summary.token}${summary.batchCount && summary.batchCount > 1 ? ` (in ${summary.batchCount} batches)` : ''}`
              : statusText}
         </p>
 
-        {/* USD-equivalent line — only shown once a live quote is available for a non-USDC payout */}
+        {/* USD-equivalent line, only shown once a live quote is available for a non-USDC payout */}
         {state === 'success' && summary?.usdEquivalent && summary.token !== 'USDC' && (
           <p style={{ fontSize: 13, color: '#94A3B8', marginTop: -12, marginBottom: 0 }}>
             worth ~{summary.usdEquivalent} USDC
           </p>
         )}
 
-        {/* Batch progress bar — progress.total is the number of on-chain
+        {/* Batch progress bar, progress.total is the number of on-chain
             batches this run needed (1 for the common case of a payroll
             small enough for a single transaction), not the employee count;
             only worth showing once there's genuinely more than one batch
@@ -181,7 +171,7 @@ export function ExecutionModal({ state, statusText, progress, txHash, txHashes, 
           </div>
         )}
 
-        {/* Tx hash(es) on success — a run split into multiple batches shows
+        {/* Tx hash(es) on success, a run split into multiple batches shows
             every batch's hash; otherwise the single hash as before. */}
         {state === 'success' && txHashes && txHashes.length > 1 ? (
           <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>

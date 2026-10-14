@@ -3,7 +3,7 @@
  * CLIENT-SIDE. Companion to lib/analytics.ts (server-only).
  *
  * The only three events a browser is allowed to report, each requiring
- * the on-chain tx that just confirmed as proof — see
+ * the on-chain tx that just confirmed as proof, see
  * app/api/analytics/track/route.ts for the actual verification and why
  * this doesn't need a wallet-signature session. Call this AFTER
  * publicClient.waitForTransactionReceipt() confirms, never before.
@@ -24,5 +24,5 @@ export function trackClientEvent(payload: ClientAnalyticsEvent): void {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(payload),
-  }).catch(() => { /* best-effort — never surfaced to the user */ });
+  }).catch(() => { /* best-effort, never surfaced to the user */ });
 }

@@ -10,7 +10,7 @@
  * The AI agent receives this registry as context so it can
  * refer to tokens by name (e.g., "pay in USDC").
  *
- * USDC is always pre-seeded — it is the primary payroll token.
+ * USDC is always pre-seeded, it is the primary payroll token.
  */
 
 import { CONTRACTS } from '@/lib/contracts/config';
@@ -31,10 +31,10 @@ export type TokenRegistry = Record<string, TokenEntry>;
 // ── Pre-seeded tokens ─────────────────────────────────────────────────────────
 
 // CONTRACTS.USDC comes from NEXT_PUBLIC_USDC_ADDRESS with no hardcoded
-// fallback (by design — see lib/contracts/config.ts). If that env var is
+// fallback (by design, see lib/contracts/config.ts). If that env var is
 // ever unset, CONTRACTS.USDC is `undefined`, and calling .toLowerCase() on
-// it directly here — at module scope, evaluated the instant this file is
-// imported — would crash every single page that transitively imports this
+// it directly here, at module scope, evaluated the instant this file is
+// imported, would crash every single page that transitively imports this
 // module (i.e. the entire app, since AppContext imports it). Guard it so a
 // missing env var degrades to "no pre-seeded token" instead of a hard
 // build-time crash.
@@ -53,7 +53,7 @@ export const DEFAULT_TOKEN_REGISTRY: TokenRegistry = USDC_ADDRESS ? {
 
 /**
  * Real token logos, shared by every page that lists tokens (wallet
- * balances, the send-token dropdown, etc.) — one place to update instead
+ * balances, the send-token dropdown, etc.), one place to update instead
  * of each page hand-drawing its own placeholder icon.
  */
 export const TOKEN_ICON_PATHS: Record<string, string> = {
@@ -63,7 +63,7 @@ export const TOKEN_ICON_PATHS: Record<string, string> = {
 };
 
 /** Icon path for a symbol, or null if there's no real logo for it (caller
- *  should fall back to a generic placeholder — e.g. first-letter circle). */
+ *  should fall back to a generic placeholder, e.g. first-letter circle). */
 export function tokenIconPath(symbol: string): string | null {
   return TOKEN_ICON_PATHS[symbol] ?? null;
 }
@@ -73,7 +73,7 @@ export function tokenIconPath(symbol: string): string | null {
  * rendering every icon at the same <img> width/height still leaves that
  * one looking visibly smaller than the rest. EURC's SVG circle is drawn
  * inside a 24x24 canvas but only spans a 18px-diameter circle centered in
- * it (25% margin on every side — a ~0.75 fill ratio), versus USDC's and
+ * it (25% margin on every side, a ~0.75 fill ratio), versus USDC's and
  * cirBTC's raster logos, which are cropped tight to ~98-100% of their
  * canvas. Multiplying by this scale (while the surrounding container
  * stays clipped to a circle via overflow:hidden) zooms the image in just
@@ -84,7 +84,7 @@ export const TOKEN_ICON_VISUAL_SCALE: Record<string, number> = {
   // EURC previously needed a 1.32x compensation here because its old SVG
   // had ~25% padding baked in. It's since been replaced with the official
   // Circle brand-kit asset (already correctly sized, no internal padding),
-  // so no entry is needed — leaving this empty (rather than deleting the
+  // so no entry is needed, leaving this empty (rather than deleting the
   // mechanism) so it's ready if a future token logo has the same issue.
 };
 
@@ -92,7 +92,7 @@ export const TOKEN_ICON_VISUAL_SCALE: Record<string, number> = {
  *  always square) to visually fill a `containerSize`-px circular slot,
  *  compensating for the source-file padding differences noted above. Pass
  *  the same `containerSize` you use for the wrapping circle's width/height
- *  — the container itself never changes size, only the image inside it. */
+ * the container itself never changes size, only the image inside it. */
 export function tokenIconRenderSize(symbol: string, containerSize: number): number {
   return Math.round(containerSize * (TOKEN_ICON_VISUAL_SCALE[symbol] ?? 1));
 }
@@ -118,7 +118,7 @@ export function upsertToken(
   entry: Omit<TokenEntry, 'addedAt'> & { addedAt?: string },
 ): { registry: TokenRegistry; error: string | null } {
   if (!isValidEthAddress(entry.address)) {
-    return { registry, error: 'Invalid contract address — must be a valid Ethereum address.' };
+    return { registry, error: 'Invalid contract address, must be a valid Ethereum address.' };
   }
   if (!entry.name.trim()) {
     return { registry, error: 'Token name is required.' };
@@ -151,7 +151,7 @@ export function removeToken(
   address: string,
 ): { registry: TokenRegistry; error: string | null } {
   if (USDC_ADDRESS && address.toLowerCase() === USDC_ADDRESS.toLowerCase()) {
-    return { registry, error: 'USDC cannot be removed — it is the primary payroll token.' };
+    return { registry, error: 'USDC cannot be removed, it is the primary payroll token.' };
   }
   const updated = { ...registry };
   delete updated[address.toLowerCase()];
@@ -167,6 +167,6 @@ export function buildTokenContext(registry: TokenRegistry): string {
   const entries = Object.values(registry);
   if (!entries.length) return 'No custom tokens registered.';
   return entries
-    .map(t => `${t.symbol} (${t.name}) — contract: ${t.address}, decimals: ${t.decimals}`)
+    .map(t => `${t.symbol} (${t.name}), contract: ${t.address}, decimals: ${t.decimals}`)
     .join('\n');
 }

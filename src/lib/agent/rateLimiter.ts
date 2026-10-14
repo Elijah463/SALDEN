@@ -3,31 +3,29 @@
  * SERVER-SIDE ONLY.
  *
  * The old design relied entirely on a localStorage counter in
- * ChatInterface.tsx — trivially bypassed by clearing storage, opening
+ * ChatInterface.tsx, trivially bypassed by clearing storage, opening
  * incognito, or calling the API directly. This enforces real limits the
  * server itself checks before ever calling Gemini.
  *
  * Two independent limits, two different shapes on purpose:
  *
- *   GLOBAL_DAILY_LIMIT   — a shared ceiling across every wallet, sized to
+ *   GLOBAL_DAILY_LIMIT, a shared ceiling across every wallet, sized to
  *                          stay under this project's Gemini quota. This one
  *                          genuinely needs to reset once a day at a fixed
  *                          clock time, because that's how Gemini's own
- *                          quota resets — so it keeps the original
+ *                          quota resets, so it keeps the original
  *                          "counter per UTC calendar day" shape.
  *
- *   PER_WALLET limit     — protects a single wallet from hammering the
+ *   PER_WALLET limit, protects a single wallet from hammering the
  *                          endpoint (accidental retry loops, runaway
  *                          scripts, etc.). This one used to be "N requests
- *                          per day, then blocked until midnight UTC" —
- *                          which is a harsh, confusing experience during
+ *                          per day, then blocked until midnight UTC", *                          which is a harsh, confusing experience during
  *                          active testing (one enthusiastic test session
  *                          could lock a wallet out for the rest of the
  *                          day). Replaced with a short sliding window +
  *                          cooldown: once a wallet exceeds the limit
  *                          within WALLET_WINDOW_MS, it's paused for
- *                          WALLET_COOLDOWN_MS and then free to continue —
- *                          no calendar-day lockout.
+ *                          WALLET_COOLDOWN_MS and then free to continue, *                          no calendar-day lockout.
  *
  * ⚠ HONEST LIMITATION (unchanged from before, deliberately not "fixed"
  * here): both limits are in-memory Maps. They work correctly on a single
@@ -36,8 +34,8 @@
  * truly global. This module is a deliberately low-stakes place to accept
  * that tradeoff: under-counting here just means a slightly-too-generous
  * rate limit on rare multi-instance races, never a fund-safety issue (that
- * distinction is exactly why spendLimits.ts and employerLimits.ts — real
- * money and real user configuration, respectively — were upgraded to use
+ * distinction is exactly why spendLimits.ts and employerLimits.ts, real
+ * money and real user configuration, respectively, were upgraded to use
  * lib/kv.ts, while this file, deliberately, was not). If this ever needs
  * to be made strict across instances, swap `_store`/`_walletState` for
  * lib/kv.ts the same way scheduleStore.ts was.
@@ -92,7 +90,7 @@ export const GLOBAL_DAILY_LIMIT = Number(process.env.AGENT_GLOBAL_DAILY_LIMIT ??
 // ── Per-wallet: sliding window + cooldown (NOT a calendar-day limit) ────────
 //
 // NOTE ON THE ENV VAR: this reuses AGENT_PER_WALLET_DAILY_LIMIT rather than
-// introducing a new env var, but its MEANING has changed — it is now "max
+// introducing a new env var, but its MEANING has changed, it is now "max
 // requests allowed inside a WALLET_WINDOW_MS window before a cooldown
 // kicks in", not "max requests per day". If you already have a numeric
 // value set for this in Vercel from the old daily-limit design, re-check
@@ -122,15 +120,15 @@ export interface RateLimitCheck {
   reason?: 'global' | 'wallet_cooldown';
   globalCount: number;
   walletCount: number;
-  /** Only set when reason === 'wallet_cooldown' — how long until this
+  /** Only set when reason === 'wallet_cooldown', how long until this
    *  wallet can send another request. */
   retryAfterSeconds?: number;
 }
 
 /**
- * Checks AND increments in one call — call this once per accepted request,
+ * Checks AND increments in one call, call this once per accepted request
  * before the Gemini call. If `allowed` is false, the counters were NOT
- * incremented for that rejected request (global limit) — the per-wallet
+ * incremented for that rejected request (global limit), the per-wallet
  * cooldown, once tripped, stays tripped regardless of further calls until
  * it naturally expires, which is the whole point of a cooldown.
  */
@@ -152,7 +150,7 @@ export function checkAndConsumeRateLimit(walletAddress: string): RateLimitCheck 
   let state = _walletState.get(wallet);
 
   if (state && state.cooldownUntil > now) {
-    // Still serving a cooldown from a previous breach — reject without
+    // Still serving a cooldown from a previous breach, reject without
     // touching the count further.
     return {
       allowed: false,
@@ -164,7 +162,7 @@ export function checkAndConsumeRateLimit(walletAddress: string): RateLimitCheck 
   }
 
   if (!state || now - state.windowStart > WALLET_WINDOW_MS) {
-    // No state yet, or the previous window fully elapsed — start fresh.
+    // No state yet, or the previous window fully elapsed, start fresh.
     state = { windowStart: now, count: 1, cooldownUntil: 0 };
     _walletState.set(wallet, state);
   } else {

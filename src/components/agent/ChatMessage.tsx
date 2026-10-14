@@ -5,11 +5,12 @@
  */
 
 import { useState, Fragment } from "react";
+import AgentThinking from "./AgentThinking";
 
 // The agent's system prompt tells it to use **bold** for emphasis (e.g.
-// "**All Employees**"), but nothing was ever parsing it — it rendered as
+// "**All Employees**"), but nothing was ever parsing it, it rendered as
 // literal asterisks in the chat bubble. This is intentionally minimal:
-// just **bold**, matching the one markdown construct the prompt actually
+// just **bold** matching the one markdown construct the prompt actually
 // asks the model to use, not a full markdown renderer.
 function renderWithBold(text: string) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
@@ -33,14 +34,18 @@ export interface MessageProps {
   content:    string;
   toolCalls?: ToolCallDisplay[];
   isLoading?: boolean;
+  /** The user message this reply answers; drives the thinking-stage wording. */
+  thinkingText?: string;
+  /** Live status from the server stream; when present it replaces the estimated stages. */
+  agentStatus?: string;
   timestamp?: string;
-  /** Metadata-only (name + type) — shown as a small chip above the bubble
+  /** Metadata-only (name + type), shown as a small chip above the bubble
    *  so a sent file doesn't just vanish from the chat log. */
   attachment?: { fileName: string; mimeType: string };
 }
 
 // Keyed by the real Gemini function-calling tool names (see
-// lib/agent/tools.ts) — this previously listed names from an older,
+// lib/agent/tools.ts), this previously listed names from an older
 // pre-function-calling design (see that file's own header comment on what
 // replaced it) that never matched any real tool call, so every badge fell
 // through to the generic gear-icon fallback below regardless of which
@@ -49,7 +54,6 @@ const TOOL_META: Record<string, { label: string; icon: string }> = {
   get_balance:                 { label: "Checked Balance",       icon: "💳" },
   check_ofac_compliance:       { label: "Compliance Check",      icon: "🛡️"  },
   get_transaction_status:      { label: "Checked Transaction",   icon: "🔍" },
-  request_faucet:              { label: "Faucet Request",        icon: "🚰" },
   propose_unlisted_payment:    { label: "Proposed Payment",      icon: "💰" },
   propose_add_employee:        { label: "Proposed Add Employee", icon: "👤" },
   propose_payroll_run:         { label: "Proposed Payroll Run",  icon: "💸" },
@@ -152,7 +156,7 @@ function TypingIndicator() {
   );
 }
 
-export default function ChatMessage({ role, content, toolCalls, isLoading, timestamp, attachment }: MessageProps) {
+export default function ChatMessage({ role, content, toolCalls, isLoading, thinkingText, agentStatus, timestamp, attachment }: MessageProps) {
   const isUser = role === "user";
 
   return (
@@ -169,7 +173,7 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
           flexShrink: 0,
         }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/images/ai-avatar.png" alt="" width={64} height={64} style={{ objectFit: "contain" }} />
+          <img src="/images/iris-avatar.png" alt="" width={64} height={64} style={{ objectFit: "contain" }} />
         </div>
       )}
 
@@ -200,7 +204,7 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, times
           whiteSpace:   "pre-wrap" as const,
           wordBreak:    "break-word" as const,
         }}>
-          {isLoading ? <TypingIndicator /> : renderWithBold(content)}
+          {isLoading ? <AgentThinking userText={thinkingText ?? ""} status={agentStatus} /> : renderWithBold(content)}
         </div>
         {timestamp && (
           <div style={{

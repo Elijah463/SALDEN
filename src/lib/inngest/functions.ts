@@ -5,13 +5,13 @@
  * Two Inngest functions that together replace
  * app/api/agent/cron/run-schedules/route.ts's Vercel-Cron-triggered loop:
  *
- *   1. checkDueSchedules   — cron-triggered (`* /15 * * * *`), finds due
+ *   1. checkDueSchedules, cron-triggered (`* /15 * * * *`), finds due
  *      schedules and fans out one `agent/schedule.execute` event per
  *      schedule. Does no money-moving itself.
- *   2. executeScheduledPayment — event-triggered, does the actual
+ *   2. executeScheduledPayment, event-triggered, does the actual
  *      multi-step execution for exactly one schedule: re-resolves the
  *      agent wallet + payroll clone from first principles (never trusts
- *      the snapshotted values on the schedule object — same rule the old
+ *      the snapshotted values on the schedule object, same rule the old
  *      route.ts enforced, see agentIdentity.ts), runs a compliance check
  *      per recipient that fails closed on error, submits the payment, and
  *      polls for on-chain confirmation using step.run + step.sleep so the
@@ -20,17 +20,17 @@
  * ── The bug this design specifically avoids ─────────────────────────────
  * markScheduleRun() (scheduleStore.ts) looks a schedule up from an
  * in-memory Map before mutating it. That Map is a same-instance,
- * best-effort fast path — it is NOT guaranteed to contain the schedule on
+ * best-effort fast path, it is NOT guaranteed to contain the schedule on
  * whatever instance ends up running a given Inngest step (checkpointed
  * steps, retries, and the cron vs. execute functions themselves can all
  * land on different Vercel instances). If markScheduleRun() silently
  * no-ops because the Map lookup misses, the schedule's `nextRunAt` never
- * advances and `status` never becomes 'completed'/'failed' — so the very
+ * advances and `status` never becomes 'completed'/'failed', so the very
  * next cron tick sees it as still due and pays it again. This file never
  * calls markScheduleRun(). Every completion path below builds the full
  * updated AgentSchedule record from data already in hand (the `schedule`
  * object carried in the event payload, plus this run's own results) via
- * buildUpdatedRecord(), and writes it with upsertSchedule() — which does
+ * buildUpdatedRecord(), and writes it with upsertSchedule(), which does
  * a real KV/in-memory write keyed by wallet+id, not a Map lookup-then-
  * mutate.
  *
@@ -39,7 +39,7 @@
  * best-effort and falls back to a bare in-memory Map when no KV store is
  * attached to this Vercel project. That in-memory Map is exactly as
  * unreliable across Inngest's serverless invocations as it was across
- * Vercel Cron's — arguably more likely to matter, since Inngest may
+ * Vercel Cron's, arguably more likely to matter, since Inngest may
  * schedule the cron function and each execute function on different
  * instances more often than Vercel Cron did. If a KV store is not
  * attached, getDueSchedules() may see an empty store on whatever instance
@@ -48,18 +48,19 @@
  * production; see scheduleStore.ts for the exact env vars it reads.
  */
 
-import { getAddress, parseUnits, encodeFunctionData, keccak256 } from 'viem';
+import { getAddress, parseUnits, formatUnits, encodeFunctionData, keccak256 } from 'viem';
 import { inngest } from './client';
 import type { AgentSchedule } from '@/lib/db/indexeddb';
 import { getDueSchedules, upsertSchedule, computeNextRun } from '@/lib/agent/scheduleStore';
 import { resolveAgentWallet, resolvePayrollClone } from '@/lib/agent/agentIdentity';
 import { executeCheckOfacCompliance } from '@/lib/agent/toolExecutors';
-import { checkAndTopUpBalance, ALLOWANCE_CEILING_USDC } from '@/lib/agent/autonomousExecution';
+import { checkAgentBalance } from '@/lib/agent/autonomousExecution';
+import { reserveSpendForRun, releaseSpend, checkSpendLimit, spendBlockMessage } from '@/lib/agent/spendLimits';
 import { executeContractCall, getTxStatus } from '@/lib/circle/agent-wallet';
 import { isCircleTxTerminal, isCircleTxSuccess } from '@/lib/circle/txState';
 import { MEMO_CONTRACT_ADDRESS, MULTI_TOKEN_PAYROLL_ABI } from '@/lib/contracts/abis';
 import { getCachedApproval, setCachedApproval } from '@/lib/approvals/approvalCache';
-import { arcTestnet } from '@/lib/contracts/config';
+import { arcChain } from '@/lib/contracts/config';
 import { sendPayrollReceiptEmail } from '@/lib/email/sendPayrollReceiptEmail';
 import { track } from '@/lib/analytics';
 
@@ -70,24 +71,24 @@ interface ScheduleExecuteEventData {
 }
 
 // Bounded, non-blocking confirmation windows. Each attempt is one
-// step.run (a fast Circle status check) followed by one step.sleep — the
+// step.run (a fast Circle status check) followed by one step.sleep, the
 // sleep costs zero Vercel compute, so these windows can be generous
 // without risking a function timeout the way the old route.ts's blocking
 // setTimeout-based polling did (see autonomousExecution.ts's own timeout
-// note). Tuned for Arc Testnet block times; raise if mainnet confirmation
+// note). Tuned for Arc Network block times; raise if mainnet confirmation
 // is meaningfully slower.
 const APPROVE_POLL_ATTEMPTS = 20; // 20 × 5s = up to 100s
 const PAY_POLL_ATTEMPTS     = 30; // 30 × 5s = up to 150s
 const POLL_SLEEP            = '5s';
 
 // Keep in sync with the `retries` option on executeScheduledPayment below
-// — used to detect "this is the last attempt" in the catch-all handler.
+// used to detect "this is the last attempt" in the catch-all handler.
 const MAX_RETRIES = 2;
 
 // ── Shared record-building helper ───────────────────────────────────────
 // The ONE place either function writes a schedule's result. Builds the
-// complete next AgentSchedule from the schedule already in hand — never
-// reads scheduleStore's internal in-memory Map — then persists it via
+// complete next AgentSchedule from the schedule already in hand, never
+// reads scheduleStore's internal in-memory Map, then persists it via
 // upsertSchedule(). Mirrors markScheduleRun()'s exact status/nextRunAt
 // rules so behavior is unchanged from the reader's point of view; only
 // the (unsafe, in-memory-Map-dependent) lookup mechanism is different.
@@ -105,10 +106,10 @@ function buildUpdatedRecord(
   if (result.status === 'failed') {
     updated.status = 'failed';
   } else if (result.nextRunAt) {
-    updated.nextRunAt = result.nextRunAt; // recurring — schedule the next run
+    updated.nextRunAt = result.nextRunAt; // recurring, schedule the next run
     updated.status = 'active';
   } else {
-    updated.status = 'completed'; // one-off — done
+    updated.status = 'completed'; // one-off, done
   }
   return updated;
 }
@@ -130,7 +131,7 @@ export const checkDueSchedules = inngest.createFunction(
 
     // Idempotent event IDs (schedule id + the nextRunAt it was due at) so
     // that if this cron step is ever retried by Inngest for an unrelated
-    // transient reason, the SAME due tick doesn't fan out twice — Inngest
+    // transient reason, the SAME due tick doesn't fan out twice, Inngest
     // dedupes events by id, only the first triggers a run. Once the
     // schedule's nextRunAt actually advances (a genuinely new due tick),
     // the id changes too, so real future runs are never suppressed.
@@ -153,7 +154,7 @@ export const executeScheduledPayment = inngest.createFunction(
   async ({ event, step, attempt }) => {
     const schedule = (event.data as ScheduleExecuteEventData).schedule;
 
-    // Local, closure-capturing poll helper — step.run + step.sleep only,
+    // Local, closure-capturing poll helper, step.run + step.sleep only
     // never a blocking wait. Returns null if the window is exhausted
     // without reaching a terminal (CONFIRMED/FAILED) state.
     async function pollForConfirmation(
@@ -168,7 +169,7 @@ export const executeScheduledPayment = inngest.createFunction(
             return { state: result.state, txHash: result.txHash };
           } catch {
             // A transient Circle API hiccup on the STATUS CHECK itself is
-            // not the same as the transaction failing — treat it as "no
+            // not the same as the transaction failing, treat it as "no
             // new information yet" and let the loop try again after the
             // next sleep, rather than failing the whole payment over a
             // flaky read.
@@ -183,7 +184,7 @@ export const executeScheduledPayment = inngest.createFunction(
     }
 
     try {
-      // ── Resolve agent wallet server-side — never trust the snapshot ──────
+      // ── Resolve agent wallet server-side, never trust the snapshot ──────
       const agent = await step.run('resolve-agent-wallet', async () => resolveAgentWallet(schedule.walletAddress));
       if (!agent) {
         await step.run('mark-failed-no-wallet', async () => {
@@ -212,23 +213,23 @@ export const executeScheduledPayment = inngest.createFunction(
         return { scheduleId: schedule.id, ok: false, reason: 'no-payroll-clone' as const };
       }
       // Reaching here means either isSingleTransfer is true, or
-      // payrollCloneAddress is non-null — the guard just above is the only
+      // payrollCloneAddress is non-null, the guard just above is the only
       // place that returns early for the one case where neither holds.
       // Everything below that branches on `!isSingleTransfer` only ever
       // runs in the second case, so this is a genuinely proven non-null
       // value. TypeScript can't trace that relationship between two
       // separately-computed values this far through the function (or
       // through the step.run closures further down), which is what
-      // Vercel's build was correctly catching — but this `as` is backed by
+      // Vercel's build was correctly catching, but this `as` is backed by
       // the runtime check directly above it, not a bare assertion. Used in
       // place of payrollCloneAddress everywhere below.
       const spenderAddress = payrollCloneAddress as `0x${string}`;
 
-      // ── Compliance / OFAC screening — fails CLOSED on error ──────────────
+      // ── Compliance / OFAC screening, fails CLOSED on error ──────────────
       // Every recipient must come back explicitly "not sanctioned". If the
       // check for ANY recipient errors (provider unavailable, bad network,
       // etc.) that recipient is treated as blocked, exactly like a positive
-      // hit — an agent autonomously moving real funds must never proceed on
+      // hit, an agent autonomously moving real funds must never proceed on
       // "we couldn't tell".
       const compliance = await step.run('compliance-check', async () => {
         const blocked: string[] = [];
@@ -257,9 +258,9 @@ export const executeScheduledPayment = inngest.createFunction(
       const amounts = schedule.resolvedPayments.map((p) => parseUnits(p.amount, decimals));
       const totalNeeded = amounts.reduce((sum, a) => sum + a, 0n);
 
-      // ── Balance check (+ one testnet faucet retry) ───────────────────────
+      // ── Balance check  ───────────────────────
       const balanceCheck = await step.run('check-balance', async () => {
-        const result = await checkAndTopUpBalance({
+        const result = await checkAgentBalance({
           agentWalletAddress: agent.address,
           tokenAddress:        schedule.tokenAddress!,
           tokenDecimals:       decimals,
@@ -279,28 +280,28 @@ export const executeScheduledPayment = inngest.createFunction(
       if (!isSingleTransfer) {
         // Consults the same unified approval cache every other approval
         // flow in the app now uses (lib/approvals/approvalCache.ts) instead
-        // of a live on-chain read — the agent wallet's address is a
+        // of a live on-chain read, the agent wallet's address is a
         // distinct cache key from any human user's wallet, so this can't
         // collide with a different flow's cached entry. Still wrapped in
         // its own step.run so a mid-function crash/retry doesn't need to
-        // repeat the (cheap, side-effect-free) cache read from scratch —
-        // consistent with the rest of this workflow's step boundaries.
+        // repeat the (cheap, side-effect-free) cache read from scratch, // consistent with the rest of this workflow's step boundaries.
         const allowanceStr = await step.run('read-allowance', async () => {
           const cached = await getCachedApproval(
-            arcTestnet.id, agent.address, schedule.tokenAddress!, spenderAddress,
+            arcChain.id, agent.address, schedule.tokenAddress!, spenderAddress
           );
           return cached.amount.toString();
         });
         const allowance = BigInt(allowanceStr);
 
         if (allowance < totalNeeded) {
-          const ceilingAmount = parseUnits(ALLOWANCE_CEILING_USDC, decimals);
+          // Approve exactly what this schedule needs (no fixed ceiling).
+          const approveAmount = totalNeeded;
           const approveTx = await step.run('submit-approve-tx', async () => {
             const tx = await executeContractCall({
               walletId:             agent.walletId,
               contractAddress:      schedule.tokenAddress!,
               abiFunctionSignature: 'approve(address,uint256)',
-              abiParameters:        [spenderAddress, ceilingAmount.toString()],
+              abiParameters:        [spenderAddress, approveAmount.toString()],
               idempotencyKey:       `${idempotencyKeyBase}-approve`,
             });
             return { id: tx.id, txHash: tx.txHash };
@@ -318,20 +319,39 @@ export const executeScheduledPayment = inngest.createFunction(
           }
 
           // Only cache once actually confirmed on-chain (the poll above
-          // succeeded) — see lib/approvals/approvalCache.ts's header on why
+          // succeeded), see lib/approvals/approvalCache.ts's header on why
           // caching an amount that never lands would make the next
           // scheduled run wrongly skip an approve it still needs. Its own
           // step.run so a crash right after this point doesn't re-submit a
-          // second approve tx on retry — Inngest just replays the already-
+          // second approve tx on retry, Inngest just replays the already-
           // memoized 'submit-approve-tx' result and re-runs this cheap
           // write instead.
           await step.run('cache-approval', async () => {
-            await setCachedApproval(arcTestnet.id, agent.address, schedule.tokenAddress!, spenderAddress, ceilingAmount);
+            await setCachedApproval(arcChain.id, agent.address, schedule.tokenAddress!, spenderAddress, approveAmount);
           });
         }
       }
 
       // ── Submit the actual payment ─────────────────────────────────────────
+      // Employer daily limit: reserve atomically before anything is submitted.
+      // Keyed by this run's idempotency key, so a retried step returns the
+      // existing reservation instead of counting the same payment twice.
+      const reservation = await step.run('reserve-spend', async () => {
+        const amountUsd = Number(formatUnits(totalNeeded, decimals));
+        const r = await reserveSpendForRun(schedule.walletAddress, amountUsd, idempotencyKeyBase);
+        if (!r) {
+          const check = await checkSpendLimit(schedule.walletAddress, amountUsd);
+          return { ok: false as const, error: spendBlockMessage(check) };
+        }
+        return { ok: true as const, key: r.key, micro: r.micro };
+      });
+      if (!reservation.ok) {
+        await step.run('mark-failed-spend-limit', async () => {
+          await upsertSchedule(buildFailedRecord(schedule));
+        });
+        return { scheduleId: schedule.id, ok: false, reason: 'daily-limit' as const, error: reservation.error };
+      }
+
       const payTx = isSingleTransfer
         ? await step.run('submit-transfer-tx', async () => {
             const recipient = getAddress(schedule.resolvedPayments![0].address);
@@ -366,7 +386,7 @@ export const executeScheduledPayment = inngest.createFunction(
             return { id: tx.id, txHash: tx.txHash };
           });
 
-      // ── Wait for confirmation — step.run + step.sleep, never blocking ────
+      // ── Wait for confirmation, step.run + step.sleep, never blocking ────
       const payResult = await pollForConfirmation('pay', payTx.id, PAY_POLL_ATTEMPTS);
 
       if (!payResult) {
@@ -376,11 +396,15 @@ export const executeScheduledPayment = inngest.createFunction(
         return {
           scheduleId: schedule.id, ok: false, reason: 'confirmation-timed-out' as const,
           txHash: payTx.txHash,
-          note: 'Submitted but not confirmed within the monitoring window — check the block explorer before assuming it failed; funds may still have moved.',
+          note: 'Submitted but not confirmed within the monitoring window, check the block explorer before assuming it failed; funds may still have moved.'
         };
       }
 
       if (payResult.state === 'FAILED') {
+        // The payment reverted, so nothing moved: return the reservation.
+        await step.run('release-spend-revert', async () => {
+          await releaseSpend({ key: reservation.key, micro: reservation.micro });
+        });
         await step.run('mark-failed-onchain-revert', async () => {
           await upsertSchedule(buildFailedRecord(schedule, payResult.txHash));
         });
@@ -402,7 +426,7 @@ export const executeScheduledPayment = inngest.createFunction(
               abiParameters:        ['0x0000000000000000000000000000000000000000', '0x', keccak256(memoHex), memoHex],
               idempotencyKey:       `${idempotencyKeyBase}-memo`,
             });
-          } catch { /* purely informational — never surface this failure */ }
+          } catch { /* purely informational, never surface this failure */ }
           return { attempted: true };
         });
       }
@@ -426,7 +450,7 @@ export const executeScheduledPayment = inngest.createFunction(
         });
       });
 
-      // ── Payroll receipt email — skip gracefully, never fail the run ──────
+      // ── Payroll receipt email, skip gracefully, never fail the run ──────
       await step.run('send-payroll-receipt-email', async () => {
         if (!schedule.recipientEmail) return { skipped: true, reason: 'no-recipient-email' as const };
         return sendPayrollReceiptEmail({
@@ -446,11 +470,10 @@ export const executeScheduledPayment = inngest.createFunction(
     } catch (err) {
       // Catch-all: only fires after this invocation's own step retries
       // (network blips inside a step, etc.) have already been exhausted
-      // AND this is the LAST function-level attempt Inngest will make —
-      // otherwise re-throw so Inngest's normal retry can proceed. This
+      // AND this is the LAST function-level attempt Inngest will make, // otherwise re-throw so Inngest's normal retry can proceed. This
       // exists so a genuinely broken schedule (bad data, a permanently
-      // failing dependency) gets marked 'failed' — and therefore stops
-      // matching getDueSchedules()'s `status === 'active'` filter — instead
+      // failing dependency) gets marked 'failed', and therefore stops
+      // matching getDueSchedules()'s `status === 'active'` filter, instead
       // of silently retrying forever and re-fanning-out every 15 minutes.
       if (attempt >= MAX_RETRIES) {
         await step.run('mark-failed-unexpected-error', async () => {

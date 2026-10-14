@@ -2,14 +2,14 @@
  * @file app/api/circle/tx-status/route.ts
  *
  * GET /api/circle/tx-status?transactionId=X
- * GET /api/circle/tx-status?walletId=X            (fallback — see user-wallet.ts)
+ * GET /api/circle/tx-status?walletId=X            (fallback, see user-wallet.ts)
  *
  * Polled by the client after a Circle challenge completes, to find out
  * whether the resulting transaction actually confirmed on-chain or
- * reverted — this is the SAME "don't just trust that a promise resolved,
+ * reverted, this is the SAME "don't just trust that a promise resolved
  * check the real status" principle as waitForSuccessfulReceipt() (see
  * lib/txReceipt.ts) for the external-wallet path. No entity secret
- * needed here — this is a read-only status check, not a mutation.
+ * needed here, this is a read-only status check, not a mutation.
  */
 
 import { NextRequest, NextResponse } from 'next/server';

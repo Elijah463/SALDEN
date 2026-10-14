@@ -4,7 +4,7 @@ export const metadata: Metadata = {
   title: 'Settings',
   description: 'Manage your company profile, employee groups, smart contract configuration, and account preferences.',
   openGraph: {
-    title:       'Salden — Settings',
+    title:       'Salden, Settings',
     description: 'Configure your Salden payroll account, company profile, and contract settings.',
     images:      [{ url: '/images/og-image.jpg', width: 1512, height: 756 }],
   },

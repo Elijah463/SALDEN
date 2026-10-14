@@ -24,7 +24,7 @@ import { friendlyErrorMessage } from '@/lib/errorMessage';
 const OTP_LENGTH      = 6;
 const RESEND_COOLDOWN = 30;
 
-// Stores a complete, verified session — via the shared setStoredSession
+// Stores a complete, verified session, via the shared setStoredSession
 // helper so every already-mounted useEffectiveAddress() instance in this
 // tab picks up the change immediately (a raw localStorage.setItem would
 // leave them on the previous session until they happen to remount).
@@ -40,9 +40,8 @@ function storeSession(email: string, walletAddress: string) {
 export function OTPForm() {
   const router  = useRouter();
   const params  = useSearchParams();
-  // BUG FIX — normalized here, at the source, so every use below (OTP
-  // verification, /api/auth/email-wallet, and — critically —
-  // storeSession()) is guaranteed to match the normalized identity Circle
+  // BUG FIX, normalized here, at the source, so every use below (OTP
+  // verification, /api/auth/email-wallet, and, critically, // storeSession()) is guaranteed to match the normalized identity Circle
   // was actually created/looked-up under server-side. See
   // components/auth/LoginModal.tsx's handleEmailSubmit() for the full
   // writeup of the bug this caused ("No wallet found" for accounts that
@@ -144,14 +143,14 @@ export function OTPForm() {
         return;
       }
 
-      // Returning user — wallet already exists
+      // Returning user, wallet already exists
       if (!walletData.isNewUser && walletData.walletAddress) {
         storeSession(email, walletData.walletAddress);
         router.push('/dashboard');
         return;
       }
 
-      // New user — execute Circle SDK challenge (user sets PIN)
+      // New user, execute Circle SDK challenge (user sets PIN)
       if (
         walletData.isNewUser &&
         walletData.challengeId &&
@@ -178,7 +177,7 @@ export function OTPForm() {
         return;
       }
 
-      // Fallback — store partial session
+      // Fallback, store partial session
       setStoredSession({ email, walletAddress: undefined, loginMethod: 'email', createdAt: Date.now() });
       router.push('/dashboard');
 
@@ -228,7 +227,7 @@ export function OTPForm() {
       minHeight: '100vh', background: '#F8F9FA',
       padding: '28px 24px',
     }}>
-      {/* Logo — top-left, not centered */}
+      {/* Logo, top-left, not centered */}
       <div style={{ marginBottom: 48 }}>
         <SaldenLogo size={30} />
       </div>

@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
 
     if (!wallet) {
       return NextResponse.json(
-        { error: 'Wallet not ready yet — challenge may not be complete' },
-        { status: 404 }
+        { error: 'Wallet not ready yet, challenge may not be complete' },
+        { status: 404 },
       );
     }
 

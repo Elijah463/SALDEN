@@ -1,9 +1,9 @@
 # SALDEN A Smart Onchain Payroll
 
-> Smart Premium payroll infrastructure built on Arc Network. Batch payments, AI automation, encrypted employee records,Schedule Payments, Recurring Payments and built-in compliance all in one platform.
+> Smart payroll infrastructure built on Arc Network. Batch payments, AI automation, encrypted employee records,Schedule Payments, Recurring Payments and built-in compliance all in one platform.
 
 [![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?logo=vercel)](https://app.salden.xyz)
-[![Network](https://img.shields.io/badge/Network-ARC%20Testnet-4F46E5)](https://testnet.arcscan.app)
+[![Network](https://img.shields.io/badge/Network-Arc%20Network-4F46E5)](https://explorer.arc.io)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue)](./LICENSE)
 
 ---
@@ -18,7 +18,7 @@ Salden leverages Circle’s programmable stablecoin technology to allow seemless
 
 ## Features
 
-| Feature | Free | Premium |
+| Feature | Free | Salden Pro |
 |---|---|---|
 | Onchain batch payroll (USDC) | Up to 100 employees | Up to 1,000 employees |
 | Encrypted IPFS employee registry | ✓ | ✓ |
@@ -29,7 +29,7 @@ Salden leverages Circle’s programmable stablecoin technology to allow seemless
 | Multi-token support (any ERC-20) | | ✓ |
 | AI Agent with scheduling | | ✓ |
 | Emergency withdrawal | | ✓ |
-| Cost | Free | $10 testnet USDC |
+| Cost | Free | $1.99 USDC per year |
 
 ---
 
@@ -45,21 +45,21 @@ Salden leverages Circle’s programmable stablecoin technology to allow seemless
 
 ## AI Agent
 
-The AI Payroll Agent is a Premium feature that brings full autonomy to your payroll workflow. It handles recurring and scheduled payroll runs, screens compliance before every execution, logs every action with structured audit trails, and never acts on ambiguous instructions it asks first.
+The AI Payroll Agent is a Salden Pro feature that brings full autonomy to your payroll workflow. It handles recurring and scheduled payroll runs, screens compliance before every execution, logs every action with structured audit trails, and never acts on ambiguous instructions it asks first.
 
 ---
 
 ## Network
 
-Salden is deployed on ARC Testnet.
+Salden is deployed on Arc Network.
 
 | Property | Value |
 |---|---|
-| Network Name | ARC Testnet |
-| RPC URL | https://rpc.testnet.arc.network |
-| Chain ID | 5042002 |
+| Network Name | Arc Network |
+| RPC URL | https://rpc.mainnet.arc.io |
+| Chain ID | 5042 |
 | Currency Symbol | USDC |
-| Block Explorer | https://testnet.arcscan.app |
+| Block Explorer | https://explorer.arc.io |
 
 ---
 
@@ -70,9 +70,9 @@ Salden is deployed on ARC Testnet.
 | SaldenEnterprisePayroll | `0x32B2b3F9EAA03F942B4d170d6343fdb27a795D87` |
 | SaldenMultiTokenPayrollFactory | `0x3dB2362b5a4029ed116955c05A42B910aA80851d` |
 | SaldenRegistryFactory | `0x5e9dDD4bc4aC8ae17263061275Bd319b4a09bDB5` |
-| USDC (ARC Testnet) | `0x3600000000000000000000000000000000000000` |
+| USDC (Arc Network) | `0x3600000000000000000000000000000000000000` |
 
-Verify on [ArcScan](https://testnet.arcscan.app).
+Verify on [ArcScan](https://explorer.arc.io).
 
 ---
 
@@ -93,6 +93,5 @@ Full license text available at [gnu.org/licenses/agpl-3.0](https://www.gnu.org/l
 
 - [Live App](https://app.salden.xyz)
 - [Documentation](https://app.salden.xyz/docs)
-- [ArcScan Explorer](https://testnet.arcscan.app)
-- [ARC Testnet Faucet](https://faucet.circle.com)
+- [ArcScan Explorer](https://explorer.arc.io)
 - [Twitter / X](https://x.com/Salden_xyz)

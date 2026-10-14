@@ -4,7 +4,7 @@
  *
  * Real cross-chain bridge using Circle Arc App Kit (kit.bridge()) + CCTP v2.
  * Execution stays entirely on Circle's forwarder-only CCTP bridge (already
- * built here) — LI.FI is used only for the supplementary "≈ $X.XX" price
+ * built here), LI.FI is used only for the supplementary "≈ $X.XX" price
  * hint below the amount, never for routing or execution. USDC-to-USDC CCTP
  * transfers are 1:1 (no exchange rate to quote), so that's the extent of
  * what a pricing service adds here.
@@ -15,47 +15,47 @@
  * Forwarder / gasless destination:
  *   Circle's Orbit relayer handles attestation and minting on the destination
  *   chain automatically. Users do NOT need gas tokens on the destination chain.
- *   We use "forwarder-only" mode: the `to` object has no adapter — just
+ *   We use "forwarder-only" mode: the `to` object has no adapter, just
  *   { chain, recipientAddress }. Circle's infrastructure mints USDC directly
  *   to the recipient without requiring them to sign or pay on the destination.
  *
- * Supported chains (any pair, either direction) — confirmed against Circle's
+ * Supported chains (any pair, either direction), confirmed against Circle's
  * official @circle-fin/bridge-kit package listing (21 supported CCTP
- * testnets, all six of these included):
- *   Arc Testnet, Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia,
- *   Avalanche Fuji, Linea Sepolia
+ * all six of these included):
+ *   Arc Network, Ethereum, Base, Arbitrum
+ *   Avalanche, Linea
  *
  * USDC contract addresses per chain are Circle's own official addresses
  * (developers.circle.com/stablecoins/usdc-contract-addresses / Circle's
- * public use-usdc skill reference), except Linea Sepolia, which isn't in
- * that particular table — confirmed instead via LineaScan's own token tag
+ * public use-usdc skill reference), except Linea, which isn't in
+ * that particular table, confirmed instead via LineaScan's own token tag
  * ("Circle: USDC Token") on the contract.
  *
- * Result (per Circle's official App Kit SDK reference —
- * docs.arc.network/app-kit/references/sdk-reference):
- *   result.state    — 'pending' | 'success' | 'error'
- *   result.steps    — step-by-step trace of the bridge execution (BridgeStep[])
- *   result.destination.recipientAddress / .useForwarder — echoed destination info
+ * Result (per Circle's official App Kit SDK reference, * docs.arc.network/app-kit/references/sdk-reference):
+ *   result.state, 'pending' | 'success' | 'error'
+ *   result.steps, step-by-step trace of the bridge execution (BridgeStep[])
+ *   result.destination.recipientAddress / .useForwarder, echoed destination info
  *
  * NOTE: BridgeResult has no top-level txHash/transactionHash field. The
- * source-chain tx hash (when one exists — see the forwarder-only note above)
+ * source-chain tx hash (when one exists, see the forwarder-only note above)
  * lives on the individual BridgeStep entries in `result.steps[].txHash`.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRouter }             from 'next/navigation';
 import { createPublicClient, http, type Chain } from 'viem';
-import { sepolia, baseSepolia, arbitrumSepolia, avalancheFuji, lineaSepolia } from 'viem/chains';
+import { mainnet, base, arbitrum, avalanche, linea } from 'viem/chains';
 import {
   ArrowLeft, Loader2, CheckCircle2,
   X, ExternalLink, AlertTriangle, ArrowDownUp, ChevronDown, Wallet,
 } from 'lucide-react';
 import { AppLayout }           from '@/components/layout/AppLayout';
 import { NetworkGuard }        from '@/components/shared/NetworkGuard';
+import { SuccessCheck }        from '@/components/shared/SuccessCheck';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { useCircleAdapter }    from '@/lib/circle/useCircleAdapter';
 import { getAppKit }           from '@/lib/circle/appKit';
-import { arcTestnet, CONTRACTS, ARCSCAN_BASE } from '@/lib/contracts/config';
+import { arcChain, CONTRACTS, ARCSCAN_BASE } from '@/lib/contracts/config';
 import { ERC20_ABI }           from '@/lib/contracts/abis';
 import { saveWalletActivity }  from '@/lib/db/indexeddb';
 import { friendlyErrorMessage } from '@/lib/errorMessage';
@@ -63,12 +63,12 @@ import { friendlyErrorMessage } from '@/lib/errorMessage';
 // ── Supported chains ─────────────────────────────────────────────────────────
 
 type AppKitChain =
-  | 'Arc_Testnet'
-  | 'Ethereum_Sepolia'
-  | 'Base_Sepolia'
-  | 'Arbitrum_Sepolia'
-  | 'Avalanche_Fuji'
-  | 'Linea_Sepolia';
+  | 'Arc'
+  | 'Ethereum'
+  | 'Base'
+  | 'Arbitrum'
+  | 'Avalanche'
+  | 'Linea';
 
 interface BridgeChainConfig {
   key:         AppKitChain;
@@ -79,28 +79,28 @@ interface BridgeChainConfig {
   logo:        string;
   usdcAddress: `0x${string}`;
   viemChain:   Chain;
-  /** Block explorer base URL for THIS chain — successTx is always a
+  /** Block explorer base URL for THIS chain, successTx is always a
    *  source-chain hash (see this file's header comment), so linking it
    *  always needs the FROM chain's own explorer, never a single hardcoded
-   *  one. Verified against each chain's own official/standard testnet
+   *  one. Verified against each chain's own official/standard
    *  explorer. */
   explorerBase: string;
 }
 
 // USDC uses 6 decimals on every one of these chains (Circle's own
-// "6-decimal rule" — the only exception anywhere is Arc's *native gas*
+// "6-decimal rule", the only exception anywhere is Arc's *native gas*
 // representation, which is a separate 18-decimal value never used for
-// ERC-20 balance/transfer calls; see arcTestnet's own definition). Relied
+// ERC-20 balance/transfer calls; see arcChain's own definition). Relied
 // on directly below via the hardcoded 1_000_000n divisor rather than a
 // named constant, since every other bridge chain uses the same rule.
 
 const BRIDGE_CHAINS: BridgeChainConfig[] = [
-  { key: 'Arc_Testnet',       chainId: 5042002,  name: 'Arc Testnet',       badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',               usdcAddress: CONTRACTS.USDC, viemChain: arcTestnet,      explorerBase: ARCSCAN_BASE },
-  { key: 'Ethereum_Sepolia',  chainId: 11155111, name: 'Ethereum Sepolia',  badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum-sepolia.png',  usdcAddress: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', viemChain: sepolia,        explorerBase: 'https://sepolia.etherscan.io' },
-  { key: 'Base_Sepolia',      chainId: 84532,    name: 'Base Sepolia',      badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',              usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', viemChain: baseSepolia,    explorerBase: 'https://sepolia.basescan.org' },
-  { key: 'Arbitrum_Sepolia',  chainId: 421614,   name: 'Arbitrum Sepolia',  badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.png',         usdcAddress: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', viemChain: arbitrumSepolia, explorerBase: 'https://sepolia.arbiscan.io' },
-  { key: 'Avalanche_Fuji',    chainId: 43113,    name: 'Avalanche Fuji',    badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg',        usdcAddress: '0x5425890298aed601595a70AB815c96711a31Bc65', viemChain: avalancheFuji,  explorerBase: 'https://testnet.snowtrace.io' },
-  { key: 'Linea_Sepolia',     chainId: 59141,    name: 'Linea Sepolia',     badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',            usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: lineaSepolia,   explorerBase: 'https://sepolia.lineascan.build' },
+  { key: 'Arc',       chainId: arcChain.id,  name: 'Arc Network', badgeLabel: 'AR',  badgeColor: '#4F46E5', logo: '/images/networks/arc.png',        usdcAddress: CONTRACTS.USDC,                                  viemChain: arcChain,   explorerBase: ARCSCAN_BASE },
+  { key: 'Ethereum',  chainId: mainnet.id,   name: 'Ethereum',    badgeLabel: 'ETH', badgeColor: '#627EEA', logo: '/images/networks/ethereum.png',   usdcAddress: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', viemChain: mainnet,    explorerBase: 'https://etherscan.io' },
+  { key: 'Base',      chainId: base.id,      name: 'Base',        badgeLabel: 'BA',  badgeColor: '#0052FF', logo: '/images/networks/base.png',       usdcAddress: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', viemChain: base,       explorerBase: 'https://basescan.org' },
+  { key: 'Arbitrum',  chainId: arbitrum.id,  name: 'Arbitrum',    badgeLabel: 'ARB', badgeColor: '#28A0F0', logo: '/images/networks/arbitrum.png',   usdcAddress: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', viemChain: arbitrum,   explorerBase: 'https://arbiscan.io' },
+  { key: 'Avalanche', chainId: avalanche.id, name: 'Avalanche',   badgeLabel: 'AV',  badgeColor: '#E84142', logo: '/images/networks/avalanche.jpeg', usdcAddress: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E', viemChain: avalanche,  explorerBase: 'https://snowtrace.io' },
+  { key: 'Linea',     chainId: linea.id,     name: 'Linea',       badgeLabel: 'LI',  badgeColor: '#61DFFF', logo: '/images/networks/linea.jpeg',     usdcAddress: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff', viemChain: linea,      explorerBase: 'https://lineascan.build' },
 ];
 
 function chainByKey(key: AppKitChain): BridgeChainConfig {
@@ -108,7 +108,7 @@ function chainByKey(key: AppKitChain): BridgeChainConfig {
 }
 
 // Small, self-contained "..." replacement for in-progress fee/time
-// estimates — bouncing dots read as "actively fetching" rather than a
+// estimates, bouncing dots read as "actively fetching" rather than a
 // static ellipsis, which on a slow estimate call could look frozen/stuck.
 // Keyframes are scoped to this component's own <style> tag rather than
 // added to a shared global stylesheet, so this can't collide with or
@@ -134,26 +134,26 @@ function BouncingDots() {
 }
 
 // Standalone read-only clients, independent of the app's wagmi config
-// (which only registers Arc Testnet, since that's the only chain the rest
-// of the app ever needs a *connected wallet* on) — these are only used for
+// (which only registers Arc Network, since that's the only chain the rest
+// of the app ever needs a *connected wallet* on), these are only used for
 // balance reads here, never for signing.
 const publicClients = new Map<AppKitChain, ReturnType<typeof createPublicClient>>();
 function clientFor(chain: BridgeChainConfig) {
   if (!publicClients.has(chain.key)) {
     // BUG FIX: every one of these five non-Arc chains was previously read
-    // directly from the browser via a bare http() transport — no proxy, no
-    // retry, no CORS-shaped-429 protection. Since Ethereum Sepolia is the
+    // directly from the browser via a bare http() transport, no proxy, no
+    // retry, no CORS-shaped-429 protection. Since Ethereum is the
     // DEFAULT "to" chain, that meant the destination balance showed a
-    // permanent "—" for basically every visitor on page load, right next
+    // permanent ", " for basically every visitor on page load, right next
     // to Arc's own balance display working fine (Arc's already had a
     // proxy). See app/api/bridge/rpc/route.ts's header for the full root
-    // cause — it's the exact same rate-limit-wearing-a-CORS-mask issue
+    // cause, it's the exact same rate-limit-wearing-a-CORS-mask issue
     // app/api/rpc/route.ts's header documents for Arc, just never
     // extended to these chains until now.
     const appUrl = typeof window !== 'undefined'
       ? ''
       : (process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz').replace(/\/$/, '');
-    const transport = chain.key === 'Arc_Testnet'
+    const transport = chain.key === 'Arc'
       ? http(typeof window !== 'undefined' ? '/api/rpc' : appUrl + '/api/rpc')
       : http(`${appUrl}/api/bridge/rpc?chain=${chain.key}`);
     publicClients.set(chain.key, createPublicClient({ chain: chain.viemChain, transport }));
@@ -162,9 +162,9 @@ function clientFor(chain: BridgeChainConfig) {
 }
 
 async function fetchUsdcBalance(chain: BridgeChainConfig, address: `0x${string}`): Promise<bigint | null> {
-  // Retries a transient RPC hiccup instead of permanently showing "—" for
+  // Retries a transient RPC hiccup instead of permanently showing ", " for
   // this chain's balance until an unrelated re-render happens to retry it
-  // — same reliability fix applied to the swap page's balance fetch.
+  // same reliability fix applied to the swap page's balance fetch.
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const client = clientFor(chain);
@@ -231,10 +231,10 @@ function BridgeStepList({ steps }: { steps: BridgeStep[] }) {
 }
 
 // Collapses the real internal step-by-step state (approve/burn/attest/mint
-// — driven by setStep() and the SDK's own step names exactly as before;
+// driven by setStep() and the SDK's own step names exactly as before;
 // none of that changed) into the 2-item list the UI actually shows:
 // "Approve" then a single "Bridging" that covers burn+attest+mint. Purely
-// a display-time transform — bridgeSteps itself, and everything that
+// a display-time transform, bridgeSteps itself, and everything that
 // derives from the SDK result to populate it, is untouched.
 function toDisplaySteps(steps: BridgeStep[]): BridgeStep[] {
   const approve = steps.find(s => s.key === 'approve');
@@ -345,7 +345,7 @@ function ChainSelector({
 }
 
 // ── USDC-only token selector (dropdown UI kept for consistency with the
-// rest of the app, but only ever has one real option — per spec, the
+// rest of the app, but only ever has one real option, per spec, the
 // bridge only supports USDC) ─────────────────────────────────────────────────
 
 function UsdcTokenPicker() {
@@ -397,12 +397,13 @@ export default function BridgePage() {
   // loginMethod is resolved independently of useCircleAdapter's own async
   // setup (wagmi's useConnectorClient() → dynamic import → adapter
   // creation), so it correctly identifies wallet type immediately instead
-  // of waiting on — or misreading a timing gap in — that resolution.
+  // of waiting on, or misreading a timing gap in, that resolution.
   const isCircleSocialLogin = loginMethod === 'circle';
   const isExternalWallet    = loginMethod === 'external';
 
-  const [fromKey,   setFromKey]   = useState<AppKitChain>('Arc_Testnet');
-  const [toKey,     setToKey]     = useState<AppKitChain>('Ethereum_Sepolia');
+  const bridgingRef = useRef(false);
+  const [fromKey,   setFromKey]   = useState<AppKitChain>('Arc');
+  const [toKey,     setToKey]     = useState<AppKitChain>('Ethereum');
   const [amount,    setAmount]    = useState('');
   const [bridging,      setBridging]      = useState(false);
   const [bridgeSteps,   setBridgeSteps]   = useState<BridgeStep[]>([]);
@@ -420,13 +421,13 @@ export default function BridgePage() {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [usdPrice,      setUsdPrice]     = useState<number | null>(null);
 
-  // ── Balance (of the TO chain's USDC) — mirrors the FROM balance display ─
+  // ── Balance (of the TO chain's USDC), mirrors the FROM balance display ─
   const [toBalance,        setToBalance]        = useState<bigint | null>(null);
   const [toBalanceLoading, setToBalanceLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setToBalance(null); // clear immediately — otherwise the FROM chain's old value could briefly show mislabeled as the new TO chain's balance
+    setToBalance(null); // clear immediately, otherwise the FROM chain's old value could briefly show mislabeled as the new TO chain's balance
     if (!address) return;
     setToBalanceLoading(true);
     fetchUsdcBalance(toChain, address as `0x${string}`).then(b => {
@@ -452,7 +453,7 @@ export default function BridgePage() {
     fetch(`/api/lifi/price?chainId=${fromChain.chainId}&token=${fromChain.usdcAddress}`)
       .then(res => res.ok ? res.json() : { price: null })
       .then(data => { if (!cancelled && data.price) setUsdPrice(Number(data.price.priceUSD)); })
-      .catch(() => { /* USD hint is optional — silently omit on failure */ });
+      .catch(() => { /* USD hint is optional, silently omit on failure */ });
     return () => { cancelled = true; };
   }, [fromChain]);
 
@@ -482,10 +483,15 @@ export default function BridgePage() {
   }
 
   const handleBridge = useCallback(async () => {
+    // Ref guard: a fast double-click can fire this twice before the disabled
+    // state re-renders, which would submit two transfers.
+    if (bridgingRef.current) return;
+    if (fromKey === toKey) { setError('Choose two different networks.'); return; }
     if (!amount || parseFloat(amount) <= 0) { setError('Enter an amount.'); return; }
     if (!adapter || !isAdapterReady) { setError('Connect an external wallet to bridge.'); return; }
     if (!address) return;
 
+    bridgingRef.current = true;
     setBridging(true);
     setError('');
     setBridgeSteps(INITIAL_STEPS);
@@ -498,9 +504,9 @@ export default function BridgePage() {
       /**
        * Forwarder-only bridge (gasless on destination):
        *   - `from` has the adapter (user signs on source chain)
-       *   - `to` has only chain + recipientAddress — NO adapter
+       *   - `to` has only chain + recipientAddress, NO adapter
        *   - Circle's Orbit relayer handles attestation + minting
-       *   - User pays gas ONLY on the source chain (Arc Testnet uses USDC as gas)
+       *   - User pays gas ONLY on the source chain (Arc Network uses USDC as gas)
        *   - Destination chain requires zero gas from the user
        */
       const result = await kit.bridge({
@@ -508,23 +514,23 @@ export default function BridgePage() {
           adapter,
           chain: fromKey,
           // createAdapterFromProvider() (adapter-viem-v2) declares a return
-          // type of ViemAdapter<Partial<AdapterCapabilities>> — narrower
+          // type of ViemAdapter<Partial<AdapterCapabilities>>, narrower
           // than the full ViemAdapter it actually constructs under the
           // hood, so its TS signature is missing methods like
           // getTokenDecimals that kit.bridge() (app-kit) requires. This is
           // a type-only gap between two independently-versioned Circle
-          // packages, not a missing runtime method — the concrete adapter
+          // packages, not a missing runtime method, the concrete adapter
           // instance is a real ViemAdapter with the full method set either
           // way. Anchoring the cast to kit.bridge's OWN parameter type
           // (rather than hand-typing an interface we'd have to guess at)
           // means this self-corrects if a future version of either package
-          // realigns the types — nothing to remember to revert.
+          // realigns the types, nothing to remember to revert.
           // Matches the same workaround already applied to `to` below.
           //
           // Needs the unknown-first double cast (not a single `as`) because
           // TS can't find enough structural overlap between our locally
           // typed `adapter` and the SDK's real Adapter<AdapterCapabilities>
-          // to allow a direct cast — that's the same underlying type gap,
+          // to allow a direct cast, that's the same underlying type gap
           // just enforced more strictly here since `adapter` is nested one
           // level down instead of being the cast target itself.
         } as unknown as Parameters<typeof kit.bridge>[0]['from'],
@@ -532,7 +538,7 @@ export default function BridgePage() {
           chain:            toKey,
           recipientAddress: address,    // USDC minted directly to user's address
           // BUG FIX ("Invalid parameters: to: Invalid input"): forwarder-only
-          // mode — recipientAddress with no destination adapter — requires
+          // mode, recipientAddress with no destination adapter, requires
           // this flag explicitly set per Circle's own Arc docs
           // (docs.arc.network/app-kit/tutorials/bridge/use-forwarding-service).
           // Without it, this object matches neither of the SDK's two valid
@@ -545,7 +551,7 @@ export default function BridgePage() {
       });
 
       // Map SDK result steps to our display steps.
-      // BridgeStep.state is 'pending' | 'success' | 'error' | 'noop' — the
+      // BridgeStep.state is 'pending' | 'success' | 'error' | 'noop', the
       // SDK never returns 'complete'. (docs.arc.network/app-kit/references/sdk-reference)
       type SdkBridgeStep = { name?: string; state?: string; txHash?: string; explorerUrl?: string };
       const sdkSteps = (result as { steps?: SdkBridgeStep[] }).steps ?? [];
@@ -560,8 +566,7 @@ export default function BridgePage() {
           setStep('approve', toDisplayState(sdkStep.state));
         } else if (name.includes('burn') || name.includes('deposit')) {
           setStep('burn', toDisplayState(sdkStep.state));
-          // The burn step is the on-chain transaction on the SOURCE chain —
-          // the one successTx / fromChain.explorerBase below is meant to link to.
+          // The burn step is the on-chain transaction on the SOURCE chain, // the one successTx / fromChain.explorerBase below is meant to link to.
           if (sdkStep.txHash) { sourceTxHash = sdkStep.txHash; sourceExplorerUrl = sdkStep.explorerUrl ?? ''; }
         } else if (name.includes('attest') || name.includes('orbit')) {
           setStep('attest', toDisplayState(sdkStep.state));
@@ -586,7 +591,7 @@ export default function BridgePage() {
       setSuccessExplorerUrl(sourceExplorerUrl);
       const txHash = sourceTxHash;
 
-      // Local-only wallet activity record — see swap page for the same
+      // Local-only wallet activity record, see swap page for the same
       // pattern/rationale (never synced anywhere, by product decision).
       if (address && txHash) {
         void saveWalletActivity({
@@ -606,25 +611,25 @@ export default function BridgePage() {
         setBridgeSteps([]);
       } else if (/action\s+native\.\w+\s+is not supported/i.test(msg)) {
         // ROOT CAUSE (fixed in package.json, see comment there): this was
-        // @circle-fin/adapter-viem-v2 pinned at 1.0.1 — its first-ever
-        // release — while Circle had already shipped the native-gas-balance
+        // @circle-fin/adapter-viem-v2 pinned at 1.0.1, its first-ever
+        // release, while Circle had already shipped the native-gas-balance
         // capability this preflight needs in later 1.x versions (confirmed
         // current published version: 1.11.2). It was never a genuine,
         // unfixable SDK gap; the fix had already shipped upstream, this
         // project's dependency pin just hadn't picked it up. Now bumped to
-        // ^1.11.2 — after `npm install`, this branch should no longer fire
+        // ^1.11.2, after `npm install`, this branch should no longer fire
         // in normal operation. It's left in place only as a safety net
         // (e.g. a stale local node_modules that hasn't reinstalled yet).
         //
         // We already verify the user has enough USDC ourselves (the
         // `insufficientBalance` check that gates the Bridge button, from a
-        // real on-chain read) — on Arc that IS the native-gas check — so
+        // real on-chain read), on Arc that IS the native-gas check, so
         // this failure carries no new information about the user's funds,
         // and we don't want to imply it's an unresolvable, wait-it-out
         // Circle-side limitation.
-        console.error('[bridge] adapter capability check failed — verify node_modules has @circle-fin/adapter-viem-v2 >=1.11.2 installed:', err);
+        console.error('[bridge] adapter capability check failed, verify node_modules has @circle-fin/adapter-viem-v2 >=1.11.2 installed:', err);
         setError(
-          'Something went wrong confirming your Arc gas balance. Your USDC balance is fine — this isn\u2019t a funds issue. Please try again; if it keeps happening, let us know.'
+          'Something went wrong confirming your Arc gas balance. Your USDC balance is fine, this isn\u2019t a funds issue. Please try again; if it keeps happening, let us know.'
         );
         setBridgeSteps(prev =>
           prev.map(s => s.state === 'active' ? { ...s, state: 'error' } : s)
@@ -636,6 +641,7 @@ export default function BridgePage() {
         );
       }
     } finally {
+      bridgingRef.current = false;
       setBridging(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -653,6 +659,7 @@ export default function BridgePage() {
   useEffect(() => {
     if (!amount || parseFloat(amount) <= 0 || !adapter || !isAdapterReady || !address) {
       setEstimate(null);
+      setEstimateLoading(false);
       return;
     }
     let cancelled = false;
@@ -666,7 +673,7 @@ export default function BridgePage() {
           amount,
         });
         if (cancelled) return;
-        // Real EstimateResult shape has no duration field — sum the fees
+        // Real EstimateResult shape has no duration field, sum the fees
         // array (kit/provider/forwarder entries) for a total USDC fee.
         const fees = est.fees ?? [];
         const feeUsdc = fees.length
@@ -677,18 +684,18 @@ export default function BridgePage() {
         // 'provider' fee entry is CCTP v2's own protocol fee, which per
         // Circle's own Bridge Kit documentation is non-zero (1–14 bps)
         // ONLY under Fast Transfer and exactly 0 under Standard Transfer.
-        // Each mode has a publicly documented real timing range — Fast
+        // Each mode has a publicly documented real timing range, Fast
         // Transfer settles in ~8–20 seconds regardless of source chain
         // (Circle's CCTP V2 launch announcement); Standard Transfer waits
         // for the source chain's own block finality, which varies by
         // chain (seconds to low minutes on L2s, materially longer from
-        // Ethereum) — so rather than fabricate one number for every chain,
+        // Ethereum), so rather than fabricate one number for every chain
         // we say plainly that it depends on the source chain.
         const providerFee = fees.find(f => f.type === 'provider');
         const isFast = !!providerFee && providerFee.amount != null && Number(providerFee.amount) > 0;
         const timeLabel = isFast
           ? '~8–20 seconds (Fast Transfer)'
-          : 'A few minutes — depends on the source chain\u2019s finality time';
+          : 'A few minutes, depends on the source chain\u2019s finality time';
         setEstimate({ feeUsdc, timeLabel });
       } catch {
         if (!cancelled) setEstimate(null);
@@ -730,7 +737,7 @@ export default function BridgePage() {
             }}>
               <AlertTriangle size={16} color="#D97706" style={{ flexShrink: 0, marginTop: 1 }} />
               <p style={{ fontSize: 13, color: '#92400E', margin: 0, lineHeight: 1.6 }}>
-                Bridging currently requires an external wallet (like Rabby or MetaMask) — connect one to continue.
+                Bridging currently requires an external wallet (like Rabby or MetaMask), connect one to continue.
               </p>
             </div>
           )}
@@ -795,7 +802,7 @@ export default function BridgePage() {
               </span>
               <span style={{ fontSize: 12, color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <Wallet size={11} />
-                {balanceLoading ? 'Loading…' : balance !== null ? `${formatUnits6(balance)} USDC` : '—'}
+                {balanceLoading ? 'Loading…' : balance !== null ? `${formatUnits6(balance)} USDC` : ', '}
               </span>
             </div>
           </div>
@@ -827,7 +834,7 @@ export default function BridgePage() {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: 8 }}>
               <span style={{ fontSize: 12, color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 4 }}>
                 <Wallet size={11} />
-                {toBalanceLoading ? 'Loading…' : toBalance !== null ? `${formatUnits6(toBalance)} USDC` : '—'}
+                {toBalanceLoading ? 'Loading…' : toBalance !== null ? `${formatUnits6(toBalance)} USDC` : ', '}
               </span>
             </div>
           </div>
@@ -846,7 +853,7 @@ export default function BridgePage() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: 12, color: '#94A3B8' }}>Estimated time</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#0F172A' }}>
-                  {estimateLoading ? <BouncingDots /> : estimate?.timeLabel ?? '—'}
+                  {estimateLoading ? <BouncingDots /> : estimate?.timeLabel ?? ', '}
                 </span>
               </div>
             </div>
@@ -889,7 +896,7 @@ export default function BridgePage() {
 
         </div>
 
-        {/* Success modal — matches Swap's exact modal pattern (same overlay,
+        {/* Success modal, matches Swap's exact modal pattern (same overlay
             card, close button, and icon styling) rather than this page's
             previous one-off bottom-of-page block, per the request to make
             every page's success state look and feel consistent. */}
@@ -900,8 +907,8 @@ export default function BridgePage() {
                 style={{ position: 'absolute', top: 16, right: 16, background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}>
                 <X size={20} />
               </button>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: '#059669', boxShadow: '0 0 0 8px rgba(5,150,105,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-                <CheckCircle2 size={32} color="#fff" fill="#059669" />
+              <div style={{ marginBottom: 16 }}>
+                <SuccessCheck size={56} />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>Bridged successfully</h3>
               <p style={{ fontSize: 14, color: '#64748B', marginBottom: 16 }}>

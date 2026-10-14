@@ -1,7 +1,7 @@
 /**
  * @file app/api/auth/verify-otp/route.ts
  * Verifies a submitted OTP against the HMAC-signed token returned by send-otp.
- * Completely stateless — works across any number of Vercel Lambda instances.
+ * Completely stateless, works across any number of Vercel Lambda instances.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Brute-force throttle — see lib/otpAttempts.ts for why this exists.
+    // ── Brute-force throttle, see lib/otpAttempts.ts for why this exists.
     //    Consumed BEFORE checking the code, so every attempt counts even
     //    if something downstream errors.
     const attemptCheck = await checkAndConsumeOtpAttempt(String(token));

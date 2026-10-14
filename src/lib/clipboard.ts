@@ -3,9 +3,9 @@
  * CLIENT-SIDE.
  *
  * Every "copy" button in this app was calling `navigator.clipboard?.writeText(x)`
- * directly and then unconditionally showing "Copied!" — the optional
+ * directly and then unconditionally showing "Copied!", the optional
  * chaining means that if `navigator.clipboard` doesn't exist (denied by a
- * Permissions-Policy, or simply unavailable — both common in embedded
+ * Permissions-Policy, or simply unavailable, both common in embedded
  * in-app browser webviews, which is exactly the context screenshots of
  * this app show it running in) the call silently does nothing, but the
  * UI still claims success. This wraps the copy with the classic
@@ -22,7 +22,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
       await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      // Fall through to the legacy fallback below — some webviews expose
+      // Fall through to the legacy fallback below, some webviews expose
       // navigator.clipboard but still reject the actual write (permission
       // denied at call-time rather than at feature-detection time).
     }

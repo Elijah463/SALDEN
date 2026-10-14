@@ -23,7 +23,7 @@ import { Button }              from '@/components/shared/Button';
 import { useApp }              from '@/context/AppContext';
 import { getTxsByWallet, type TxRecord } from '@/lib/db/indexeddb';
 import { TransactionIllustration } from '@/components/shared/Illustrations';
-import { txLink, arcTestnet }              from '@/lib/contracts/config';
+import { txLink, arcChain }              from '@/lib/contracts/config';
 import { truncAddr }           from '@/lib/validation';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { usePayrollSync } from '@/lib/usePayrollSync';
@@ -93,7 +93,7 @@ function ReceiptStatus({ status, onRetry, retrying, notSupported }: {
       >
         {retrying
           ? <><Loader2 size={12} style={{ animation: 'spin 0.7s linear infinite' }} /> Retrying…</>
-          : <><AlertCircle size={12} /> Failed — <RefreshCw size={11} /> Retry</>}
+          : <><AlertCircle size={12} /> Failed, <RefreshCw size={11} /> Retry</>}
       </button>
     );
   }
@@ -153,7 +153,7 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
     }}>
       <div style={{ padding: '18px 20px' }}>
 
-        {/* Reference + date — unchanged */}
+        {/* Reference + date, unchanged */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <span style={{ fontSize: 12, fontWeight: 800, color: '#4F46E5', letterSpacing: '0.06em', fontFamily: "'JetBrains Mono', monospace" }}>
             {ref}
@@ -163,7 +163,7 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
           </span>
         </div>
 
-        {/* Status — checkmark in front, plain green/red text, no pill/glow */}
+        {/* Status, checkmark in front, plain green/red text, no pill/glow */}
         <DetailRow label="Status">
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 13, fontWeight: 700,
@@ -181,28 +181,28 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
           </span>
         </DetailRow>
 
-        {/* Recipients — single sends show who was paid, not just "1" */}
+        {/* Recipients, single sends show who was paid, not just "1" */}
         <DetailRow label="Recipients">
           <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A', fontFamily: isSingleSend && tx.recipientAddress ? "'JetBrains Mono', monospace" : undefined }}>
             {isSingleSend && tx.recipientAddress ? truncAddr(tx.recipientAddress, 6, 4) : tx.recipientCount}
           </span>
         </DetailRow>
 
-        {/* Method — no glow */}
+        {/* Method, no glow */}
         <DetailRow label="Method">
           <span style={{ fontSize: 13, fontWeight: 600, color: '#0F172A' }}>
             {methodLabel(tx.type)}
           </span>
         </DetailRow>
 
-        {/* Memo — only shown when there's actually a remark to show */}
+        {/* Memo, only shown when there's actually a remark to show */}
         {tx.remark && (
           <DetailRow label="Memo">
             <span style={{ fontSize: 13, color: '#0F172A' }}>{tx.remark}</span>
           </DetailRow>
         )}
 
-        {/* Payroll Receipt — "Not supported" for anything that isn't a batch
+        {/* Payroll Receipt, "Not supported" for anything that isn't a batch
             payroll run (receipts only apply there), no glow otherwise */}
         <DetailRow label="Payroll Receipt">
           <ReceiptStatus
@@ -213,7 +213,7 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
           />
         </DetailRow>
 
-        {/* Tx hash — link icon now ash/grey instead of brand indigo */}
+        {/* Tx hash, link icon now ash/grey instead of brand indigo */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: '#F8F9FA', borderRadius: 9, marginTop: 10 }}>
           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#475569', flex: 1 }}>
             {tx.hash.slice(0, 10)}…{tx.hash.slice(-8)}
@@ -235,17 +235,16 @@ function ReceiptCard({ tx, onResend, resending, hasEmail }: {
 
 export default function TransactionHistoryPage() {
   const { address } = useEffectiveAddress();
-  const publicClient = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient = usePublicClient({ chainId: arcChain.id });
   const { state, saveTxRecord, hydrateFromCache } = useApp();
   const { payrollSetup, registryClone } = state;
   usePayrollSync({ registryClone, address, publicClient });
 
   // BUG FIX: hasEmail (below, gates the "Resend" button on each receipt)
-  // used to depend entirely on usePayrollSync's full flow finishing —
-  // which needs registryClone AND publicClient ready before it even starts
+  // used to depend entirely on usePayrollSync's full flow finishing, // which needs registryClone AND publicClient ready before it even starts
   // its own "instant local cache" step. On a first visit straight to this
   // page (not through Settings or Dashboard first), that could leave
-  // hasEmail false — and the Resend button disabled — for a real email
+  // hasEmail false, and the Resend button disabled, for a real email
   // that was already sitting in the local cache the whole time. This
   // reads that same cache directly, as soon as the wallet address is
   // known, with no other dependency.
@@ -291,7 +290,7 @@ export default function TransactionHistoryPage() {
       buckets[key] = (buckets[key] ?? 0) + parseFloat(tx.amount.replace(/,/g, '') || '0');
     });
 
-    // Build a continuous month range spanning actual activity only — from
+    // Build a continuous month range spanning actual activity only, from
     // the first transaction's month to the LATEST transaction's month.
     // BUG FIX: this used to extend all the way to today's date regardless
     // of when the last transaction happened, so as real time passed with
@@ -322,7 +321,7 @@ export default function TransactionHistoryPage() {
   async function handleResendReceipt(tx: TxRecord) {
     const receiptEmail = payrollSetup?.email ?? null;
     if (!receiptEmail) {
-      // No company email on file — nothing we can resend to
+      // No company email on file, nothing we can resend to
       return;
     }
 
@@ -383,11 +382,11 @@ export default function TransactionHistoryPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14 }}>
               <StatCard label="Total Volume" value={`${totalVolume.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`} icon={<DollarSign size={18} color="#4F46E5" />} />
               <StatCard label="Transactions" value={txs.length.toString()} icon={<TrendingUp size={18} color="#14B8A6" />} color="#14B8A6" />
-              <StatCard label="Wallet Activity" value="View Txns" icon={<Wallet size={18} color="#059669" />} color="#059669" href="/transaction-history/wallet-activity" />
+              <StatCard label="Wallet Activity" value="View Txns >" icon={<Wallet size={18} color="#059669" />} color="#059669" href="/transaction-history/wallet-activity" />
               <StatCard label="Private Transactions" value="Coming soon" icon={<Lock size={18} color="#94A3B8" />} color="#94A3B8" href="/transaction-history/private-transactions" />
             </div>
 
-            {/* Area chart — dynamic range from first tx */}
+            {/* Area chart, dynamic range from first tx */}
             <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 16, padding: 24 }}>
               <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 20 }}>
                 Payroll Volume (USDC)
@@ -396,30 +395,31 @@ export default function TransactionHistoryPage() {
                 <AreaChart data={chartData} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
                   <defs>
                     <linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="#4F46E5" stopOpacity={0.18} />
-                      <stop offset="95%" stopColor="#4F46E5" stopOpacity={0}    />
+                      <stop offset="0%"  stopColor="#4F46E5" stopOpacity={0.32} />
+                      <stop offset="100%" stopColor="#4F46E5" stopOpacity={0.02} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-                  <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94A3B8', fontWeight: 500 }}
+                  <XAxis dataKey="month" tick={false}
                     axisLine={{ stroke: '#E2E8F0' }} tickLine={false}
-                    tickMargin={10} interval="preserveStartEnd" padding={{ left: 8, right: 8 }} />
+                    padding={{ left: 8, right: 8 }} />
                   <YAxis
                     tick={{ fontSize: 11, fill: '#94A3B8' }} axisLine={false} tickLine={false}
                     ticks={dynamicTicks}
                     tickFormatter={fmtTick}
                   />
                   <Tooltip
+                    cursor={{ stroke: '#CBD5E1', strokeDasharray: '3 3' }}
                     contentStyle={{ borderRadius: 10, border: '1px solid #E2E8F0', fontSize: 13 }}
+                    labelFormatter={(label: string) => `Month: ${label}`}
                     formatter={(v: number) => [`${v.toLocaleString()} USDC`, 'Volume']}
                   />
                   {/* "natural" gives a smooth, flowing curve through the real
-                      data points (rather than blocky/linear segments) —
-                      this only changes how points are visually connected,
+                      data points (rather than blocky/linear segments), this only changes how points are visually connected
                       never the underlying values. */}
-                  <Area type="natural" dataKey="volume" stroke="#4F46E5" strokeWidth={2.5}
-                    fill="url(#volGrad)" dot={{ r: 3, fill: '#4F46E5', strokeWidth: 0 }}
-                    activeDot={{ r: 5, fill: '#4F46E5', stroke: '#fff', strokeWidth: 2 }} />
+                  <Area type="natural" dataKey="volume" stroke="#4F46E5" strokeWidth={2}
+                    fill="url(#volGrad)" dot={false}
+                    activeDot={{ r: 4, fill: '#4F46E5', stroke: '#fff', strokeWidth: 2 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>

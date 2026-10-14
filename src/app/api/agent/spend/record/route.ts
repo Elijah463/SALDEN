@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { isAddress } from 'viem';
-import { recordProposedSpend } from '@/lib/agent/spendLimits';
+import { reserveSpend, checkSpendLimit, spendBlockMessage } from '@/lib/agent/spendLimits';
 import { verifySessionToken } from '@/lib/agent/auth';
 
 export async function POST(req: NextRequest) {
@@ -35,7 +35,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Your session has expired. Please sign in again.' }, { status: 401 });
     }
 
-    recordProposedSpend(walletAddress, amount);
+    const reservation = await reserveSpend(walletAddress, amount);
+    if (!reservation) {
+      return NextResponse.json({ error: spendBlockMessage(await checkSpendLimit(walletAddress, amount)) }, { status: 409 });
+    }
     return NextResponse.json({ recorded: true });
 
   } catch {

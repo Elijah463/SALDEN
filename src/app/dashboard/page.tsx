@@ -62,7 +62,7 @@ import {
   REGISTRY_FACTORY_ABI,
   REGISTRY_ABI,
 } from '@/lib/contracts/abis';
-import { CONTRACTS, arcTestnet } from '@/lib/contracts/config';
+import { CONTRACTS, arcChain } from '@/lib/contracts/config';
 
 // ── papaparse ─────────────────────────────────────────────────────────────────
 async function parseCsv(file: File): Promise<Record<string, unknown>[]> {
@@ -77,7 +77,7 @@ async function parseCsv(file: File): Promise<Record<string, unknown>[]> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Profile Setup Modal — first onboarding step: collect profile info, then
+// Profile Setup Modal, first onboarding step: collect profile info, then
 // deploy the user's personal registry clone (gas paid in USDC).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ const EMPLOYEE_RANGES = ['2-500', '501-1000', '1001-5000', '5001-10000'];
 function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onComplete: () => void }) {
   const { dispatch } = useApp();
   const { address, loginMethod } = useEffectiveAddress();
-  const publicClient           = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient           = usePublicClient({ chainId: arcChain.id });
   const { writeContract, canWrite } = useUniversalWrite();
 
   const [fullName,    setFullName]    = useState('');
@@ -194,7 +194,7 @@ function ProfileSetupModal({ onClose, onComplete }: { onClose: () => void; onCom
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Employee Modal — defined at MODULE LEVEL to prevent remount on parent render
+// Employee Modal, defined at MODULE LEVEL to prevent remount on parent render
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface EmployeeModalProps {
@@ -217,7 +217,7 @@ function EmployeeModal({
 }: EmployeeModalProps) {
   const { dispatch, state, syncData } = useApp();
   const { address }            = useEffectiveAddress();
-  const publicClient           = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient           = usePublicClient({ chainId: arcChain.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const sign                   = useCachedSignMessage();
 
@@ -278,7 +278,7 @@ function EmployeeModal({
     const errs: string[] = [];
     const result = validateEmployee({ ...form, salaryAmount: Number(form.salaryAmount) });
     if (!result.valid) errs.push(...result.errors);
-    if (!form.group) errs.push('Group is required — select or create a group.');
+    if (!form.group) errs.push('Group is required, select or create a group.');
     if (errs.length) { setErrors(errs); return; }
     setSaving(true);
     try {
@@ -380,7 +380,7 @@ function EmployeeModal({
     </>
   );
 
-  // Proceed-to-dashboard action — rendered at the BOTTOM of the modal
+  // Proceed-to-dashboard action, rendered at the BOTTOM of the modal
   // (below the form/import controls), away from the progress indicator
   // above, per the redesign.
   const proceedSection = setupMode && setupDone && (
@@ -391,7 +391,7 @@ function EmployeeModal({
       </button>
       {proceedError && <p style={{ fontSize: 12, color: '#DC2626', marginTop: 6 }}>{proceedError}</p>}
       <p style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>
-        You can keep adding employees above, or proceed now — this syncs your employee data and anchors it Onchain.
+        You can keep adding employees above, or proceed now, this syncs your employee data and anchors it Onchain.
       </p>
     </div>
   );
@@ -526,9 +526,9 @@ function StatCard({ label, value, sub, icon }: { label: string; value: string; s
 
 export default function DashboardPage() {
   const { state, dispatch, addToast, syncData, saveTxRecord } = useApp();
-  // useEffectiveAddress resolves wagmi OR Circle session — fixes social login redirect loop
+  // useEffectiveAddress resolves wagmi OR Circle session, fixes social login redirect loop
   const { address, isConnected: isLoggedIn, mounted: authMounted, loginMethod } = useEffectiveAddress();
-  const publicClient              = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient              = usePublicClient({ chainId: arcChain.id });
   const { writeContract: universalWrite, canWrite } = useUniversalWrite();
   const { ensureApproval, invalidateApproval } = useTokenApproval();
   const sign                      = useCachedSignMessage();
@@ -554,7 +554,7 @@ export default function DashboardPage() {
   // Centralised in usePayrollSync so /ai-agent gets the same instant-cache +
   // staleness-detection behaviour instead of this page being the only place
   // that ever restored data. (/transaction-history doesn't use employee/
-  // registry data at all — it reads local tx records directly — so it
+  // registry data at all, it reads local tx records directly, so it
   // doesn't need this hook.)
   const payrollSync = usePayrollSync({
     registryClone: registryStatus === 'exists' ? registryClone : null,
@@ -567,23 +567,23 @@ export default function DashboardPage() {
   // employee data not restoring on a fresh browser/device, and the
   // dashboard briefly showing "Finish Your Profile"/"Complete Employee
   // Setup" for an account that already has one): this used to catch ANY
-  // failure from getRegistry() — including a plain transient RPC
+  // failure from getRegistry(), including a plain transient RPC
   // hiccup, which is more likely on exactly the scenario this broke on,
-  // a fresh browser/cold connection — and set registryStatus to 'none',
+  // a fresh browser/cold connection, and set registryStatus to 'none'
   // the SAME state as "this wallet has genuinely never registered
   // before". That did two things at once: (1) showed the onboarding CTA
   // over a real, already-set-up account, and (2) left `registryClone` in
   // state as null, which means usePayrollSync's `registryClone:
   // registryStatus === 'exists' ? registryClone : null` also stayed
-  // null — so the whole IPFS restore pipeline never even attempted to
+  // null, so the whole IPFS restore pipeline never even attempted to
   // run. It "self-corrected" whenever something else (a focus re-check,
   // a manual refresh) happened to retry the RPC call and it succeeded
-  // that time — which looked like an unexplained one-off glitch rather
+  // that time, which looked like an unexplained one-off glitch rather
   // than the retriable network failure it actually was.
   //
   // Fix: a failed check now retries a few times with a short backoff
   // before giving up, and only ever lands on 'none' when getRegistry()
-  // actually, successfully returned the zero address — never on an
+  // actually, successfully returned the zero address, never on an
   // error. A genuine, exhausted failure gets its own 'error' state with
   // a visible retry action, instead of silently pretending to be "no
   // account yet".
@@ -601,7 +601,7 @@ export default function DashboardPage() {
 
     (async () => {
       // ── Cache-first: see lib/serverCloneCache.ts. A hit here resolves
-      // immediately with no RPC call at all — this is what makes this
+      // immediately with no RPC call at all, this is what makes this
       // reliable on a fresh browser/device/"Try again" click instead of
       // depending on a cold RPC connection succeeding.
       try {
@@ -612,7 +612,7 @@ export default function DashboardPage() {
           setRegistryStatus('exists');
           return;
         }
-      } catch { /* cache is best-effort — fall through to the on-chain check */ }
+      } catch { /* cache is best-effort, fall through to the on-chain check */ }
 
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
@@ -631,7 +631,7 @@ export default function DashboardPage() {
           } else {
             setRegistryStatus('none');
           }
-          return; // success (either way) — don't retry
+          return; // success (either way), don't retry
         } catch (err) {
           if (cancelled) return;
           if (attempt < MAX_ATTEMPTS) {
@@ -647,13 +647,13 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   }, [authMounted, isLoggedIn, address, publicClient, dispatch, registryCheckAttempt]);
 
-  // Self-healing fallback for payrollClone — single shared implementation,
+  // Self-healing fallback for payrollClone, single shared implementation
   // see lib/useCloneAccess.ts for the full writeup (previously duplicated
   // inline here and in ai-agent/page.tsx; consolidated into one hook).
   useCloneAccess();
 
   // ── USDC balance ───────────────────────────────────────────────────────────
-  // Arc Testnet uses USDC as its native gas token: native balance reads (this
+  // Arc Network uses USDC as its native gas token: native balance reads (this
   // hook) report it with 18 decimals, while the ERC-20 interface contract
   // (CONTRACTS.USDC) reports the same balance with 6 decimals. For on-screen
   // *display* we always use the native/18-decimal reading; the ERC-20
@@ -673,7 +673,7 @@ export default function DashboardPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } else {
-      addToast('Could not copy — press and hold the address to copy it manually.', 'error', 3000);
+      addToast('Could not copy, press and hold the address to copy it manually.', 'error', 3000);
     }
   }
 
@@ -684,14 +684,14 @@ export default function DashboardPage() {
   const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
   const rowRefs   = useRef<Record<number, HTMLTableRowElement | null>>({});
   const searchRef = useRef<HTMLDivElement>(null);
-  // Latest CID we've successfully anchored Onchain — lets anchorCid skip a
+  // Latest CID we've successfully anchored Onchain, lets anchorCid skip a
   // redundant transaction if the data hasn't actually changed since.
   // (IPFS "previousCid" bookkeeping for Pinata cleanup is handled centrally
-  // by AppContext's syncData/loadData — no need to duplicate it here.)
+  // by AppContext's syncData/loadData, no need to duplicate it here.)
   const lastAnchoredCidRef = useRef<string | null>(null);
 
   // usePayrollSync may hydrate/load a CID before the user ever calls
-  // anchorCid this session (from local cache or an on-chain restore) — seed
+  // anchorCid this session (from local cache or an on-chain restore), seed
   // the dedup ref from it so the first real anchorCid() call can still skip
   // a redundant transaction when nothing has actually changed.
   useEffect(() => {
@@ -710,12 +710,12 @@ export default function DashboardPage() {
 
   // Deep-link support: /dashboard?group=<name> pre-selects a group filter
   // on load. Originally added for the AI agent's payroll-run card, which
-  // now executes fully in-chat instead of linking here — kept as a
+  // now executes fully in-chat instead of linking here, kept as a
   // general-purpose capability (e.g. a bookmarked or shared link) since
   // it's harmless and still useful on its own. Runs once on mount, after
   // `groups` is populated, and only applies if the group named in the URL
   // still exists (a stale/bookmarked link with a deleted group should not
-  // crash — it should just fall back to "All Employees").
+  // crash, it should just fall back to "All Employees").
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -784,15 +784,15 @@ export default function DashboardPage() {
   //
   // `sign` (declared above via useCachedSignMessage) derives the encryption
   // key that secures employee data. It routes through useUniversalWrite's
-  // signMessage — wagmi's popup for an external wallet, or a Circle
-  // SIGN_MESSAGE PIN challenge for Google/email social login — and is
+  // signMessage, wagmi's popup for an external wallet, or a Circle
+  // SIGN_MESSAGE PIN challenge for Google/email social login, and is
   // cached in sessionStorage so it only prompts once per (address,
   // message) per browser tab session, not on every action that needs it.
 
   /**
    * Anchors a freshly-synced IPFS CID Onchain (SaldenRegistry.updateCID).
    * Without this, the registry's on-chain pointer would only ever reflect
-   * whatever was anchored during initial onboarding — every edit afterward
+   * whatever was anchored during initial onboarding, every edit afterward
    * would update IPFS but silently leave the Onchain record stale, so a
    * reload (or another device) would load outdated data.
    */
@@ -815,7 +815,7 @@ export default function DashboardPage() {
   }, [registryClone, canWrite, universalWrite, publicClient, addToast]);
 
   // ── Restore previously-synced data ──────────────────────────────────────────
-  // Handled by usePayrollSync (called above) — see that hook for the full
+  // Handled by usePayrollSync (called above), see that hook for the full
   // sequence (instant local-cache paint, cheap on-chain hash check, silent
   // load vs. syncAvailable prompt). Previously this logic lived only here,
   // duplicated per-page and with no local cache or staleness detection.
@@ -829,7 +829,7 @@ export default function DashboardPage() {
       addToast('Employee added.', 'success');
       await anchorCid(cid);
     }
-    catch { addToast('Saved locally — sync failed.', 'warning'); }
+    catch { addToast('Saved locally, sync failed.', 'warning'); }
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleAddBulk = useCallback(async (data: Employee[], deferSync = false) => {
@@ -841,7 +841,7 @@ export default function DashboardPage() {
       addToast(`${data.length} employees imported.`, 'success');
       await anchorCid(cid);
     }
-    catch { addToast('Saved locally — sync failed.', 'warning'); }
+    catch { addToast('Saved locally, sync failed.', 'warning'); }
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleEditEmployee = useCallback(async (data: Employee, rowIndex?: number) => {
@@ -853,7 +853,7 @@ export default function DashboardPage() {
       addToast('Employee updated.', 'success');
       await anchorCid(cid);
     }
-    catch { addToast('Saved locally — sync failed.', 'warning'); }
+    catch { addToast('Saved locally, sync failed.', 'warning'); }
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
   const handleDeleteEmployee = useCallback(async (rowIndex: number) => {
@@ -864,10 +864,10 @@ export default function DashboardPage() {
       addToast('Employee removed.', 'success');
       await anchorCid(cid);
     }
-    catch { addToast('Saved locally — sync failed.', 'warning'); }
+    catch { addToast('Saved locally, sync failed.', 'warning'); }
   }, [employees, dispatch, syncData, addToast, address, sign, anchorCid]);
 
-  // ── Execute payroll (audit fix: uses static imports only — no dynamic re-imports) ──
+  // ── Execute payroll (audit fix: uses static imports only, no dynamic re-imports) ──
   const handleExecutePayroll = useCallback(async (
     overrideToken: TokenEntry | null,
     overrideGroup?: string,
@@ -886,7 +886,11 @@ export default function DashboardPage() {
     const tokenSymbol = overrideToken?.symbol   ?? 'USDC';
     const tokenDec    = overrideToken?.decimals  ?? 6;
     const tokenScale  = 10 ** tokenDec;
-    const contractAddr = (payrollClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
+    // Route to the employer's clone only while its Pro subscription is active. A lapsed
+    // clone reverts batchPay on chain, so an expired user falls back to the free contract.
+    // Their funds stay in the clone, and withdraw still works.
+    const useClone     = isPremiumUser && !!payrollClone;
+    const contractAddr = (useClone ? payrollClone : CONTRACTS.ENTERPRISE_PAYROLL) as `0x${string}`;
     const totalAmount  = targetEmployees.reduce(
       (sum, e) => sum + BigInt(Math.round(Number(e.salaryAmount) * tokenScale)), 0n,
     );
@@ -894,12 +898,12 @@ export default function DashboardPage() {
     if (!canWrite || !publicClient) { addToast(walletRequiredMessage(loginMethod), 'error'); return; }
 
     // batchPay reverts on-chain above the active contract's MAX_BATCH_SIZE
-    // (100 standalone / 1,000 premium clone — see lib/contracts/batchLimits.ts).
+    // (100 standalone / 1,000 premium clone, see lib/contracts/batchLimits.ts).
     // A payroll run larger than that cap is split here into sequential
     // batches of at most that many recipients each, so e.g. 152 employees
     // on the free tier runs as two batches (100 + 52) instead of one
     // oversized call that could never succeed.
-    const chunks = chunkForBatchPay(targetEmployees, !!payrollClone);
+    const chunks = chunkForBatchPay(targetEmployees, useClone);
 
     setIsExecuting(true);
     setExecutionState('pending');
@@ -913,7 +917,7 @@ export default function DashboardPage() {
       setExecuteStatus(`Checking ${tokenSymbol} allowance…`);
       setExecuteProgress({ current: 0, total: chunks.length });
 
-      // One approval for the FULL total covers every batch below — ERC-20
+      // One approval for the FULL total covers every batch below, ERC-20
       // allowance persists across multiple sequential transferFrom calls,
       // so there's no need to re-approve per batch. See
       // lib/approvals/useTokenApproval.ts for the unified cache-check-then-
@@ -922,22 +926,22 @@ export default function DashboardPage() {
       await ensureApproval({ token: tokenAddr, spender: contractAddr, amount: totalAmount, onStatusChange: setExecuteStatus });
 
       // BUG FIX: payrollSetup.email is only ever populated by an explicit
-      // "Unlock your data" (or "Sync now") click — see usePayrollSync.ts's
+      // "Unlock your data" (or "Sync now") click, see usePayrollSync.ts's
       // header comment for why it's deliberately never auto-loaded on
       // mount. On a browser/device with no local cache yet for this
-      // wallet, payrollSetup — and therefore its .email — can genuinely
+      // wallet, payrollSetup, and therefore its .email, can genuinely
       // still be empty at this point even though employees are already
       // visible on screen (e.g. freshly imported in this same session,
       // which doesn't require unlocking anything). Previously this ran to
       // completion in total silence: no receipt attempt, no error, no
-      // indication anywhere that anything was skipped — which is exactly
+      // indication anywhere that anything was skipped, which is exactly
       // why "Payroll Receipt" showed as a blank row with no retry option
       // in Transaction History instead of a "Failed" state. Surfacing
       // this immediately, before the run starts, so it's not a surprise
       // discovered only afterward.
       const receiptEmail = payrollSetup?.email ?? null;
       if (!receiptEmail) {
-        addToast('No payroll receipt email on file — this payroll run will proceed, but no receipt email will be sent. Add one in Settings to enable automatic receipts.', 'warning', 8000);
+        addToast('No payroll receipt email on file, this payroll run will proceed, but no receipt email will be sent. Add one in Settings to enable automatic receipts.', 'warning', 8000);
       }
 
       for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
@@ -963,7 +967,7 @@ export default function DashboardPage() {
         const memoHex = ('0x' + Array.from(new TextEncoder().encode(memoJson))
           .map(b => b.toString(16).padStart(2, '0')).join('')) as `0x${string}`;
         // The real Memo contract's memoId is a caller-chosen bytes32 (see
-        // event `Memo`'s indexed memoId) — deriving it as a hash of the
+        // event `Memo`'s indexed memoId), deriving it as a hash of the
         // memo content itself keeps it deterministic and collision-safe
         // without inventing a separate ID scheme.
         const memoId = keccak256(memoHex);
@@ -975,9 +979,9 @@ export default function DashboardPage() {
             abi: MULTI_TOKEN_PAYROLL_ABI, functionName: 'batchPay',
             args: [chunkAddrs, chunkAmounts, tokenAddr],
           });
-          // Arc Memo contract: memo(target, data, memoId, memoData) — see
+          // Arc Memo contract: memo(target, data, memoId, memoData), see
           // lib/contracts/abis.ts for why this isn't called callWithMemo.
-          // msg.sender is preserved — payroll clone sees the user's wallet address
+          // msg.sender is preserved, payroll clone sees the user's wallet address
           txHash = await universalWrite({
             address: MEMO_CONTRACT_ADDRESS, abi: MEMO_ABI,
             functionName: 'memo',
@@ -1011,8 +1015,7 @@ export default function DashboardPage() {
           remark,
           recipientCount: chunk.length,
           timestamp: Date.now(),
-          // Only 'pending' if we're actually about to attempt a send below —
-          // otherwise this stayed 'pending' forever, since nothing else
+          // Only 'pending' if we're actually about to attempt a send below, // otherwise this stayed 'pending' forever, since nothing else
           // would ever move it to 'sent'/'failed' if there was no email to
           // begin with (the fetch below was simply skipped entirely).
           receiptEmailStatus: receiptEmail ? 'pending' : null,
@@ -1066,7 +1069,7 @@ export default function DashboardPage() {
               executedBy: 'manual',
             }, address);
           }).catch(() => {
-            // Receipt send failed — update status silently
+            // Receipt send failed, update status silently
             saveTxRecord({
               id: txHash, hash: txHash, ref,
               type: 'batchPay', status: 'success',
@@ -1088,21 +1091,21 @@ export default function DashboardPage() {
         token:          tokenSymbol,
         batchCount:     chunks.length > 1 ? chunks.length : undefined,
         // usdEquivalent intentionally left unset until live price quotes
-        // (LI.FI integration) are wired in — see ExecutionModal.tsx.
+        // (LI.FI integration) are wired in, see ExecutionModal.tsx.
       });
       setExecutionState('success');
     } catch (err) {
       const msg = (err as Error).message ?? '';
       const cancelled = /reject|cancel|denied/i.test(msg);
       // A run split into multiple batches can fail partway through with
-      // some batches already confirmed on-chain — the earlier version of
+      // some batches already confirmed on-chain, the earlier version of
       // this always showed a blanket "Payroll failed", which is exactly
       // what previously made an already-successful batch look like nothing
       // had happened, risking a duplicate payment if retried from scratch.
       const partial = completedTxHashes.length > 0 && completedTxHashes.length < chunks.length;
       // If this looks allowance-related (TransferFromFailed) and NOT a
       // partial multi-batch failure (a partial failure means some batches
-      // already succeeded, so the allowance genuinely was fine — this is
+      // already succeeded, so the allowance genuinely was fine, this is
       // specifically for the case where the cache believed more was
       // approved on-chain than actually was, and the very first batch
       // failed because of it). Clears the cache entry so the next attempt
@@ -1113,7 +1116,7 @@ export default function DashboardPage() {
       const friendly = cancelled
         ? 'Transaction cancelled.'
         : partial
-          ? `${completedTxHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice — only the remaining employees need to be run again.`
+          ? `${completedTxHashes.length} of ${chunks.length} batches completed successfully before this error. Check Transaction History before retrying, so you don't pay the completed batches twice, only the remaining employees need to be run again.`
           : friendlyErrorMessage(err, 'Payroll failed. Please try again.');
       setExecutionState('failed');
       setExecuteError(friendly);
@@ -1140,7 +1143,7 @@ export default function DashboardPage() {
         {/* ── Newer data available banner ────────────────────────────── */}
         {/* A different device, a teammate, or a scheduled AI-agent run
             anchored a newer CID than what's currently loaded. We never
-            overwrite silently — this is the explicit opt-in the person
+            overwrite silently, this is the explicit opt-in the person
             asked for. */}
         {payrollSync.syncAvailable && (
           <div style={{
@@ -1149,7 +1152,7 @@ export default function DashboardPage() {
             padding: '12px 18px', fontSize: 13,
           }}>
             <span style={{ color: '#3730A3', fontWeight: 600 }}>
-              Newer payroll data is available — this device hasn&apos;t synced it yet.
+              Newer payroll data is available, this device hasn&apos;t synced it yet.
             </span>
             <button
               onClick={() => { void payrollSync.syncNow(); }}
@@ -1168,7 +1171,7 @@ export default function DashboardPage() {
 
         {/* needs-unlock has its own dedicated empty-state screen further
             down (registryStatus === 'exists' && dataLoadStatus ===
-            'needs-unlock') rather than a banner here — a data-grid page
+            'needs-unlock') rather than a banner here, a data-grid page
             with genuinely nothing loaded yet reads better as one clear
             screen than a banner sitting above another empty state. */}
 
@@ -1185,12 +1188,6 @@ export default function DashboardPage() {
               </button>
               <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', letterSpacing: '0.03em' }}>Total Balance</span>
             </div>
-            <a href="https://faucet.circle.com" target="_blank" rel="noopener noreferrer"
-              style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.75)', textDecoration: 'none', letterSpacing: '0.05em', textTransform: 'uppercase' as const, padding: '4px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.25)' }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-              Faucet
-            </a>
           </div>
 
           <div style={{ fontSize: 38, fontWeight: 800, color: '#fff', letterSpacing: '-0.02em', marginBottom: 12, position: 'relative' }}>
@@ -1243,7 +1240,7 @@ export default function DashboardPage() {
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
             <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Couldn&apos;t verify your account</h3>
             <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
-              This looks like a network hiccup, not a problem with your account or data — your employees and setup are still there. Please try again.
+              This looks like a network hiccup, not a problem with your account or data, your employees and setup are still there. Please try again.
             </p>
             <button onClick={() => setRegistryCheckAttempt(n => n + 1)}
               style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
@@ -1271,7 +1268,7 @@ export default function DashboardPage() {
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: '60px 24px', textAlign: 'center' }}>
             <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0F172A', margin: '0 0 8px' }}>Your payroll data is ready to restore</h3>
             <p style={{ fontSize: 14, color: '#64748B', marginBottom: 28, lineHeight: 1.7, maxWidth: 420, margin: '0 auto 28px' }}>
-              This device hasn&apos;t loaded your employee data yet. One signature — proving wallet ownership, no funds involved — unlocks it.
+              This device hasn&apos;t loaded your employee data yet. One signature, proving wallet ownership, no funds involved, unlocks it.
             </p>
             <button onClick={() => { void payrollSync.unlockAndLoad(); }}
               style={{ padding: '13px 40px', borderRadius: 12, background: '#14B8A6', color: '#fff', fontSize: 15, fontWeight: 700, border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
@@ -1341,7 +1338,7 @@ export default function DashboardPage() {
 
               <Button variant="ghost" icon={<UserPlus size={14} />} onClick={() => setEmployeeModal({ mode: 'add' })} size="sm">Add Employee</Button>
 
-              {/* Process Payment — teal, NO play icon */}
+              {/* Process Payment, teal, NO play icon */}
               <button onClick={handleProcessPaymentClick} disabled={isExecuting || filteredEmployees.length === 0}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px', borderRadius: 10, border: 'none', background: isExecuting || !filteredEmployees.length ? '#E2E8F0' : '#14B8A6', color: isExecuting || !filteredEmployees.length ? '#94A3B8' : '#fff', fontSize: 13, fontWeight: 600, cursor: isExecuting || !filteredEmployees.length ? 'not-allowed' : 'pointer', fontFamily: 'inherit', transition: 'background 0.15s' }}
                 onMouseEnter={e => { if (!isExecuting && filteredEmployees.length) (e.currentTarget as HTMLButtonElement).style.background = '#0D9488'; }}
@@ -1420,7 +1417,7 @@ export default function DashboardPage() {
                         <td style={{ padding: '12px 20px' }}>
                           {emp.group
                             ? <span style={{ fontSize: 13, color: '#0F172A' }}>{emp.group}</span>
-                            : <span style={{ color: '#E2E8F0', fontSize: 12 }}>—</span>}
+                            : <span style={{ color: '#E2E8F0', fontSize: 12 }}>, </span>}
                         </td>
                       </tr>
                     ))}
@@ -1433,7 +1430,7 @@ export default function DashboardPage() {
               <div style={{ padding: '10px 20px', borderTop: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 12, color: '#94A3B8' }}>
                   {filteredEmployees.length} employee{filteredEmployees.length !== 1 ? 's' : ''}
-                  {activeGroup !== 'All Employees' ? ` in ${activeGroup}` : ''} — Long-press any row for quick actions
+                  {activeGroup !== 'All Employees' ? ` in ${activeGroup}` : ''}, Long-press any row for quick actions
                 </span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#0F172A' }}>
                   Total: {totalPayroll.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC

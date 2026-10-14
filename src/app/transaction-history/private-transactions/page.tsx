@@ -1,7 +1,7 @@
 'use client';
 /**
  * @file app/transaction-history/private-transactions/page.tsx
- * Placeholder — private transactions are not implemented yet.
+ * Placeholder, private transactions are not implemented yet.
  */
 
 import { ArrowLeft, Lock } from 'lucide-react';

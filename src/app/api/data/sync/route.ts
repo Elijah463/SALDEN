@@ -3,7 +3,7 @@
  *
  * Uploads encrypted payroll data to IPFS via Pinata.
  * Requires wallet signature proof to prevent unauthorised writes.
- * Uses server-authoritative timestamps — client timestamps are never trusted.
+ * Uses server-authoritative timestamps, client timestamps are never trusted.
  *
  * Flow:
  *   POST → verify wallet signature → upload to IPFS → return CID
@@ -40,9 +40,9 @@ function checkSyncRateLimit(ip: string): boolean {
   return true;
 }
 
-// ── Nonce cache — prevents replay of valid signatures within the time window ──
+// ── Nonce cache, prevents replay of valid signatures within the time window ──
 // Key: wallet + timestamp + last-16-chars of signature (unique per request)
-// Value: expiry timestamp — entries purged lazily on each new request
+// Value: expiry timestamp, entries purged lazily on each new request
 const NONCE_CACHE = new Map<string, number>();
 
 function checkAndConsumNonce(walletAddress: string, timestamp: number, signature: string): boolean {
@@ -65,11 +65,11 @@ function checkAndConsumNonce(walletAddress: string, timestamp: number, signature
 
 // ── Signature auth constants ───────────────────────────────────────────────────
 
-const SIGNATURE_WINDOW_MS = 2 * 60 * 1000; // 2 minutes — replay protection
+const SIGNATURE_WINDOW_MS = 2 * 60 * 1000; // 2 minutes, replay protection
 const SIGN_MESSAGE_PREFIX  = 'Salden Sync: ';
 
 // ── Simple in-memory CID index (wallet → latest CID) ─────────────────────────
-// This is NOT the source of truth — IPFS is.
+// This is NOT the source of truth, IPFS is.
 // It's a fast lookup cache that helps the GET endpoint find the latest CID
 // without querying Pinata's list API every time.
 // On cold start it's empty; clients should pass their known CID in GET requests.
@@ -110,7 +110,7 @@ async function verifyWalletSignature(
   }
 }
 
-// ── POST — upload data to IPFS ─────────────────────────────────────────────────
+// ── POST, upload data to IPFS ─────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Parse body with runtime type validation — TypeScript casts give no runtime safety
+    // Parse body with runtime type validation, TypeScript casts give no runtime safety
     const body = await req.json();
     if (!body || typeof body !== 'object') {
       return NextResponse.json({ success: false, error: 'Invalid request body' }, { status: 400 });
@@ -135,13 +135,16 @@ export async function POST(req: NextRequest) {
     if (typeof walletAddress !== 'string') {
       return NextResponse.json({ success: false, error: 'walletAddress must be a string' }, { status: 400 });
     }
+    if (typeof signature !== 'string' || typeof timestamp !== 'number') {
+      return NextResponse.json({ success: false, error: 'signature and timestamp are required' }, { status: 400 });
+    }
     if (signature !== undefined && typeof signature !== 'string') {
       return NextResponse.json({ success: false, error: 'signature must be a string' }, { status: 400 });
     }
     if (timestamp !== undefined && typeof timestamp !== 'number') {
       return NextResponse.json({ success: false, error: 'timestamp must be a number' }, { status: 400 });
     }
-    // previousCid is optional — only validate if provided
+    // previousCid is optional, only validate if provided
     const safePreviousCid = typeof previousCid === 'string' ? previousCid : undefined;
 
     // ── Input validation ───────────────────────────────────────────────────────
@@ -175,17 +178,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Replay protection — same signature cannot be reused within the window ──
+    // ── Replay protection, same signature cannot be reused within the window ──
     if (typeof signature === 'string' && typeof timestamp === 'number') {
       if (!checkAndConsumNonce(walletAddress, timestamp, signature)) {
         return NextResponse.json(
-          { success: false, error: 'Replay detected — this signed request has already been used.' },
-          { status: 401 }
+          { success: false, error: 'Replay detected, this signed request has already been used.' },
+          { status: 401 },
         );
       }
     }
 
-    // ── Build envelope — server adds authoritative metadata ────────────────────
+    // ── Build envelope, server adds authoritative metadata ────────────────────
     const serverSyncedAt = new Date().toISOString(); // server-authoritative, not client
     const existing       = CID_INDEX.get(walletAddress.toLowerCase());
     const newVersion     = (existing?.version ?? 0) + 1;
@@ -194,7 +197,7 @@ export async function POST(req: NextRequest) {
       walletAddress: walletAddress.toLowerCase(),
       encryptedData,
       version:    newVersion,
-      syncedAt:   serverSyncedAt, // server sets this — never trusted from client
+      syncedAt:   serverSyncedAt, // server sets this, never trusted from client
     };
 
     // ── Upload to IPFS ─────────────────────────────────────────────────────────
@@ -203,7 +206,7 @@ export async function POST(req: NextRequest) {
 
     if (ipfsDisabled()) {
       // Development fallback when PINATA_JWT is not set
-      console.warn('[sync] PINATA_JWT not set — skipping IPFS upload (dev mode)');
+      console.warn('[sync] PINATA_JWT not set, skipping IPFS upload (dev mode)');
       cid     = `dev-cid-${Date.now()}`;
       ipfsUrl = '';
     } else {
@@ -250,7 +253,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// ── GET — fetch data from IPFS ─────────────────────────────────────────────────
+// ── GET, fetch data from IPFS ─────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   try {
@@ -267,7 +270,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Require signature for reads too — prevent data enumeration
+    // Require signature for reads too, prevent data enumeration
     if (!signature || !timestamp) {
       return NextResponse.json(
         { success: false, error: 'Wallet signature and timestamp required' },

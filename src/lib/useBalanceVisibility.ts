@@ -4,7 +4,7 @@
  *
  * Shared "hide my balance" preference for hero-card eye icons (Dashboard,
  * Wallet, Agent Wallet). Previously each page kept this as plain local
- * `useState` with no persistence — so it reset to that page's own hardcoded
+ * `useState` with no persistence, so it reset to that page's own hardcoded
  * default on every navigation/reload instead of remembering what the user
  * last chose. Worse, the three pages didn't even agree with each other on
  * what that default should be (Dashboard defaulted to hidden, Wallet to
@@ -13,7 +13,7 @@
  * Fix: one shared preference, backed by localStorage, so the user's last
  * choice survives reloads and is consistent everywhere. If nothing has
  * been chosen yet (first visit, or storage unavailable), it defaults to
- * VISIBLE — the safer, more useful default for a balance the user hasn't
+ * VISIBLE, the safer, more useful default for a balance the user hasn't
  * explicitly asked to hide.
  *
  * SSR-safety: the initial render (server + first client paint) always
@@ -34,7 +34,7 @@ export function useBalanceVisibility(): [boolean, (next: boolean | ((prev: boole
       const stored = window.localStorage.getItem(STORAGE_KEY);
       if (stored !== null) setVisibleState(stored === 'true');
     } catch {
-      // localStorage unavailable (private browsing, etc.) — silently keep default
+      // localStorage unavailable (private browsing, etc.), silently keep default
     }
   }, []);
 

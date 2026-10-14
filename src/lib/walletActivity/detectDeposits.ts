@@ -4,28 +4,27 @@
  *
  * Detects incoming ERC-20 token transfers (USDC/EURC/cirBTC) to the
  * user's own wallet and records them as local-only "deposit" wallet
- * activity — see WalletActivityRecord in lib/db/indexeddb.ts.
+ * activity, see WalletActivityRecord in lib/db/indexeddb.ts.
  *
  * SCOPE NOTE: this covers ERC-20 transfers only (the interface most
- * external wallets actually use to send "USDC"/"EURC"/"cirBTC" — standard
- * wallet UX doesn't expose Arc Testnet's native-currency/ERC-20 USDC
+ * external wallets actually use to send "USDC"/"EURC"/"cirBTC", standard
+ * wallet UX doesn't expose Arc Network's native-currency/ERC-20 USDC
  * duality to a sender). It deliberately does NOT attempt to detect
  * incoming NATIVE-currency transfers (a raw value transfer with no ERC-20
- * Transfer event) — reliably detecting those requires scanning full block
+ * Transfer event), reliably detecting those requires scanning full block
  * contents rather than a single indexed getLogs() query, which is a much
  * heavier operation. Flagging this honestly rather than silently shipping
  * partial coverage: if someone sends native-currency USDC directly
- * (uncommon — requires deliberately choosing that on the sender's end),
+ * (uncommon, requires deliberately choosing that on the sender's end)
  * it won't show up here, only in the wallet's own balance.
  *
- * Uses a bounded block-range getLogs() query — most RPC providers cap how
+ * Uses a bounded block-range getLogs() query, most RPC providers cap how
  * many blocks a single getLogs call can span, so this queries the most
  * recent ~5000 blocks each time rather than the whole chain history.
  */
 
 import type { PublicClient } from 'viem';
 import { CONTRACTS } from '@/lib/contracts/config';
-import { ERC20_ABI } from '@/lib/contracts/abis';
 import { saveWalletActivity, getWalletActivity } from '@/lib/db/indexeddb';
 
 const DEPOSIT_LOOKBACK_BLOCKS = 5000n;

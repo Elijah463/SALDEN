@@ -9,8 +9,8 @@ interface AppLayoutProps {
   children:     ReactNode;
   title?:       string;
   companyName?: string;
-  headerRight?: ReactNode;   // optional extra right-side header element (e.g. AI Agent's sliders icon) — rendered ALONGSIDE the wallet address badge, not instead of it
-  showWalletAddress?: boolean; // defaults to false — the connected-wallet chip was redundant on most pages (already shown in the sidebar/elsewhere); the AI Agent section still opts in
+  headerRight?: ReactNode;   // optional extra right-side header element (e.g. AI Agent's sliders icon), rendered ALONGSIDE the wallet address badge, not instead of it
+  showWalletAddress?: boolean; // defaults to false, the connected-wallet chip was redundant on most pages (already shown in the sidebar/elsewhere); the AI Agent section still opts in
 }
 
 export function AppLayout({ children, title, companyName, headerRight, showWalletAddress = false }: AppLayoutProps) {
@@ -18,7 +18,7 @@ export function AppLayout({ children, title, companyName, headerRight, showWalle
   const [mounted,     setMounted]     = useState(false);
   const { address } = useEffectiveAddress();
 
-  // Prevent hydration mismatch — wallet state is only available client-side
+  // Prevent hydration mismatch, wallet state is only available client-side
   useEffect(() => { setMounted(true); }, []);
 
   return (
@@ -62,7 +62,7 @@ export function AppLayout({ children, title, companyName, headerRight, showWalle
         {/* Optional extra right-side header element (e.g. AI Agent sliders icon) */}
         {headerRight}
 
-        {/* Only render wallet address after mount — prevents hydration mismatch */}
+        {/* Only render wallet address after mount, prevents hydration mismatch */}
         {showWalletAddress && mounted && address && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,

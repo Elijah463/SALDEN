@@ -7,6 +7,7 @@ import {
   DollarSign, Settings, X, LogOut, Wallet, ChevronRight,
 } from 'lucide-react';
 import { SaldenLogo } from '@/components/shared/Logo';
+import { BetaTag } from '@/components/agent/IrisBrand';
 import { useDisconnect } from 'wagmi';
 import { clearCircleSession } from '@/lib/useEffectiveAddress';
 
@@ -126,6 +127,7 @@ export function Sidebar({ open, onClose, userAddress, companyName }: SidebarProp
               >
                 <Icon size={18} strokeWidth={active ? 2.5 : 2} />
                 {label}
+                {label === 'AI Agent' && <BetaTag />}
                 {active && (
                   <ChevronRight size={14} style={{ marginLeft: 'auto', opacity: 0.6 }} />
                 )}

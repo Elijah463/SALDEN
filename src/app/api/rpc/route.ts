@@ -6,10 +6,10 @@
  * so the browser talks to our own domain instead of directly to Arc's RPC.
  *
  * Why this exists: every read and write in this app previously went
- * straight from the browser to Arc's public testnet RPC via wagmi's
+ * straight from the browser to Arc's public RPC via wagmi's
  * `http()` transport (see components/shared/Web3Provider.tsx). That RPC
  * intermittently rate-limits (HTTP 429, `{"code":-32011,"message":"request
- * limit reached"}`) — and because a 429 response from it doesn't carry
+ * limit reached"}`), and because a 429 response from it doesn't carry
  * CORS headers, the browser reports that as a CORS failure, which is what
  * looked like a CORS misconfiguration but is really rate-limiting wearing
  * a CORS-shaped mask. This was the root cause behind a long list of
@@ -19,7 +19,7 @@
  * Compliance despite one existing, wallet balances intermittently showing
  * 0.00, and "HTTP request failed" on Pricing's Upgrade flow (which alone
  * makes 4+ sequential reads plus two write-transactions' worth of receipt
- * polling, all direct-to-RPC — the single highest-request-density action
+ * polling, all direct-to-RPC, the single highest-request-density action
  * in the app, and so the most exposed to this).
  *
  * This proxy does two concrete things a direct client→RPC call cannot:
@@ -32,7 +32,7 @@
  *
  * Never caches or de-dupes anything that mutates state or that's
  * nonce/timing-sensitive (eth_sendRawTransaction, eth_getTransactionCount,
- * eth_estimateGas) — those always go straight through, retried but never
+ * eth_estimateGas), those always go straight through, retried but never
  * served from cache.
  */
 
@@ -48,7 +48,7 @@ const CACHEABLE_METHODS = new Set([
   'eth_gasPrice', 'eth_getCode', 'eth_getTransactionReceipt',
 ]);
 
-// Single-instance, in-memory, short-lived on purpose — this exists only to
+// Single-instance, in-memory, short-lived on purpose, this exists only to
 // collapse a same-render-burst pattern into one upstream call, not to
 // serve stale data. 1.2s is long enough to catch that burst and short
 // enough that nobody could perceive it as "stale". A KV round trip would
@@ -60,7 +60,7 @@ interface CacheEntry { result: unknown; expiresAt: number; }
 const responseCache = new Map<string, CacheEntry>();
 
 // Opportunistic cleanup so this Map can't grow unbounded across a warm
-// instance's lifetime — cheap, and only ever runs on the (rare) miss path.
+// instance's lifetime, cheap, and only ever runs on the (rare) miss path.
 function pruneCache() {
   if (responseCache.size < 500) return;
   const now = Date.now();
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     // wagmi's http() transport isn't configured with `batch: true` (see
-    // Web3Provider.tsx), so this is almost always a single object — the
+    // Web3Provider.tsx), so this is almost always a single object, the
     // array branch is handled defensively in case that ever changes.
     if (Array.isArray(body)) {
       const results = await Promise.all(body.map((r: JsonRpcRequest) => handleSingle(r)));

@@ -4,7 +4,7 @@
  * GET  /api/profile?address=0x...                     → { companyName, email }
  * POST /api/profile  { address, companyName?, email? } → { success }
  *
- * Thin HTTP wrapper around lib/serverProfileCache.ts — see that file for
+ * Thin HTTP wrapper around lib/serverProfileCache.ts, see that file for
  * the full reasoning. GET is the fast, no-wallet-signature-required path
  * every page checks first so company name / receipt email render
  * immediately on any browser or device; POST is the write-through fired
@@ -24,7 +24,7 @@ import { sanitizeString } from '@/lib/validation';
 
 export const dynamic = 'force-dynamic';
 
-// Same light IP throttle shape as api/clones/route.ts — reads are cheap and
+// Same light IP throttle shape as api/clones/route.ts, reads are cheap and
 // hit on every page load, so only the write path is limited.
 const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
 const IP_RATE_LIMIT  = 60;
@@ -42,7 +42,7 @@ function checkIPRateLimit(ip: string): boolean {
   return true;
 }
 
-// Loose sanity check only — the same email is already accepted as-is
+// Loose sanity check only, the same email is already accepted as-is
 // wherever it's typed in Settings; this just guards against obviously
 // malformed values landing in the cache, not a full RFC validation.
 function looksLikeEmail(value: string): boolean {
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'A valid email is required.' }, { status: 400 });
     }
 
-    // Always writes both fields together (never merges) — Settings > Save
+    // Always writes both fields together (never merges), Settings > Save
     // Profile and the setup wizard both always have both values in hand
     // when they call this, so there's no "only one field known" case like
     // serverCloneCache.ts has to handle for its two independently-

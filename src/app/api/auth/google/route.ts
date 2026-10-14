@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Normalized for consistency with /api/auth/email-wallet's
-    // (.trim().toLowerCase()) — keeps a Google-signed-in and
+    // (.trim().toLowerCase()), keeps a Google-signed-in and
     // email-OTP-signed-in identity for the same address from ever landing
     // on two different Circle users. See LoginModal.tsx's handleEmailSubmit
     // for the full writeup of the bug an inconsistency like this causes.
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
     // ── Step 2: Create / get Circle user and check for existing wallet ────────
     const { session, wallet, isNewUser } = await getUserFirstWallet(email);
 
-    // ── Step 3a: Returning user — wallet already exists ───────────────────────
+    // ── Step 3a: Returning user, wallet already exists ───────────────────────
     if (!isNewUser && wallet) {
       return NextResponse.json({
         success:       true,
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // ── Step 3b: New user — initialize wallet and return challenge ────────────
+    // ── Step 3b: New user, initialize wallet and return challenge ────────────
     const challengeId = await initializeUserWallet(session.userToken);
 
     return NextResponse.json({

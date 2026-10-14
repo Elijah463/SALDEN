@@ -3,7 +3,7 @@
  * SERVER-SIDE ONLY.
  *
  * Previously, app/api/agent/chat and app/api/agent/faucet trusted whatever
- * `walletAddress` string the client sent — nothing tied the request to a
+ * `walletAddress` string the client sent, nothing tied the request to a
  * wallet the caller actually controls. Anyone could POST any address and
  * have the agent act (or propose actions) "as" that wallet.
  *
@@ -11,7 +11,7 @@
  *   1. Client calls POST /api/agent/session with { walletAddress } and
  *      gets back a one-time nonce + message to sign.
  *   2. Client signs it with the connected wallet (walletClient.signMessage
- *      — the same pattern already used elsewhere in this codebase for IPFS
+ * the same pattern already used elsewhere in this codebase for IPFS
  *      encryption key derivation).
  *   3. Client calls POST /api/agent/session again with
  *      { walletAddress, signature } and gets a short-lived signed session
@@ -19,13 +19,13 @@
  *   4. Every subsequent agent request includes `Authorization: Bearer <token>`.
  *      The chat/faucet routes verify the token before doing anything.
  *
- * Tokens are HMAC-signed JSON (not a full JWT library — no extra
+ * Tokens are HMAC-signed JSON (not a full JWT library, no extra
  * dependency needed for this shape) using AGENT_SESSION_SECRET. Verifying
  * the original wallet signature uses viem's verifyMessage, so the only
  * thing trusted is cryptography, not a client-supplied string.
  *
  * ⚠ Same in-memory-Map caveat as rateLimiter.ts applies to the nonce
- * store below — fine for a single instance, swap for Redis/KV in a real
+ * store below, fine for a single instance, swap for Redis/KV in a real
  * multi-instance deployment.
  */
 
@@ -35,7 +35,7 @@ import { verifyMessage, isAddress, getAddress } from 'viem';
 const NONCE_TTL_MS   = 5 * 60 * 1000;   // 5 minutes to sign
 // 15 minutes was short enough that normal pauses in an actual conversation
 // (reading a multi-step result, typing out an edit, stepping away briefly)
-// could hit it mid-chat — exactly the "keeps saying my session expired"
+// could hit it mid-chat, exactly the "keeps saying my session expired"
 // friction reported. 30 minutes meaningfully reduces how often that
 // happens while staying a genuinely short-lived credential, not an
 // indefinite one.
@@ -44,7 +44,7 @@ const SESSION_TTL_MS = 30 * 60 * 1000;  // 30 minute session
 const _nonces = new Map<string, { nonce: string; expiresAt: number }>();
 
 // On a long-lived Node process (not a fresh serverless cold start every time),
-// this Map would otherwise grow forever — every distinct wallet that ever
+// this Map would otherwise grow forever, every distinct wallet that ever
 // requested a nonce leaves an entry behind even after it expires. Prune
 // opportunistically rather than on a timer (no background interval to leak).
 function pruneExpiredNonces(): void {
@@ -61,7 +61,7 @@ function getSecret(): string {
 }
 
 export function issueNonce(walletAddress: string): { nonce: string; message: string } {
-  // Cheap opportunistic cleanup — bounded by the number of distinct wallets
+  // Cheap opportunistic cleanup, bounded by the number of distinct wallets
   // that have ever signed in, which is small relative to request volume.
   if (_nonces.size > 200) pruneExpiredNonces();
 
@@ -76,7 +76,7 @@ export function issueNonce(walletAddress: string): { nonce: string; message: str
       `Sign in to the Salden AI Payroll Agent.\n\n` +
       `Wallet: ${walletAddress}\n` +
       `Nonce: ${existing.nonce}\n` +
-      `This signature does not authorize any payment or transaction — ` +
+      `This signature does not authorize any payment or transaction, ` +
       `it only proves you control this wallet for this chat session.`;
     return { nonce: existing.nonce, message };
   }
@@ -87,7 +87,7 @@ export function issueNonce(walletAddress: string): { nonce: string; message: str
     `Sign in to the Salden AI Payroll Agent.\n\n` +
     `Wallet: ${walletAddress}\n` +
     `Nonce: ${nonce}\n` +
-    `This signature does not authorize any payment or transaction — ` +
+    `This signature does not authorize any payment or transaction, ` +
     `it only proves you control this wallet for this chat session.`;
   return { nonce, message };
 }
@@ -110,14 +110,14 @@ export async function verifyAndIssueSession(
 
   const stored = _nonces.get(checksummed.toLowerCase());
   if (!stored || stored.expiresAt < Date.now()) {
-    return { error: 'No active nonce for this wallet — call session start again.' };
+    return { error: 'No active nonce for this wallet, call session start again.' };
   }
 
   const message =
     `Sign in to the Salden AI Payroll Agent.\n\n` +
     `Wallet: ${checksummed}\n` +
     `Nonce: ${stored.nonce}\n` +
-    `This signature does not authorize any payment or transaction — ` +
+    `This signature does not authorize any payment or transaction, ` +
     `it only proves you control this wallet for this chat session.`;
 
   let valid = false;
@@ -162,7 +162,7 @@ export function verifySessionToken(
     return { ok: false, error: 'Could not parse session token.' };
   }
 
-  if (payload.expiresAt < Date.now()) return { ok: false, error: 'Session expired — sign in again.' };
+  if (payload.expiresAt < Date.now()) return { ok: false, error: 'Session expired, sign in again.' };
   if (expectedWallet && payload.walletAddress.toLowerCase() !== expectedWallet.toLowerCase()) {
     return { ok: false, error: 'Session does not match the wallet on this request.' };
   }

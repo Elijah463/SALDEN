@@ -3,49 +3,48 @@
  * SERVER-SIDE ONLY.
  *
  * Same fix as app/api/rpc/route.ts, extended to the bridge feature's other
- * five chains (Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia, Avalanche
- * Fuji, Linea Sepolia). That proxy's own header comment documents the root
- * cause this mirrors exactly: a public testnet RPC's 429 rate-limit
+ * five chains (Ethereum, Base, Arbitrum, Avalanche
+ * Linea). That proxy's own header comment documents the root
+ * cause this mirrors exactly: a public RPC's 429 rate-limit
  * response doesn't carry CORS headers, so the browser reports it as a CORS
- * failure — which looks like a network/CORS bug but is really
+ * failure, which looks like a network/CORS bug but is really
  * rate-limiting wearing a CORS-shaped mask. Arc's balance reads were fixed
  * by routing them through our own domain server-side, with retry-on-429 and
  * a short-TTL de-dupe cache. The bridge page's destination-chain balance
- * (any of these five — Ethereum Sepolia is the DEFAULT "to" chain, so this
+ * (any of these five, Ethereum is the DEFAULT "to" chain, so this
  * was hitting basically every visitor on page load) was calling straight
  * through to each chain's public RPC directly from the browser via a bare
- * viem `http()` transport, with no such protection — that's why it was
- * showing a permanent "—" rather than an occasional one, unlike Arc's own
+ * viem `http()` transport, with no such protection, that's why it was
+ * showing a permanent ", " rather than an occasional one, unlike Arc's own
  * balance display right next to it (already proxied, and unaffected).
  *
- * One route, chain selected by a `?chain=<AppKitChain key>` query param —
- * viem's `http(url)` transport happily carries a query string through on
- * every POST it makes, so `http('/api/bridge/rpc?chain=Ethereum_Sepolia')`
+ * One route, chain selected by a `?chain=<AppKitChain key>` query param, * viem's `http(url)` transport happily carries a query string through on
+ * every POST it makes, so `http('/api/bridge/rpc?chain=Ethereum')`
  * routes every request for that client to the right upstream here with no
- * other wiring needed. Arc Testnet itself is deliberately NOT included in
- * CHAIN_RPC_URLS below — it already has its own dedicated, working proxy
+ * other wiring needed. Arc Network itself is deliberately NOT included in
+ * CHAIN_RPC_URLS below, it already has its own dedicated, working proxy
  * (app/api/rpc/route.ts, backed by NEXT_PUBLIC_RPC_URL), and bridge/page.tsx
  * keeps using that one for Arc unchanged; this route exists only for the
  * five chains that had no proxy at all.
  *
  * Upstream URLs are each chain's own default public RPC endpoint from
- * viem/chains — the exact same endpoints the browser was already calling
+ * viem/chains, the exact same endpoints the browser was already calling
  * directly; only WHERE the call originates from changes (server vs
  * browser), not which endpoint is used.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { sepolia, baseSepolia, arbitrumSepolia, avalancheFuji, lineaSepolia } from 'viem/chains';
+import { mainnet, base, arbitrum, avalanche, linea } from 'viem/chains';
 
 export const dynamic     = 'force-dynamic';
 export const maxDuration = 30;
 
 const CHAIN_RPC_URLS: Record<string, string> = {
-  Ethereum_Sepolia: sepolia.rpcUrls.default.http[0],
-  Base_Sepolia:     baseSepolia.rpcUrls.default.http[0],
-  Arbitrum_Sepolia: arbitrumSepolia.rpcUrls.default.http[0],
-  Avalanche_Fuji:   avalancheFuji.rpcUrls.default.http[0],
-  Linea_Sepolia:    lineaSepolia.rpcUrls.default.http[0],
+  Ethereum:  mainnet.rpcUrls.default.http[0],
+  Base:      base.rpcUrls.default.http[0],
+  Arbitrum:  arbitrum.rpcUrls.default.http[0],
+  Avalanche: avalanche.rpcUrls.default.http[0],
+  Linea:     linea.rpcUrls.default.http[0],
 };
 
 const CACHEABLE_METHODS = new Set([
@@ -54,7 +53,7 @@ const CACHEABLE_METHODS = new Set([
 ]);
 
 // Defense-in-depth: this proxy has no signing capability, so it could
-// never move funds either way — but without an allowlist it would happily
+// never move funds either way, but without an allowlist it would happily
 // relay ANY JSON-RPC method (including state-changing ones like
 // eth_sendRawTransaction) to the upstream public RPC on anyone's behalf,
 // turning our server into an open relay. The bridge page only ever needs
@@ -149,7 +148,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     // Mirrors app/api/rpc/route.ts: viem's http() transport here isn't
     // configured with batch:true, so this is almost always a single
-    // object — the array branch is handled defensively in case that ever
+    // object, the array branch is handled defensively in case that ever
     // changes.
     if (Array.isArray(body)) {
       const results = await Promise.all(body.map((r: JsonRpcRequest) => handleSingle(upstream, chain, r)));

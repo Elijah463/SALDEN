@@ -4,11 +4,12 @@
  *
  * Real implementations behind the agent's function-calling tools (see
  * tools.ts for the Gemini schemas). These were previously just claimed in
- * the system prompt with nothing behind them — the agent could only
+ * the system prompt with nothing behind them, the agent could only
  * guess at a balance or compliance status. Now they hit real on-chain
  * reads or a real (pluggable) compliance provider.
  */
 
+import { OFAC_ADDRESSES } from '@/lib/compliance/ofacAddresses.generated';
 import { getAddress, isAddress, formatUnits } from 'viem';
 import crypto from 'crypto';
 import { getServerPublicClient } from './chain';
@@ -28,7 +29,7 @@ export interface BalanceResult {
  * Reads a real on-chain balance. `token` is either 'native' (the chain's
  * gas token) or an ERC-20 symbol resolved against the tokenRegistry the
  * client already sent in this request's context (so this never guesses a
- * token address — if it's not in the registry the tool fails honestly
+ * token address, if it's not in the registry the tool fails honestly
  * rather than reading the wrong contract).
  */
 export async function executeGetBalance(
@@ -52,7 +53,7 @@ export async function executeGetBalance(
       .find(([, v]) => v.symbol.toUpperCase() === token.toUpperCase());
 
     if (!entry) {
-      return { ok: false, error: `"${token}" isn't in the token registry — balance check unavailable.` };
+      return { ok: false, error: `"${token}" isn't in the token registry, balance check unavailable.` };
     }
 
     const [tokenAddr, meta] = entry;
@@ -63,7 +64,7 @@ export async function executeGetBalance(
 
     return { ok: true, address: checksummed, token: meta.symbol, balance: formatUnits(raw, meta.decimals) };
   } catch {
-    return { ok: false, error: 'Balance check failed — the network may be temporarily unavailable.' };
+    return { ok: false, error: 'Balance check failed, the network may be temporarily unavailable.' };
   }
 }
 
@@ -112,19 +113,13 @@ export interface OfacResult {
 // A small set of well-documented, publicly-known OFAC SDN-designated
 // crypto addresses (e.g. the August 2022 Tornado Cash designations) used
 // ONLY as a fallback when no real compliance provider is configured. This
-// is NOT a substitute for a real screening provider — it covers a handful
+// is NOT a substitute for a real screening provider, it covers a handful
 // of historically public cases, nothing close to the full SDN list, and
 // is not maintained for new designations. The tool result says so
 // explicitly so the AI agent (and you) don't mistake it for real coverage.
-const KNOWN_SANCTIONED_FALLBACK = new Set([
-  '0x8589427373d6d84e98730d7795d8f6f8731fda0', // Tornado Cash
-  '0x722122df12d4e14e13ac3b6895a86e84145b6e0',
-  '0xdd4c48c0b24039969fc16d1cdf626eab821d3e0',
-  '0xd90e2f925da726b50c4ed8d0fb90ad053324f31',
-  '0x07687e702b410fa43f4cb4af7fa097918ffd2730',
-  '0x910cbd523d972eb0a6f4cae4618ad62622b39dbf',
-  '0xa160cdab225685da1d56aa342ad8841c3b53f291',
-].map(a => a.toLowerCase()));
+// Fallback screening set: the OFAC SDN digital-currency addresses, refreshed by
+// scripts/update-ofac-addresses.py (see src/lib/compliance/ofacAddresses.generated.ts).
+const KNOWN_SANCTIONED_FALLBACK: ReadonlySet<string> = OFAC_ADDRESSES;
 
 /**
  * Pluggable compliance check. If ELLIPTIC_API_KEY and ELLIPTIC_API_SECRET
@@ -133,25 +128,25 @@ const KNOWN_SANCTIONED_FALLBACK = new Set([
  * list above with an explicit "limited coverage" flag in the result so
  * the model never reports a false sense of confidence.
  *
- * Replaces the previous Chainalysis integration (removed) — Elliptic's
+ * Replaces the previous Chainalysis integration (removed), Elliptic's
  * request/response shape below is based on their published API docs
  * (https://developers.elliptic.co, "Authentication" and "Wallet Screening
- * — Synchronous" pages) rather than a live sandbox call from this build
+ * Synchronous" pages) rather than a live sandbox call from this build
  * environment (no network access here to actually exercise it). Two
  * things worth double-checking in your onboarding call before relying on
  * this in production:
  *   1. The `asset`/`blockchain` values below ("ETH"/"ethereum") assume
- *      Elliptic treats Salden's chain (Arc testnet, an EVM chain) the
+ *      Elliptic treats Salden's chain (Arc Network, an EVM chain) the
  *      same as standard Ethereum for address-format purposes. If Arc
  *      isn't in Elliptic's supported network list, ask them what
- *      asset/blockchain pair to use for it, or whether testnet addresses
+ *      asset/blockchain pair to use for it, or whether non-mainnet addresses
  *      are screened at all (many providers only cover mainnet).
  *   2. The exact shape of a successful response (this reads
- *      `risk_score` per Elliptic's Python SDK example — a numeric score,
+ *      `risk_score` per Elliptic's Python SDK example, a numeric score
  *      where this code treats "sanctions" risk type as the disqualifying
  *      signal). Confirm the field name/threshold that means "sanctioned"
  *      specifically, as opposed to merely "elevated risk" for some other
- *      reason (mixers, high-risk exchanges, etc.) — those are not the
+ *      reason (mixers, high-risk exchanges, etc.), those are not the
  *      same determination and this tool is specifically an OFAC/sanctions
  *      check, not a general risk-score gate.
  */

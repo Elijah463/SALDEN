@@ -1,11 +1,12 @@
 'use client';
 /**
  * @file app/compliance/page.tsx
- * Compliance Dashboard — monitors wallet health, contract state,
+ * Compliance Dashboard, monitors wallet health, contract state
  * OFAC screening, and registry sync status.
  * Scorechain removed per spec. All checks run client-side via viem.
  */
 
+import { OFAC_ADDRESSES } from '@/lib/compliance/ofacAddresses.generated';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePublicClient } from 'wagmi';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
@@ -16,7 +17,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Button } from '@/components/shared/Button';
 import { useApp } from '@/context/AppContext';
-import { CONTRACTS, arcTestnet, addressLink } from '@/lib/contracts/config';
+import { CONTRACTS, arcChain, addressLink } from '@/lib/contracts/config';
 import { ENTERPRISE_PAYROLL_ABI, ERC20_ABI } from '@/lib/contracts/abis';
 import { isValidEthAddress, truncAddr } from '@/lib/validation';
 import { useRegistryCloneAccess } from '@/lib/useRegistryCloneAccess';
@@ -64,11 +65,7 @@ function statusBadge(status: CheckStatus) {
 // Real implementation would call an OFAC API. Here we check against a
 // hard-coded sample list. In production: replace with a compliance API call.
 
-const OFAC_SAMPLE_BLOCKLIST = new Set<string>([
-  // Known OFAC-sanctioned addresses (examples — keep updated)
-  '0x7f367cc41522ce07553e823bf3be79a889debe1b',
-  '0xd882cfc20f52f2599d84b8e8d58c7fb62cfe344b',
-]);
+const OFAC_SAMPLE_BLOCKLIST = OFAC_ADDRESSES;
 
 function isOfacFlagged(address: string): boolean {
   return OFAC_SAMPLE_BLOCKLIST.has(address.toLowerCase());
@@ -78,10 +75,10 @@ function isOfacFlagged(address: string): boolean {
 
 export default function CompliancePage() {
   const { address, mounted } = useEffectiveAddress();
-  const publicClient         = usePublicClient({ chainId: arcTestnet.id });
+  const publicClient         = usePublicClient({ chainId: arcChain.id });
   const { state }            = useApp();
   const { employees, registryClone } = state;
-  // Compliance never had its own resolution for registryClone — it only
+  // Compliance never had its own resolution for registryClone, it only
   // ever trusted whatever state.registryClone happened to already be
   // populated by another page visited earlier this session, which is why
   // "No registry clone deployed. Employee data is stored locally only."
@@ -206,12 +203,12 @@ export default function CompliancePage() {
       });
     }
 
-    // 7. Contract balance check — does the employer's own wallet actually
+    // 7. Contract balance check, does the employer's own wallet actually
     // hold enough USDC to cover this payroll run? Payroll execution pulls
     // funds from the employer's wallet via ERC-20 allowance/transferFrom
     // (see dashboard/page.tsx's handleExecutePayroll), not from the payroll
     // contract's own balance, so that's the balance that actually matters
-    // here — previously this check computed the total obligation but never
+    // here, previously this check computed the total obligation but never
     // read any on-chain balance to compare it against, so it always
     // reported "pass" even with an empty wallet.
     try {
@@ -261,7 +258,7 @@ export default function CompliancePage() {
   // every render (or on address changing) would also be excessive; this
   // captures the correctly-resolved wallet exactly once, right after
   // mount finishes settling, rather than the moment before it (mounted
-  // flips true and address resolves in the same render — see
+  // flips true and address resolves in the same render, see
   // lib/useEffectiveAddress.ts).
   useEffect(() => {
     if (!mounted) return;
@@ -270,7 +267,7 @@ export default function CompliancePage() {
 
   // useRegistryCloneAccess() above resolves registryClone asynchronously
   // (a cache read, or an on-chain call, either of which can take a
-  // moment) — without this, the Registry Sync check above kept showing
+  // moment), without this, the Registry Sync check above kept showing
   // its stale initial "not found" result even after the real address
   // arrived a moment later, since the effect above only ever runs once,
   // on mount. Guarded to fire only the first time registryClone actually
@@ -347,7 +344,7 @@ export default function CompliancePage() {
                 alignItems: 'center', justifyContent: 'center',
               }}>
                 <div style={{ fontSize: 22, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>
-                  {overallScore ?? '—'}
+                  {overallScore ?? ', '}
                 </div>
                 {overallScore !== null && (
                   <div style={{ fontSize: 10, color: '#94A3B8', fontWeight: 600 }}>/ 100</div>
@@ -431,7 +428,7 @@ export default function CompliancePage() {
           <p style={{ fontSize: 13, color: '#4F46E5', margin: 0, lineHeight: 1.65 }}>
             Compliance checks run locally using Onchain data and your employee list.
             OFAC screening uses a locally maintained blocklist.
-            Premium users can enable the AI Agent to run automated compliance audits on a schedule.
+            Salden Pro users can enable the AI Agent to run automated compliance audits on a schedule.
           </p>
         </div>
       </div>

@@ -1,17 +1,16 @@
 /**
  * @file app/api/circle/sign-transaction-challenge/route.ts
  *
- * SUPERSEDED — see /api/circle/contract-execution-challenge/route.ts,
+ * SUPERSEDED, see /api/circle/contract-execution-challenge/route.ts
  * which is what lib/circle/useUniversalWrite.ts calls now.
  *
  * This route existed because wallets were being created under the
  * generic "Other EVM blockchains" classification, which genuinely
  * doesn't support /user/transactions/contractExecution for
- * user-controlled wallets — confirmed at the time by the exact "the
+ * user-controlled wallets, confirmed at the time by the exact "the
  * specified blockchain is either not supported or deprecated" error it
  * produced. That diagnosis was correct, but the underlying assumption
- * (that Arc itself only qualifies for the generic fallback) was wrong —
- * Arc has its own fully-supported chain code, `ARC-TESTNET`, confirmed
+ * (that Arc itself only qualifies for the generic fallback) was wrong, * Arc has its own fully-supported chain code, `ARC`, confirmed
  * against Circle's own supported-blockchains doc. Once
  * lib/circle/user-wallet.ts's initializeUserWallet() was corrected to
  * use it, contractExecution started working directly, so this
@@ -77,7 +76,7 @@ export async function POST(req: NextRequest) {
     const { session, wallet } = await getUserFirstWallet(email);
 
     if (!wallet) {
-      return NextResponse.json({ error: 'No wallet found for this account yet — finish setting up your wallet first.' }, { status: 400 });
+      return NextResponse.json({ error: 'No wallet found for this account yet, finish setting up your wallet first.' }, { status: 400 });
     }
 
     const challengeId = await createTransactionSigningChallenge({

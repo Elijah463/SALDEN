@@ -29,7 +29,7 @@ export interface SwapQuoteState {
   quoteError: string;
 }
 
-/** Debounced (500ms) live quote — refetches whenever tokenIn/tokenOut/
+/** Debounced (500ms) live quote, refetches whenever tokenIn/tokenOut/
  *  amountIn/address change, and safely discards any response that arrives
  *  after a newer request has already superseded it (fast typing can fire
  *  several requests before the first one resolves). */
@@ -65,7 +65,7 @@ export function useSwapQuote(
       fetch(`/api/lifi/quote?fromToken=${tokenIn.address}&toToken=${tokenOut.address}&fromAmount=${rawAmount}&fromAddress=${address}`)
         .then(res => res.json())
         .then((data: { quote: LifiQuoteResponse | null; error?: string }) => {
-          if (thisRequestId !== requestId.current) return; // stale — a newer request has already superseded this one
+          if (thisRequestId !== requestId.current) return; // stale, a newer request has already superseded this one
           if (!data.quote) {
             setQuoteError(data.error || 'No route available for this pair right now.');
             return;

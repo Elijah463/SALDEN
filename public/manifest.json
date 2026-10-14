@@ -1,7 +1,7 @@
 {
   "name": "Salden — Smart Payroll",
   "short_name": "Salden",
-  "description": "On-chain payroll for teams of any size. Batch payments, AI automation, and compliance — all on Arc Testnet.",
+  "description": "On-chain payroll for teams of any size. Batch payments, AI automation, and compliance — all on Arc Network.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

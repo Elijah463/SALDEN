@@ -10,13 +10,13 @@ export interface TokenCacheEntry {
   walletAddress:  string;         // employer's payroll clone owner
   contractAddr:   string;         // payroll clone address
   tokenAddresses: string[];       // raw addresses from getSupportedTokens()
-  cachedAt:       number;         // unix ms — used for 30-min TTL
+  cachedAt:       number;         // unix ms, used for 30-min TTL
 }
 
 /**
  * Local snapshot of the last-known-good payroll dataset, keyed per wallet.
- * This is NOT a source of truth — the IPFS CID anchored on SaldenRegistry
- * always is — it exists purely so the UI can paint instantly on
+ * This is NOT a source of truth, the IPFS CID anchored on SaldenRegistry
+ * always is, it exists purely so the UI can paint instantly on
  * load/refresh instead of showing an empty dashboard while the
  * signature -> RPC -> IPFS -> decrypt round trip completes. `cidHash` (the
  * same keccak256 the registry contract stores) is what lets the frontend
@@ -24,7 +24,7 @@ export interface TokenCacheEntry {
  *
  * `payload` is an ENCRYPTED envelope, not plaintext. The app's entire sync
  * design exists to keep employee names/wallets/salaries encrypted at rest
- * (via a wallet-signature-derived key) before they ever touch IPFS — a
+ * (via a wallet-signature-derived key) before they ever touch IPFS, a
  * plaintext local cache of that same data would quietly undermine that,
  * since IndexedDB content is trivially readable via devtools or a disk/
  * backup dump. This envelope is encrypted with a separate, non-wallet
@@ -36,7 +36,7 @@ export interface TokenCacheEntry {
 export interface PayrollCacheEntry {
   walletAddress: string;
   cid:           string;
-  cidHash:       string;    // keccak256(cid) — matches SaldenRegistry.getCIDHash()
+  cidHash:       string;    // keccak256(cid), matches SaldenRegistry.getCIDHash()
   payload:       { iv: string; ciphertext: string };  // AES-GCM envelope, device-key encrypted
   cachedAt:      number;
 }
@@ -45,17 +45,17 @@ const DB_NAME    = 'salden-db';
 const DB_VERSION = 5;             // bumped: adds walletActivity store
 
 /**
- * Swap / Bridge / incoming-Deposit activity — deliberately LOCAL-ONLY,
+ * Swap / Bridge / incoming-Deposit activity, deliberately LOCAL-ONLY
  * unlike TxRecord (which is payroll-specific and this app treats as the
  * "real" transaction history). This does not sync anywhere (no IPFS, no
- * KV, no cross-device sync) — per explicit product decision, it's fine if
+ * KV, no cross-device sync), per explicit product decision, it's fine if
  * a different device/browser doesn't show the same activity.
  */
 export interface WalletActivityRecord {
   id: string;              // txHash (deposits: `${txHash}-${logIndex}` in case multiple tokens move in one tx)
   hash: string;
   type: 'swap' | 'bridge' | 'deposit';
-  walletAddress: string;   // owner — indexed, so this scales fine per-wallet
+  walletAddress: string;   // owner, indexed, so this scales fine per-wallet
   timestamp: number;
   // swap
   fromToken?:  string;
@@ -63,12 +63,16 @@ export interface WalletActivityRecord {
   toToken?:    string;
   toAmount?:   string;
   // bridge
-  fromChain?: string;      // display name, e.g. "Ethereum Sepolia"
+  fromChain?: string;      // display name, e.g. "Ethereum"
   toChain?:   string;      // display name, e.g. "Arc"
   token?:     string;
   amount?:    string;
   // deposit (received from another wallet)
   fromAddress?: string;
+  // deposit from the Circle onramp (card / bank). Recorded when the widget reports it
+  // updated when it settles. The id is `onramp:<sessionId>`, so the same row is updated.
+  source?: 'onramp';
+  status?: 'submitted' | 'settled';
 }
 
 export interface TxRecord {
@@ -83,7 +87,7 @@ export interface TxRecord {
   remark?: string;       // memo remark e.g. "Salary Payment"
   recipientCount: number;
   /** Set only for single-recipient sends (type: 'other', a plain wallet
-   *  transfer) — lets the UI show who was actually paid instead of just
+   *  transfer), lets the UI show who was actually paid instead of just
    *  a recipient count of "1". */
   recipientAddress?: string;
   timestamp: number;     // unix ms
@@ -91,7 +95,7 @@ export interface TxRecord {
   receiptEmailStatus?: 'sent' | 'failed' | 'pending' | null;
   receiptEmailSentAt?: number | null;
   description?: string;
-  /** Who triggered this transaction — drives payroll receipt email wording and audit trail. */
+  /** Who triggered this transaction, drives payroll receipt email wording and audit trail. */
   executedBy?: 'manual' | 'ai_agent' | 'ai_agent_scheduled';
 }
 
@@ -124,17 +128,17 @@ export interface AgentSchedule {
    * Snapshot of exactly who gets paid how much, resolved CLIENT-SIDE (where
    * the decrypted employee list exists) at the moment this schedule was
    * created or last refreshed. This is what the server-side cron executor
-   * actually pays — it has no way to decrypt the live employee list itself
+   * actually pays, it has no way to decrypt the live employee list itself
    * (the AES key is derived from a wallet signature and never leaves the
    * browser, see AppContext.tsx's encryptionKeyRef). This means a salary
    * change AFTER scheduling won't be reflected until the schedule is
-   * refreshed/recreated — an inherent constraint of this architecture, not
+   * refreshed/recreated, an inherent constraint of this architecture, not
    * a bug. recipientCount lets the UI show "3 employees" without needing
    * to re-decrypt anything.
    */
   resolvedPayments?: Array<{ address: string; amount: string }>;
   recurrence?: 'weekly' | 'biweekly' | 'monthly';
-  /** Snapshotted at creation time — the cron executor has no live session to
+  /** Snapshotted at creation time, the cron executor has no live session to
    *  look these up with. */
   agentWalletId?:      string;
   agentWalletAddress?: string;
@@ -144,12 +148,12 @@ export interface AgentSchedule {
   /**
    * Snapshot of payrollSetup.email at schedule-creation time, used to send
    * the payroll receipt once a scheduled payment confirms on-chain. This
-   * cannot be live-fetched later — payrollSetup is only ever available
+   * cannot be live-fetched later, payrollSetup is only ever available
    * decrypted in the browser (see PayrollCacheEntry doc comment above), so
    * if this isn't captured now, it is permanently unavailable to the
    * server-side executor. Optional: schedules created before this field
    * existed, or by a user who never set a company email in Settings,
-   * simply won't have a payroll receipt email sent — handled as a graceful skip
+   * simply won't have a payroll receipt email sent, handled as a graceful skip
    * wherever this is read, not an error state.
    */
   recipientEmail?: string;
@@ -186,20 +190,20 @@ async function getDB(): Promise<IDBPDatabase> {
         const schedStore = database.createObjectStore('agentSchedules', { keyPath: 'id' });
         schedStore.createIndex('by-wallet', 'walletAddress');
       }
-      // v2 — token address cache (avoids on-chain read on every modal open)
+      // v2, token address cache (avoids on-chain read on every modal open)
       if (!database.objectStoreNames.contains('tokenCache')) {
         database.createObjectStore('tokenCache', { keyPath: 'contractAddr' });
       }
-      // v3 — last-known-good payroll snapshot, for instant paint on
+      // v3, last-known-good payroll snapshot, for instant paint on
       // load/refresh (see PayrollCacheEntry doc comment above).
       if (!database.objectStoreNames.contains('payrollCache')) {
         database.createObjectStore('payrollCache', { keyPath: 'walletAddress' });
       }
-      // v4 — device-local key used to encrypt payrollCache entries at rest.
+      // v4, device-local key used to encrypt payrollCache entries at rest.
       if (!database.objectStoreNames.contains('deviceKey')) {
         database.createObjectStore('deviceKey', { keyPath: 'id' });
       }
-      // v5 — Swap/Bridge/Deposit activity, local-only (see WalletActivityRecord).
+      // v5, Swap/Bridge/Deposit activity, local-only (see WalletActivityRecord).
       if (!database.objectStoreNames.contains('walletActivity')) {
         const activityStore = database.createObjectStore('walletActivity', { keyPath: 'id' });
         activityStore.createIndex('by-wallet', 'walletAddress');
@@ -339,7 +343,7 @@ export async function clearCachedPayrollSnapshot(walletAddress: string): Promise
 
 // ── Device-local encryption key for the payroll cache ────────────────────────
 //
-// This key is NOT derived from a wallet signature — it's a random AES-GCM
+// This key is NOT derived from a wallet signature, it's a random AES-GCM
 // key generated once per browser profile and persisted locally. That's a
 // deliberate choice: deriving it from a signature would mean reading the
 // local cache needs a wallet prompt, which defeats the entire point of
@@ -348,7 +352,7 @@ export async function clearCachedPayrollSnapshot(walletAddress: string): Promise
 // readable by opening devtools or dumping a browser profile from disk, and
 // this key means that inspection doesn't hand over employee names/wallets/
 // salaries directly. It does NOT protect against a malicious script already
-// running in this origin (it could read the key from the same store) — no
+// running in this origin (it could read the key from the same store), no
 // client-side-only scheme can fully protect against that; the actual
 // confidentiality guarantee for data at rest in the outside world remains
 // the wallet-signature-derived key used for the real IPFS-synced payload.
@@ -381,13 +385,13 @@ export async function getOrCreateDeviceKey(): Promise<CryptoKey> {
   return _deviceKeyPromise;
 }
 
-// ── Wallet activity (Swap/Bridge/Deposit) — local-only ───────────────────────
+// ── Wallet activity (Swap/Bridge/Deposit), local-only ───────────────────────
 
 export async function saveWalletActivity(record: WalletActivityRecord): Promise<void> {
   try {
     const database = await getDB();
     // Normalized consistently with the read side below (getWalletActivity
-    // queries the by-wallet index with .toLowerCase() too) — without this,
+    // queries the by-wallet index with .toLowerCase() too), without this
     // a record saved with checksummed casing would silently never be
     // found by the lowercase-keyed query.
     await database.put('walletActivity', { ...record, walletAddress: record.walletAddress.toLowerCase() });
