@@ -141,6 +141,12 @@ const MAX_CONV_MSGS  = 40;
 const WARN_CONV_AT   = 25;
 const CARD_TTL_MS    = 10 * 60 * 1000; // confirmation cards expire after 10 minutes
 
+// Mirrors FREE_MESSAGE_LIMIT in lib/agent/tier.ts (SERVER ONLY, not
+// importable from a client component). Display label only, the real
+// enforcement and the real count live entirely server-side; this is never
+// used to decide whether to lock, only how to word the locked message.
+const FREE_TIER_LIMIT_LABEL = 5;
+
 const DAILY_KEY      = () => `salden_agent_requests_${new Date().toISOString().slice(0, 10)}`;
 const DAILY_LIMIT    = 1500;
 const DAILY_WARN_AT  = 1200;
@@ -156,6 +162,15 @@ const SUGGESTED = [
 
 function nowTime() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatRetryWait(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return 'shortly';
+  const hrs  = Math.floor(seconds / 3600);
+  const mins = Math.ceil((seconds % 3600) / 60);
+  if (hrs <= 0) return `${mins} minute${mins === 1 ? '' : 's'}`;
+  if (mins <= 0) return `${hrs} hour${hrs === 1 ? '' : 's'}`;
+  return `${hrs} hour${hrs === 1 ? '' : 's'} ${mins} minute${mins === 1 ? '' : 's'}`;
 }
 
 function getDailyCount(): number {
@@ -235,6 +250,15 @@ async function normaliseAgentResponse(res: Response, onStatus: (text: string) =>
 export default function ChatInterface({ walletAddress, onDataChanged, agentAddress, agentActive, agentWalletId, sessionId, hydrationStatus }: ChatInterfaceProps) {
   const [agentStatus, setAgentStatus] = useState('');
   const [upgradeNeeded, setUpgradeNeeded] = useState(false);
+  /** Full free-tier lockout (distinct from upgradeNeeded, which only means
+   *  "the last message asked for a tool action and this wallet is free").
+   *  This is set from the server's own count, both on mount (via the quota
+   *  check below, so a refresh or a brand-new chat shows the lock
+   *  immediately, before any message is even typed) and from freeLimitReached
+   *  on a chat response, so it can never be cleared by anything client-side,
+   *  only by the server-side window actually rolling over. */
+  const [freeLimitLocked, setFreeLimitLocked] = useState(false);
+  const [freeLimitRetryAfter, setFreeLimitRetryAfter] = useState<number | null>(null);
   const { state } = useApp();
   const { employees, tokenRegistry, payrollClone, payrollSetup } = state;
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
@@ -279,6 +303,40 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
   const persistedLogKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => { setDailyCount(getDailyCount()); }, []);
+
+  // Server-authoritative free-tier lock check. Runs on mount and whenever
+  // the wallet changes, so a refresh or opening a brand-new chat shows the
+  // lockout immediately, from the server's own count, instead of briefly
+  // (or indefinitely) rendering an unlocked composer that only turns out to
+  // be blocked once a message is actually sent. Deliberately NOT gated on
+  // anything in localStorage/sessionStorage: those are client state and
+  // would make the lock trivially clearable by clearing storage. Pro
+  // wallets never see this (the endpoint reports freeLimitReached: false
+  // for them without even reading the quota).
+  useEffect(() => {
+    let cancelled = false;
+    if (!walletAddress) return;
+    (async () => {
+      try {
+        const token = await getToken(walletAddress, universalSignMessage);
+        const res = await fetch(`${API_BASE}/agent/quota?walletAddress=${encodeURIComponent(walletAddress)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json() as { freeLimitReached?: boolean; retryAfterSeconds?: number };
+        if (cancelled) return;
+        if (data.freeLimitReached) {
+          setFreeLimitLocked(true);
+          setFreeLimitRetryAfter(data.retryAfterSeconds ?? null);
+        }
+      } catch {
+        // Fails open here deliberately, same reasoning as the quota route
+        // itself: a failed check just means the lock banner doesn't show
+        // pre-emptively, the real gate on /api/agent/chat still applies.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [walletAddress, getToken, universalSignMessage]);
   useEffect(() => {
     if (!isNearBottomRef.current) return;
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -515,6 +573,11 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     // Silent sends (confirmation events from card callbacks) must never be
     // dropped by the isLoading guard, the AI needs to know what happened.
     if ((!text.trim() && !attachment) || (isLoading && !silent)) return;
+    // Belt-and-suspenders: the composer is hidden while locked, but a silent
+    // send (card callback) bypasses the composer entirely, so re-check here
+    // too. The server re-checks independently regardless; this just avoids
+    // a wasted round trip once the client already knows it's locked.
+    if (freeLimitLocked) return;
 
     const currentCount = getDailyCount();
     if (currentCount >= DAILY_BLOCK_AT) {
@@ -610,7 +673,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       const data = await res.json() as {
         response?: string; actionLog?: ActionLogEntry[]; events?: AgentEvent[];
         truncated?: boolean; rateLimited?: boolean; cached?: boolean;
-        upgradeRequired?: boolean; freeLimitReached?: boolean;
+        upgradeRequired?: boolean; freeLimitReached?: boolean; retryAfterSeconds?: number;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rawParts?: any[];
       };
@@ -627,7 +690,18 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         rawParts: data.rawParts,
       };
       setMessages(prev => [...prev, assistantMsg]);
-      if (data.upgradeRequired) setUpgradeNeeded(true);
+      // freeLimitReached is the real, fully-enforced lockout (the free
+      // message quota is actually exhausted for this wallet/window): hide
+      // the composer entirely, see the render below. A bare upgradeRequired
+      // with no freeLimitReached just means the last message asked for a
+      // tool action on a free wallet, chat is still available, only the
+      // lighter banner shows for that.
+      if (data.freeLimitReached) {
+        setFreeLimitLocked(true);
+        setFreeLimitRetryAfter(data.retryAfterSeconds ?? null);
+      } else if (data.upgradeRequired) {
+        setUpgradeNeeded(true);
+      }
 
       if (!data.rateLimited && !data.cached) {
         setDailyCount(incrementDailyCount());
@@ -661,7 +735,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
     } finally {
       setIsLoading(false);
     }
-  }, [messages, isLoading, walletAddress, canWrite, universalSignMessage, employees, onDataChanged, getToken, invalidate]);
+  }, [messages, isLoading, walletAddress, canWrite, universalSignMessage, employees, onDataChanged, getToken, invalidate, freeLimitLocked]);
 
   const markEventResolved = useCallback((messageId: string, index: number) => {
     setMessages(prev => prev.map(m => {
@@ -718,14 +792,18 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         </div>
       )}
 
-      {upgradeNeeded && (
+      {/* Tool-access-only notice: the wallet is free and the last message
+       *  asked for an action (pay, schedule, edit, etc). Chat itself is
+       *  still available, this is NOT the full lockout, see freeLimitLocked
+       *  below for that, rendered in place of the composer instead. */}
+      {upgradeNeeded && !freeLimitLocked && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
           background: '#EEF2FF', border: '1px solid #C7D2FE', borderRadius: 10,
           padding: '10px 14px', margin: '8px 16px 0', fontSize: 13,
         }}>
           <span style={{ color: '#4338CA', fontWeight: 600 }}>
-            You've reached your free usage limit. Come back in 5 hours, or upgrade for unlimited messages.
+            That action requires Salden Pro. You can keep chatting on the free plan.
           </span>
           <a href="/pricing" style={{
             padding: '6px 14px', borderRadius: 8, background: '#4F46E5', color: '#fff',
@@ -1098,62 +1176,82 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         </div>
       )}
 
-      {/* Input */}
-      <div style={{ padding: '12px 16px', background: '#FFF', borderTop: '1px solid #E2E8F0', display: 'flex', gap: 10, alignItems: 'flex-end', flexShrink: 0 }}>
-        <input
-          ref={fileInputRef}
-          type="file"
-          // No image MIME types here anymore at all, the previous gallery-
-          // jump issue was specifically caused by an image-only accept list
-          // making mobile browsers treat this as a photo picker. With only
-          // document/code/data types now, there's nothing for the OS to
-          // read as "this wants a photo," so it should show the normal
-          // file browser instead. Both MIME types and extensions are
-          // listed for the same reason as before: some extensions
-          // (.ts/.tsx/.jsx especially) don't have a standardized MIME type
-          // and are inconsistently reported by different browsers/OSes.
-          accept="application/pdf,.pdf,text/csv,.csv,application/json,.json,text/markdown,.md,text/plain,.txt,.js,.jsx,.ts,.tsx"
-          onChange={handleFileSelect}
-          style={{ display: 'none' }}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isLoading || isBlocked}
-          title="Attach a document (roster, offer letter, etc.) for the agent to read"
-          style={{
-            width: 40, height: 40, borderRadius: 10, background: '#F8FAFC', border: '1px solid #E2E8F0',
-            cursor: isLoading || isBlocked ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', flexShrink: 0, color: '#64748B',
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-          </svg>
-        </button>
-        <textarea
-          ref={textareaRef}
-          className="salden-chat-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Chat Agent"
-          rows={1}
-          disabled={isLoading || isBlocked}
-          style={{ flex: 1, resize: 'none', border: '1px solid #E2E8F0', borderRadius: 12, padding: '11px 16px', fontSize: 14, fontFamily: 'inherit', color: '#0F172A', outline: 'none', background: isBlocked ? '#F8F9FA' : '#F8FAFC', lineHeight: 1.5, maxHeight: 200, transition: 'border-color 0.15s, background 0.15s' }}
-        />
-        <button
-          onClick={() => { const att = pendingAttachment ? { mimeType: pendingAttachment.mimeType, data: pendingAttachment.data, fileName: pendingAttachment.fileName } : undefined; send(input, false, att); clearAttachment(); }}
-          disabled={isLoading || (!input.trim() && !pendingAttachment) || isBlocked}
-          style={{ width: 40, height: 40, borderRadius: 10, background: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? '#E2E8F0' : '#14B8A6', border: 'none', cursor: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? '#94A3B8' : '#fff'} strokeWidth="2.5">
-            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
-        </button>
-      </div>
-      <div style={{ textAlign: 'center', fontSize: 10, color: '#CBD5E1', padding: '4px 0 8px', background: '#FFF' }}>
-        Tap the send button to send · Enter for a new line
-      </div>
+      {/* Input, or — once the free-tier quota is actually exhausted for this
+       *  wallet (server-confirmed, see freeLimitLocked above) — the timeout
+       *  message in the exact same position instead. The upload icon, text
+       *  field and send icon are not just disabled here, they're removed
+       *  from the tree entirely, so there's nothing left to interact with. */}
+      {freeLimitLocked ? (
+        <div style={{ padding: '14px 16px', background: '#FEF2F2', borderTop: '1px solid #FECACA', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ color: '#991B1B', fontWeight: 600, fontSize: 13 }}>
+              You&apos;ve reached your free usage limit ({FREE_TIER_LIMIT_LABEL} messages). Come back in {formatRetryWait(freeLimitRetryAfter)}, or upgrade to Salden Pro for unlimited messages and full agent actions.
+            </span>
+            <a href="/pricing" style={{
+              padding: '6px 14px', borderRadius: 8, background: '#4F46E5', color: '#fff',
+              fontWeight: 700, fontSize: 13, textDecoration: 'none', whiteSpace: 'nowrap',
+            }}>Upgrade</a>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ padding: '12px 16px', background: '#FFF', borderTop: '1px solid #E2E8F0', display: 'flex', gap: 10, alignItems: 'flex-end', flexShrink: 0 }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              // No image MIME types here anymore at all, the previous gallery-
+              // jump issue was specifically caused by an image-only accept list
+              // making mobile browsers treat this as a photo picker. With only
+              // document/code/data types now, there's nothing for the OS to
+              // read as "this wants a photo," so it should show the normal
+              // file browser instead. Both MIME types and extensions are
+              // listed for the same reason as before: some extensions
+              // (.ts/.tsx/.jsx especially) don't have a standardized MIME type
+              // and are inconsistently reported by different browsers/OSes.
+              accept="application/pdf,.pdf,text/csv,.csv,application/json,.json,text/markdown,.md,text/plain,.txt,.js,.jsx,.ts,.tsx"
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading || isBlocked}
+              title="Attach a document (roster, offer letter, etc.) for the agent to read"
+              style={{
+                width: 40, height: 40, borderRadius: 10, background: '#F8FAFC', border: '1px solid #E2E8F0',
+                cursor: isLoading || isBlocked ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', flexShrink: 0, color: '#64748B',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+            <textarea
+              ref={textareaRef}
+              className="salden-chat-input"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Chat Agent"
+              rows={1}
+              disabled={isLoading || isBlocked}
+              style={{ flex: 1, resize: 'none', border: '1px solid #E2E8F0', borderRadius: 12, padding: '11px 16px', fontSize: 14, fontFamily: 'inherit', color: '#0F172A', outline: 'none', background: isBlocked ? '#F8F9FA' : '#F8FAFC', lineHeight: 1.5, maxHeight: 200, transition: 'border-color 0.15s, background 0.15s' }}
+            />
+            <button
+              onClick={() => { const att = pendingAttachment ? { mimeType: pendingAttachment.mimeType, data: pendingAttachment.data, fileName: pendingAttachment.fileName } : undefined; send(input, false, att); clearAttachment(); }}
+              disabled={isLoading || (!input.trim() && !pendingAttachment) || isBlocked}
+              style={{ width: 40, height: 40, borderRadius: 10, background: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? '#E2E8F0' : '#14B8A6', border: 'none', cursor: isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isLoading || (!input.trim() && !pendingAttachment) || isBlocked ? '#94A3B8' : '#fff'} strokeWidth="2.5">
+                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+            </button>
+          </div>
+          <div style={{ textAlign: 'center', fontSize: 10, color: '#CBD5E1', padding: '4px 0 8px', background: '#FFF' }}>
+            Tap the send button to send · Enter for a new line
+          </div>
+        </>
+      )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );

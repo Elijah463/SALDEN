@@ -14,7 +14,7 @@ import { getServerPublicClient } from './chain';
 import { CONTRACTS } from '@/lib/contracts/config';
 import { MULTI_TOKEN_FACTORY_ABI } from '@/lib/contracts/abis';
 import { getCachedClones, setCachedClones } from '@/lib/serverCloneCache';
-import { kvIncr, kvAvailable } from '@/lib/kv';
+import { kvIncr, kvGet, kvAvailable } from '@/lib/kv';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -103,6 +103,27 @@ export async function consumeFreeMessage(address: string): Promise<{ allowed: bo
   if (count === null) count = bumpFreeLocal(key);
   if (count > FREE_MESSAGE_LIMIT) return { allowed: false, retryAfterSeconds };
   return { allowed: true };
+}
+
+/**
+ * Read-only peek at a wallet's free-tier quota for the CURRENT window, without
+ * consuming a message. Used by the status endpoint so the client can know
+ * it's locked out BEFORE it ever lets the person type another message, e.g.
+ * right after a page refresh or when a brand-new chat is opened, instead of
+ * only finding out once a message is sent. Keyed and windowed exactly like
+ * consumeFreeMessage, so a value this reports as "locked" is one that
+ * consumeFreeMessage would also refuse, same bucket, same source of truth.
+ */
+export async function getFreeStatus(address: string): Promise<{ limitReached: boolean; remaining: number; retryAfterSeconds: number }> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const bucket = Math.floor(nowSec / FREE_WINDOW_SECONDS);
+  const retryAfterSeconds = (bucket + 1) * FREE_WINDOW_SECONDS - nowSec;
+  const key = `agent:free:${address.toLowerCase()}:${bucket}`;
+  let count: number | null = null;
+  if (kvAvailable()) count = await kvGet<number>(key);
+  if (count === null) count = _freeLocal.get(key) ?? 0;
+  const remaining = Math.max(0, FREE_MESSAGE_LIMIT - count);
+  return { limitReached: count >= FREE_MESSAGE_LIMIT, remaining, retryAfterSeconds };
 }
 
 /** A 403 for wallets without an active Salden Pro subscription, or null to continue. */
