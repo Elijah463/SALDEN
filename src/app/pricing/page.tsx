@@ -183,7 +183,7 @@ export default function PricingPage() {
             One platform, two tiers
           </h1>
           <p style={{ fontSize: 15, color: '#64748B', maxWidth: 480, margin: '0 auto', lineHeight: 1.7 }}>
-            Start with the free tier and upgrade once for lifetime access to your private payroll contract, AI Agent, and multi-token support.
+            Start with the free tier and upgrade to an annual subscription for your private payroll contract, AI Agent, and multi-token support.
           </p>
         </div>
 
@@ -236,17 +236,17 @@ export default function PricingPage() {
           <div style={{ background: 'linear-gradient(145deg, #4F46E5 0%, #6D28D9 100%)', borderRadius: 20, padding: '32px 28px', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', top: -40, right: -40, width: 160, height: 160, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
             <div style={{ position: 'absolute', top: 16, right: 20, background: '#14B8A6', color: '#fff', padding: '3px 12px', borderRadius: 99, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              Lifetime
+              Annual
             </div>
 
             <div style={{ marginBottom: 20 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Salden Pro</div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                 <span style={{ fontSize: 42, fontWeight: 800, color: '#fff' }}>${priceUsdc.toFixed(2)}</span>
-                <span style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)' }}>one-time · USDC</span>
+                <span style={{ fontSize: 14, color: 'rgba(255,255,255,0.6)' }}>/ year · USDC</span>
               </div>
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 8, lineHeight: 1.65 }}>
-                Your own private payroll contract, unlimited tokens, and full AI Agent access. Permanently.
+                Your own private payroll contract, unlimited tokens, and full AI Agent access. Renews annually.
               </p>
             </div>
 

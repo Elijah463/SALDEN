@@ -67,9 +67,9 @@ Salden is deployed on Arc Network.
 
 | Contract | Address |
 |---|---|
-| SaldenEnterprisePayroll | `0x32B2b3F9EAA03F942B4d170d6343fdb27a795D87` |
-| SaldenMultiTokenPayrollFactory | `0x3dB2362b5a4029ed116955c05A42B910aA80851d` |
-| SaldenRegistryFactory | `0x5e9dDD4bc4aC8ae17263061275Bd319b4a09bDB5` |
+| SaldenEnterprisePayroll | `0xEab86c6BF41f1f316Edd7A91f2Bd22dCB8095790` |
+| SaldenMultiTokenPayrollFactory (ERC1967Proxy) | `0xee56A15f23E93dae71de5101dc915d0039EF1DFA` |
+| SaldenRegistryFactory | `0x42b9123322A21a13c89fb8d7d9B9432D0e46733e` |
 | USDC (Arc Network) | `0x3600000000000000000000000000000000000000` |
 
 Verify on [ArcScan](https://explorer.arc.io).
