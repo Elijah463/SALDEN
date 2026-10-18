@@ -22,6 +22,7 @@
 
     "@circle-fin/app-kit":          "1.0.1",
     "@circle-fin/adapter-viem-v2":  "^1.11.2",
+    "@circle-fin/onramp-kit":       "latest",
     "@circle-fin/w3s-pw-web-sdk":   "1.1.11",
 
     "@google/genai": "^2.13.0",
