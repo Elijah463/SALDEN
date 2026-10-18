@@ -6,14 +6,15 @@
  * Pay, Google Pay, bank transfer) and have the purchased USDC delivered
  * straight to that wallet.
  *
- * PREVIOUSLY this imported '@circle-fin/onramp-kit/server', a package
- * that does not exist on npm, confirmed against the registry and
- * Circle's published package list. That broke the Vercel build for the
- * whole app. The real surface (confirmed directly against
- * docs.arc.io/app-kit/onramp and the App Kit Onramp quickstart, not
- * guessed) is `@circle-fin/app-kit/server`'s `createAppServerKit`, the
- * SAME package already installed and already used for Bridge
- * (lib/circle/appKit.ts), just a different capability of it.
+ * BUILD FIX: '@circle-fin/app-kit' does NOT export a './server' subpath
+ * (that is what broke the Vercel build: "Package path ./server is not
+ * exported"). The server half of Onramp ships in the standalone package
+ * '@circle-fin/onramp-kit', via '@circle-fin/onramp-kit/server'
+ * (createOnrampServerKit). Install it with:
+ *
+ *   npm install @circle-fin/onramp-kit --legacy-peer-deps
+ *
+ * and commit package.json + package-lock.json.
  *
  * AUTH: Circle's own quickstart is explicit that this route "doesn't
  * perform authentication" out of the box and that a real deployment
@@ -31,7 +32,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { isAddress } from 'viem';
-import { createAppServerKit } from '@circle-fin/app-kit/server';
+import { createOnrampServerKit } from '@circle-fin/onramp-kit/server';
 
 const IP_RATE_MAP = new Map<string, { count: number; resetAt: number }>();
 const IP_RATE_LIMIT  = 10;
@@ -50,22 +51,28 @@ function checkIPRateLimit(ip: string): boolean {
 }
 
 // Sandbox override for local development/testing only. Unset in
-// production, which is exactly what the SDK wants, per
-// docs.arc.io/app-kit/references/onramp-hosting-requirements: the
-// default IS the production endpoint, so production deployments don't
-// set this at all. Both sides (this server value and
-// NEXT_PUBLIC_ONRAMP_WIDGET_BASE_URL read client-side) must agree, see
-// OnrampWidget.tsx.
+// production, which is exactly what the SDK wants: the default IS the
+// production endpoint, so production deployments don't set this at all.
+// Both sides (this server value and NEXT_PUBLIC_ONRAMP_WIDGET_BASE_URL
+// read client-side) must agree, see OnrampWidget.tsx.
 const ONRAMP_API_BASE_URL = process.env.ONRAMP_API_BASE_URL || undefined;
 
-const server = createAppServerKit({
-  onramp: {
-    apiKey: process.env.CIRCLE_API_KEY!,
-    // Required by Circle for debit card, Apple Pay, and Google Pay.
-    referrerDomain: process.env.NEXT_PUBLIC_APP_DOMAIN || 'salden.xyz',
-    ...(ONRAMP_API_BASE_URL ? { baseUrl: ONRAMP_API_BASE_URL } : {}),
-  },
-});
+// Created lazily so a missing CIRCLE_API_KEY can never crash the build
+// while Next.js imports this module to collect route data.
+let serverKit: ReturnType<typeof createOnrampServerKit> | null = null;
+
+function getServerKit() {
+  if (!serverKit) {
+    serverKit = createOnrampServerKit({
+      apiKey: process.env.CIRCLE_API_KEY!,
+      // Required by Circle for debit card, Apple Pay, and Google Pay.
+      // Bare hostname only: no scheme, port, path, or wildcard.
+      referrerDomain: process.env.NEXT_PUBLIC_APP_DOMAIN || 'salden.xyz',
+      ...(ONRAMP_API_BASE_URL ? { baseUrl: ONRAMP_API_BASE_URL } : {}),
+    });
+  }
+  return serverKit;
+}
 
 export async function POST(req: NextRequest): Promise<Response> {
   if (!process.env.CIRCLE_API_KEY) {
@@ -108,7 +115,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   try {
-    const session = await server.onramp.createSession({ appUserId, destinationAddress });
+    const session = await getServerKit().createSession({ appUserId, destinationAddress });
     return NextResponse.json(session, { headers: { 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('onramp session creation failed:', err);
