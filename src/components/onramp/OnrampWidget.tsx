@@ -28,7 +28,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { getAppKit } from '@/lib/circle/appKit';
+import { createOnrampKit, fetchOnrampSession } from '@circle-fin/onramp-kit';
 import { recordOnrampDeposit } from '@/lib/walletActivity/onrampDeposits';
 
 // Sandbox override for local dev only, see the session route's matching
@@ -42,7 +42,7 @@ type OnrampWidgetProps = {
   onClose?: () => void;
 };
 
-type WidgetController = { close: () => void };
+type WidgetController = { close?: () => void };
 
 export function OnrampWidget({ walletAddress, onClose }: OnrampWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -59,8 +59,8 @@ export function OnrampWidget({ walletAddress, onClose }: OnrampWidgetProps) {
       setErrorMessage(null);
 
       try {
-        const kit = await getAppKit();
-        const session = await kit.onramp.fetchSession({
+        const onramp = createOnrampKit();
+        const session = await fetchOnrampSession({
           url: '/api/onramp/sessions',
           body: { appUserId: walletAddress, destinationAddress: walletAddress },
           ...(WIDGET_BASE_URL ? { widgetBaseUrl: WIDGET_BASE_URL } : {}),
@@ -70,11 +70,12 @@ export function OnrampWidget({ walletAddress, onClose }: OnrampWidgetProps) {
 
         const sessionId = (session as { id?: string }).id ?? crypto.randomUUID();
 
-        widgetRef.current = kit.onramp.mountIframe({
+        widgetRef.current = onramp.mountIframe({
           session,
           container: containerRef.current,
           ...(WIDGET_BASE_URL ? { widgetBaseUrl: WIDGET_BASE_URL } : {}),
-          onDepositSettled: ({ payload }: { payload: DepositSettledPayload }) => {
+          onDepositSettled: (envelope) => {
+            const payload = envelope.payload as unknown as DepositSettledPayload;
             void recordOnrampDeposit({
               walletAddress,
               sessionId,
@@ -88,7 +89,7 @@ export function OnrampWidget({ walletAddress, onClose }: OnrampWidgetProps) {
             // nothing to record, the "submitted" row (if any) simply
             // never gets a matching settle, which is accurate.
           },
-        });
+        }) as unknown as WidgetController;
 
         // Submitted as soon as the widget is up, matches the pattern
         // onrampDeposits.ts's header comment describes, updated to
@@ -115,7 +116,7 @@ export function OnrampWidget({ walletAddress, onClose }: OnrampWidgetProps) {
 
     return () => {
       cancelled = true;
-      widgetRef.current?.close();
+      widgetRef.current?.close?.();
       widgetRef.current = null;
     };
   }, [walletAddress]);
