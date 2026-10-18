@@ -93,7 +93,7 @@ function bumpFreeLocal(key: string): number {
  * when available, otherwise a per-instance counter (so the allowance is approximate
  * across serverless instances until a KV store is attached).
  */
-export async function consumeFreeMessage(address: string): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
+export async function consumeFreeMessage(address: string): Promise<{ allowed: boolean; retryAfterSeconds?: number; remaining: number }> {
   const nowSec = Math.floor(Date.now() / 1000);
   const bucket = Math.floor(nowSec / FREE_WINDOW_SECONDS);
   const retryAfterSeconds = (bucket + 1) * FREE_WINDOW_SECONDS - nowSec;
@@ -101,8 +101,14 @@ export async function consumeFreeMessage(address: string): Promise<{ allowed: bo
   let count: number | null = null;
   if (kvAvailable()) count = await kvIncr(key, FREE_WINDOW_SECONDS * 2);
   if (count === null) count = bumpFreeLocal(key);
-  if (count > FREE_MESSAGE_LIMIT) return { allowed: false, retryAfterSeconds };
-  return { allowed: true };
+  // Computed from the SAME count this call just incremented, no extra KV
+  // round trip, so the chat route can tell the client (and the model, so
+  // it can actually answer "how many messages do I have left?" instead of
+  // deflecting) how many remain after this message, not just whether this
+  // one was allowed.
+  const remaining = Math.max(0, FREE_MESSAGE_LIMIT - count);
+  if (count > FREE_MESSAGE_LIMIT) return { allowed: false, retryAfterSeconds, remaining: 0 };
+  return { allowed: true, remaining };
 }
 
 /**

@@ -147,6 +147,13 @@ const CARD_TTL_MS    = 10 * 60 * 1000; // confirmation cards expire after 10 min
 // used to decide whether to lock, only how to word the locked message.
 const FREE_TIER_LIMIT_LABEL = 5;
 
+// How long the client waits for a response before giving up and showing
+// "Network error" itself, rather than leaving the composer spinning for
+// however long the request actually takes. Kept comfortably under
+// /api/agent/chat's own `maxDuration = 60` export so this always fires
+// first, the server-side budget is a last resort, not the normal path.
+const AGENT_REQUEST_TIMEOUT_MS = 25_000;
+
 const DAILY_KEY      = () => `salden_agent_requests_${new Date().toISOString().slice(0, 10)}`;
 const DAILY_LIMIT    = 1500;
 const DAILY_WARN_AT  = 1200;
@@ -259,6 +266,10 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
    *  only by the server-side window actually rolling over. */
   const [freeLimitLocked, setFreeLimitLocked] = useState(false);
   const [freeLimitRetryAfter, setFreeLimitRetryAfter] = useState<number | null>(null);
+  // Only ever set for free-tier wallets, the server omits this field
+  // entirely for Pro wallets, see app/api/agent/chat/route.ts. Doubles as
+  // the client's own "are we free tier" signal, no separate prop needed.
+  const [freeMessagesRemaining, setFreeMessagesRemaining] = useState<number | null>(null);
   const { state } = useApp();
   const { employees, tokenRegistry, payrollClone, payrollSetup } = state;
   const { signMessage: universalSignMessage, canWrite } = useUniversalWrite();
@@ -323,11 +334,14 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok || cancelled) return;
-        const data = await res.json() as { freeLimitReached?: boolean; retryAfterSeconds?: number };
+        const data = await res.json() as { freeLimitReached?: boolean; retryAfterSeconds?: number; remaining?: number; pro?: boolean };
         if (cancelled) return;
         if (data.freeLimitReached) {
           setFreeLimitLocked(true);
           setFreeLimitRetryAfter(data.retryAfterSeconds ?? null);
+        }
+        if (!data.pro && typeof data.remaining === 'number') {
+          setFreeMessagesRemaining(data.remaining);
         }
       } catch {
         // Fails open here deliberately, same reasoning as the quota route
@@ -641,6 +655,18 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       receiptEmail:  payrollSetup?.email || undefined,
     };
 
+    // BUG FIX: previously nothing ever cut this request short client-side.
+    // A slow-but-not-erroring response (the model just taking a long time,
+    // a stuck tool round, etc.) would leave the composer spinning for the
+    // full duration of whatever the server allows (maxDuration = 60s on
+    // /api/agent/chat) before the person saw anything at all, no matter how
+    // long that felt. This aborts the attempt well under that server-side
+    // budget and surfaces the same "Network error" message used for an
+    // actual dropped connection, the person doesn't need to know which one
+    // happened, just that it didn't work and they can try again.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+
     try {
       let token = await getToken(walletAddress, universalSignMessage);
       sessionTokenRef.current = token;
@@ -649,6 +675,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         method:  'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'x-agent-stream': '1' },
         body: JSON.stringify({ messages: allMessages, walletAddress, context, attachment }),
+        signal: controller.signal,
       });
 
       // Session expired mid-flight, refresh once and retry.
@@ -661,6 +688,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           method:  'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'x-agent-stream': '1' },
           body: JSON.stringify({ messages: allMessages, walletAddress, context, attachment }),
+          signal: controller.signal,
         });
       }
 
@@ -674,6 +702,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         response?: string; actionLog?: ActionLogEntry[]; events?: AgentEvent[];
         truncated?: boolean; rateLimited?: boolean; cached?: boolean;
         upgradeRequired?: boolean; freeLimitReached?: boolean; retryAfterSeconds?: number;
+        freeMessagesRemaining?: number;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rawParts?: any[];
       };
@@ -702,6 +731,9 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
       } else if (data.upgradeRequired) {
         setUpgradeNeeded(true);
       }
+      if (typeof data.freeMessagesRemaining === 'number') {
+        setFreeMessagesRemaining(data.freeMessagesRemaining);
+      }
 
       if (!data.rateLimited && !data.cached) {
         setDailyCount(incrementDailyCount());
@@ -710,7 +742,12 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
 
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : '';
-      const msg = /session|sign in|401/i.test(raw)
+      const msg = (err instanceof DOMException && err.name === 'AbortError')
+        // Our own timeout above, or the person navigating away mid-request.
+        // Same wording as an actual dropped connection, deliberately, see
+        // the comment on AGENT_REQUEST_TIMEOUT_MS.
+        ? 'Network error. Check your connection and try again.'
+        : /session|sign in|401/i.test(raw)
         ? 'Session expired, please sign in again.'
         : /wallet|connect/i.test(raw)
         ? 'Wallet not connected. Please reconnect and try again.'
@@ -733,6 +770,7 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
         content: msg, timestamp: nowTime(), proposedAt: Date.now(),
       }]);
     } finally {
+      clearTimeout(timeoutId);
       setIsLoading(false);
     }
   }, [messages, isLoading, walletAddress, canWrite, universalSignMessage, employees, onDataChanged, getToken, invalidate, freeLimitLocked]);
@@ -1249,6 +1287,14 @@ export default function ChatInterface({ walletAddress, onDataChanged, agentAddre
           </div>
           <div style={{ textAlign: 'center', fontSize: 10, color: '#CBD5E1', padding: '4px 0 8px', background: '#FFF' }}>
             Tap the send button to send · Enter for a new line
+            {/* Only ever set for free-tier wallets (see state declaration),
+               and only shown once it's getting low, this used to give no
+               warning at all before the composer just disappeared. */}
+            {freeMessagesRemaining !== null && freeMessagesRemaining <= 2 && (
+              <span style={{ color: '#D97706', fontWeight: 600 }}>
+                {' '}· {freeMessagesRemaining} free message{freeMessagesRemaining === 1 ? '' : 's'} left
+              </span>
+            )}
           </div>
         </>
       )}

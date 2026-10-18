@@ -7,12 +7,18 @@
 import { useState, Fragment } from "react";
 import AgentThinking from "./AgentThinking";
 
-// The agent's system prompt tells it to use **bold** for emphasis (e.g.
-// "**All Employees**"), but nothing was ever parsing it, it rendered as
-// literal asterisks in the chat bubble. This is intentionally minimal:
-// just **bold** matching the one markdown construct the prompt actually
-// asks the model to use, not a full markdown renderer.
-function renderWithBold(text: string) {
+// The agent's system prompt tells it to write plain prose with **bold**
+// as the only markdown construct, never headers/lists/code blocks (see
+// OPERATIONAL RULES in app/api/agent/chat/route.ts). It doesn't always
+// obey that, longer "explain yourself" replies in particular tend to slip
+// into numbered lists, headers, and bullets despite the instruction. This
+// is the defense-in-depth half of that fix (the prompt itself is the
+// primary fix): if a header/list slips through anyway, render it as
+// actual visual hierarchy instead of showing the raw #, -, or "1." marks
+// as literal characters in the bubble. Deliberately still not a full
+// markdown library, just the handful of constructs the model might
+// plausibly emit, kept lightweight on purpose.
+function renderInline(text: string) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   if (parts.length === 1) return text;
   return parts.map((part, i) => {
@@ -20,6 +26,36 @@ function renderWithBold(text: string) {
       return <strong key={i}>{part.slice(2, -2)}</strong>;
     }
     return <Fragment key={i}>{part}</Fragment>;
+  });
+}
+
+function renderFormatted(text: string) {
+  const lines = text.split('\n');
+  return lines.map((line, i) => {
+    const header = line.match(/^#{1,6}\s+(.*)/);
+    if (header) {
+      return <div key={i} style={{ fontWeight: 800, margin: '8px 0 2px' }}>{renderInline(header[1])}</div>;
+    }
+    const bullet = line.match(/^\s*[-*•]\s+(.*)/);
+    if (bullet) {
+      return (
+        <div key={i} style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+          <span aria-hidden>•</span>
+          <span>{renderInline(bullet[1])}</span>
+        </div>
+      );
+    }
+    const numbered = line.match(/^\s*(\d+)[.)]\s+(.*)/);
+    if (numbered) {
+      return (
+        <div key={i} style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+          <span>{numbered[1]}.</span>
+          <span>{renderInline(numbered[2])}</span>
+        </div>
+      );
+    }
+    if (line.trim() === '') return <div key={i} style={{ height: 6 }} />;
+    return <div key={i}>{renderInline(line)}</div>;
   });
 }
 
@@ -204,7 +240,7 @@ export default function ChatMessage({ role, content, toolCalls, isLoading, think
           whiteSpace:   "pre-wrap" as const,
           wordBreak:    "break-word" as const,
         }}>
-          {isLoading ? <AgentThinking userText={thinkingText ?? ""} status={agentStatus} /> : renderWithBold(content)}
+          {isLoading ? <AgentThinking userText={thinkingText ?? ""} status={agentStatus} /> : renderFormatted(content)}
         </div>
         {timestamp && (
           <div style={{
