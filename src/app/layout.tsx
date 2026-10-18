@@ -6,6 +6,7 @@ import { AppProvider }  from '@/context/AppContext';
 import { SignatureExplainerProvider } from '@/context/SignatureExplainerContext';
 import { Toasts }       from '@/components/shared/Toasts';
 import { AppSplash }    from '@/components/shared/AppSplash';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 
 // ── Base URL ───────────────────────────────────────────────────────────────────
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
@@ -255,6 +256,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </SignatureExplainerProvider>
           </AppProvider>
         </Web3Provider>
+        <SpeedInsights />
       </body>
     </html>
   );
