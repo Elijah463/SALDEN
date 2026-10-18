@@ -10,12 +10,11 @@ import { ArrowLeft, Copy, CheckCircle2, Banknote, Wallet } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useEffectiveAddress } from '@/lib/useEffectiveAddress';
 import { copyToClipboard } from '@/lib/clipboard';
-// BUG FIX: FiatDepositModal/OnrampWidget were built against
-// '@circle-fin/onramp-kit', a package that doesn't exist (not a real
-// Circle SDK, confirmed against the npm registry and Circle's actual
-// package list). Disconnected here so this page, and the Next.js build,
-// don't depend on that broken import chain. "Deposit fiat" is marked
-// `soon` below until this is rebuilt against a real provider.
+import { FiatDepositModal } from '@/components/onramp/FiatDepositModal';
+// FiatDepositModal/OnrampWidget now use the real @circle-fin/app-kit
+// Onramp capability (confirmed against docs.arc.io/app-kit/onramp, see
+// api/onramp/sessions/route.ts's header comment for the full story on
+// what was broken before and why).
 
 function QRCode({ address }: { address: string }) {
   // Real, scannable QR code (previously a hand-drawn decorative SVG that
@@ -114,6 +113,7 @@ export default function DepositPage() {
   const { address } = useEffectiveAddress();
   const [view, setView] = useState<'options' | 'qr'>('options');
   const [copied, setCopied] = useState(false);
+  const [fiatOpen, setFiatOpen] = useState(false);
 
   async function handleCopy() {
     if (!address) return;
@@ -129,6 +129,10 @@ export default function DepositPage() {
           style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#64748B', fontFamily: 'inherit', padding: 0 }}>
           <ArrowLeft size={15} /> {view === 'qr' ? 'Back' : 'Back to Wallet'}
         </button>
+
+        {fiatOpen && address && (
+          <FiatDepositModal walletAddress={address} onClose={() => setFiatOpen(false)} />
+        )}
 
         {view === 'options' ? (
           <div style={{ background: '#fff', border: '1px solid #E2E8F0', borderRadius: 20, padding: 24 }}>
@@ -146,7 +150,8 @@ export default function DepositPage() {
                 icon={<Banknote size={20} color="#4F46E5" />}
                 label="Deposit fiat"
                 subtitle="Card, Apple Pay, Google Pay or bank transfer"
-                soon
+                onClick={() => setFiatOpen(true)}
+                disabled={!address}
               />
             </div>
           </div>

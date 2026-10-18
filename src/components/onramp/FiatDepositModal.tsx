@@ -1,11 +1,14 @@
 'use client';
 /**
- * "Deposit fiat" modal. Fiat onramp is not live yet, so this shows a "coming soon"
- * notice. Props are unchanged so existing callers keep working.
+ * @file components/onramp/FiatDepositModal.tsx
+ * "Deposit fiat" modal, hosts the real OnrampWidget (card, Apple Pay,
+ * Google Pay, bank transfer via Circle's hosted onramp).
  */
 import { X } from 'lucide-react';
+import { OnrampWidget } from './OnrampWidget';
 
 export function FiatDepositModal({
+  walletAddress,
   onClose,
 }: {
   walletAddress: string;
@@ -38,9 +41,7 @@ export function FiatDepositModal({
           </button>
         </div>
 
-        <p style={{ fontSize: 14, color: '#475569' }}>
-          Fiat deposits are coming soon. In the meantime, you can deposit USDC directly to your wallet address.
-        </p>
+        <OnrampWidget walletAddress={walletAddress} onClose={onClose} />
       </div>
     </div>
   );
