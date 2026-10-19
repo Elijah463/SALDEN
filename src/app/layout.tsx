@@ -8,7 +8,21 @@ import { Toasts }       from '@/components/shared/Toasts';
 import { AppSplash }    from '@/components/shared/AppSplash';
 
 // ── Base URL ───────────────────────────────────────────────────────────────────
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
+// BUG FIX: this build was failing entirely (ERR_INVALID_URL on
+// `new URL(APP_URL)` below, during "Collecting page data") because
+// NEXT_PUBLIC_APP_URL was set in Vercel to the bare domain
+// `app.salden.xyz` with no `https://` scheme, `new URL()` throws
+// without one. The code's own fallback already had a scheme, so this
+// only broke once that env var was actually set. Normalizing here means
+// a missing scheme in the env var can never take the whole build down
+// again. The real fix is still to correct NEXT_PUBLIC_APP_URL in
+// Vercel's project settings to `https://app.salden.xyz` (or remove it
+// to use this file's correct default), this is a safety net, not a
+// substitute for that.
+function normalizeAppUrl(raw: string): string {
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+const APP_URL = normalizeAppUrl(process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz');
 
 // ── Viewport (theme colour lives here in Next.js 14) ──────────────────────────
 export const viewport: Viewport = {

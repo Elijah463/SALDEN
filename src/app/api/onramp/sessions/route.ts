@@ -57,6 +57,33 @@ function checkIPRateLimit(ip: string): boolean {
 // read client-side) must agree, see OnrampWidget.tsx.
 const ONRAMP_API_BASE_URL = process.env.ONRAMP_API_BASE_URL || undefined;
 
+// BUG FIX: this used to read a SEPARATE env var, NEXT_PUBLIC_APP_DOMAIN,
+// which was never actually set, so it silently fell back to the bare
+// 'salden.xyz'. Circle's widget then only allow-listed that exact
+// origin as a valid frame-ancestor, so when the widget was embedded
+// from the app's real origin, app.salden.xyz (a DIFFERENT origin, see
+// NEXT_PUBLIC_APP_URL in app/layout.tsx), the browser's own CSP
+// enforcement on onramp.arc.io's response correctly refused to let it
+// load in the iframe: "Refused to frame 'https://onramp.arc.io/'
+// because an ancestor violates ... frame-ancestors https://salden.xyz".
+// That's not a Salden CSP (this app sends none), it's Circle's own,
+// scoped to whatever referrerDomain this route told it to trust.
+//
+// Fixed by deriving referrerDomain from the SAME source of truth
+// layout.tsx's metadataBase already uses (NEXT_PUBLIC_APP_URL), instead
+// of a second, independently-set env var that can silently drift out of
+// sync with the domain the app is actually served from, which is
+// exactly what happened here.
+function getReferrerDomain(): string {
+  const raw = process.env.NEXT_PUBLIC_APP_URL ?? 'https://app.salden.xyz';
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    return new URL(withScheme).hostname;
+  } catch {
+    return 'app.salden.xyz';
+  }
+}
+
 // Created lazily so a missing CIRCLE_API_KEY can never crash the build
 // while Next.js imports this module to collect route data.
 let serverKit: ReturnType<typeof createOnrampServerKit> | null = null;
@@ -66,8 +93,9 @@ function getServerKit() {
     serverKit = createOnrampServerKit({
       apiKey: process.env.CIRCLE_API_KEY!,
       // Required by Circle for debit card, Apple Pay, and Google Pay.
-      // Bare hostname only: no scheme, port, path, or wildcard.
-      referrerDomain: process.env.NEXT_PUBLIC_APP_DOMAIN || 'salden.xyz',
+      // Bare hostname only: no scheme, port, path, or wildcard, see
+      // getReferrerDomain() above for why this specific value matters.
+      referrerDomain: getReferrerDomain(),
       ...(ONRAMP_API_BASE_URL ? { baseUrl: ONRAMP_API_BASE_URL } : {}),
     });
   }
